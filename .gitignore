@@ -33,3 +33,11 @@ inc/
 /MANIFEST.bak
 /pm_to_blib
 /*.zip
+bin/plgadd
+bin/plgclean
+bin/plgmod
+bin/plgrm
+bin/pluadd
+bin/plumod
+bin/plupass
+bin/plurm

@@ -12,7 +12,11 @@ WriteMakefile(
 		: () ),
 	PL_FILES    => {},
 	INST_SCRIPT => 'bin',
-	PREREQ_PM   => {
+	EXE_FILES   => [
+		'src_bin/plgadd', 'src_bin/plgclean', 'src_bin/plgmod',  'src_bin/plgrm',
+		'src_bin/pluadd', 'src_bin/plumod',   'src_bin/plupass', 'src_bin/plurm',
+	],
+	PREREQ_PM => {
 		'Test::More'                        => 0,
 		'File::BaseDir'                     => 0,
 		'Config::IniHash'                   => 0,
@@ -25,6 +29,7 @@ WriteMakefile(
 		'Net::LDAP::Extension::SetPassword' => 0,
 		'String::ShellQuote'                => 0,
 		'Data::Dumper'                      => 0,
+		'Error::Helper'                     => '2.0.0',
 	},
 	dist  => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
 	clean => { FILES    => 'Plugtools-*' },
