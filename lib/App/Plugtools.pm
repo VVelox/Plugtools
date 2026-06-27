@@ -118,6 +118,7 @@ sub new {
 				45 => 'pluginError',
 				46 => 'updateAfterPassFailed',
 				47 => 'noShell',
+				48 => 'noHome',
 			},
 			fatal_flags      => {},
 			perror_not_fatal => 0,
@@ -2375,7 +2376,7 @@ sub userGECOSchange {
 
 =head2 userShellChange
 
-This changes the UID for a user.
+This changes the shell for a user.
 
 =head3 args hash
 
@@ -2502,6 +2503,136 @@ sub userShellChange {
 
 	return 1;
 } ## end sub userShellChange
+
+=head2 userHomeChange
+
+This changes the home directory for a user.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 home
+
+What to change the home directory to.
+
+=head4 dump
+
+Call the dump method on the group afterwards.
+
+    $pt->userShellChange({
+                          user=>'someUser',
+                          home=>'/home/foo',
+                          });
+
+=cut
+
+sub userHomeChange {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	#error if no user has been specified
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	#error if no home directory has been specified
+	if ( !defined( $args{home} ) ) {
+		$self->{error}       = 48;
+		$self->{errorString} = 'No home directory specified';
+		$self->warn;
+		return undef;
+	}
+
+	#error if the user does not exist
+	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gecos, $dir, $shell, $expire ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exists';
+		$self->warn;
+		return undef;
+	}
+
+	#connect to the LDAP server
+	my $ldap = $self->connect();
+
+	#search and get the first entry
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error} = 32;
+		$self->{errorString}
+			= 'Fetching the entry for the user failed under "'
+			. $self->{ini}->{''}->{userbase} . '"'
+			. $mesg->{errorMessage} . '"';
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+
+	#if $entry is not defined or does not exist under the specified base
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "'
+			. $args{user}
+			. '" does not exist in specified user base, "'
+			. $self->{ini}->{''}->{userbase} . '", ';
+		$self->warn;
+		return undef;
+	} ## end if ( !defined($entry) )
+
+	$entry->delete( homeDirectory => $dir );
+	$entry->add( homeDirectory => $args{home} );
+
+	#call a plugin if needed
+	if ( defined( $self->{ini}->{''}->{pluginUserHomeChange} ) ) {
+		$self->plugin(
+			{
+				ldap  => $ldap,
+				entry => $entry,
+				do    => 'pluginUserHomeChange',
+			},
+			\%args
+		);
+	} ## end if ( defined( $self->{ini}->{''}->{pluginUserHomeChange...}))
+
+	#update the entry
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Changing the home directory to "'
+			. $args{home}
+			. '" from "'
+			. $dir
+			. '" for "'
+			. $entry->dn
+			. '" failed. $mesg2->{errorMessage}="'
+			. $mesg2->{errorMessage} . '"';
+		$self->warn;
+		return undef;
+	} ## end if ( $mesg2->{errorMessage} ne '' )
+
+	#dump the entry if asked
+	if ( $args{dump} ) {
+		$entry->dump;
+	}
+
+	return 1;
+} ## end sub userHomeChange
 
 =head2 userSetPass
 

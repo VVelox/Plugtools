@@ -71,6 +71,9 @@ sub update {
 	} elsif ( $action eq 'gid' ) {
 		eval { $self->pt->userGIDchange( { user => $user, gid => $self->param('gid') } ) };
 		$error = $@;
+	} elsif ( $action eq 'home' ) {
+		eval { $self->pt->userHomeChange( { user => $user, home => $self->param('home') } ) };
+		$error = $@;
 	} else {
 		$self->flash( error => "Unknown action: $action" );
 		return $self->redirect_to( 'users_show', user => $user );
