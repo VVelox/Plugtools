@@ -54,9 +54,9 @@ if (!defined($opts{a})) {
 }
 
 my $pt=Plugtools->new;
-if ($pt->{error}) {
-	warn('plgadd: Failed to initialize the Plugtools object');
-	exit $pt->{error};
+if ($pt->error) {
+	warn('plgmod: Failed to initialize the Plugtools object');
+	exit $pt->error;
 }
 
 #process add requests
@@ -66,35 +66,35 @@ if ($opts{a} eq 'add') {
 					   group=>$opts{g},
 					   dump=>$opts{l},
 					   });
-	if ($pt->{error}) {
+	if ($pt->error) {
 		warn('plgmod: groupAddUser errored');
-		exit $pt->{error};
+		exit $pt->error;
 	}
 }
 
 #process remove requests
 if ($opts{a} eq 'remove') {
-	$pt->groupAddUser({
+	$pt->groupRemoveUser({
 					   user=>$opts{u},
 					   group=>$opts{g},
 					   dump=>$opts{l},
 					   });
-	if ($pt->{error}) {
-		warn('plgmod: groupAddUser errored');
-		exit $pt->{error};
+	if ($pt->error) {
+		warn('plgmod: groupRemoveUser errored');
+		exit $pt->error;
 	}
 }
 
-#process remove requests
+#process gid change requests
 if ($opts{a} eq 'gid') {
 	$pt->groupGIDchange({
 					   gid=>$opts{G},
 					   group=>$opts{g},
 					   dump=>$opts{l},
 					   });
-	if ($pt->{error}) {
+	if ($pt->error) {
 		warn('plgmod: groupGIDchange errored');
-		exit $pt->{error};
+		exit $pt->error;
 	}
 }
 

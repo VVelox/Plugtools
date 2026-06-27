@@ -40,15 +40,15 @@ if ( !defined( $opts{u} ) ) {
 	exit 254;
 }
 
-if ( !defined( $opts{u} ) ) {
+if ( !defined( $opts{a} ) ) {
 	warn('plumod:253: No action specified');
 	exit 253;
 }
 
 my $pt = Plugtools->new;
-if ( $pt->{error} ) {
+if ( $pt->error ) {
 	warn('plumod: Failed to initialize the Plugtools object');
-	exit $pt->{error};
+	exit $pt->error;
 }
 
 if ( $opts{a} eq 'gecos' ) {
@@ -59,9 +59,9 @@ if ( $opts{a} eq 'gecos' ) {
 			dump  => $opts{l},
 		}
 	);
-	if ( $pt->{error} ) {
+	if ( $pt->error ) {
 		warn('plumod: Failed to modify the user');
-		exit $pt->{error};
+		exit $pt->error;
 	}
 } ## end if ( $opts{a} eq 'gecos' )
 
@@ -73,9 +73,9 @@ if ( $opts{a} eq 'shell' ) {
 			dump  => $opts{l},
 		}
 	);
-	if ( $pt->{error} ) {
-		warn('plumod: Failed to modify the the user');
-		exit $pt->{error};
+	if ( $pt->error ) {
+		warn('plumod: Failed to modify the user');
+		exit $pt->error;
 	}
 } ## end if ( $opts{a} eq 'shell' )
 
@@ -87,23 +87,23 @@ if ( $opts{a} eq 'gid' ) {
 			dump => $opts{l},
 		}
 	);
-	if ( $pt->{error} ) {
+	if ( $pt->error ) {
 		warn('plumod: Failed to modify the user');
-		exit $pt->{error};
+		exit $pt->error;
 	}
 } ## end if ( $opts{a} eq 'gid' )
 
 if ( $opts{a} eq 'uid' ) {
-	$pt->userGIDchange(
+	$pt->userUIDchange(
 		{
 			user => $opts{u},
 			uid  => $opts{U},
 			dump => $opts{l},
 		}
 	);
-	if ( $pt->{error} ) {
-		warn('plumod: Failed to fail to modify the user');
-		exit $pt->{error};
+	if ( $pt->error ) {
+		warn('plumod: Failed to modify the user');
+		exit $pt->error;
 	}
 } ## end if ( $opts{a} eq 'uid' )
 

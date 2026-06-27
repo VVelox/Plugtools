@@ -32,9 +32,9 @@ if ( !defined( $opts{u} ) ) {
 }
 
 my $pt = Plugtools->new;
-if ( $pt->{error} ) {
+if ( $pt->error ) {
 	warn('plupass: Failed to initialize the Plugtools object');
-	exit $pt->{error};
+	exit $pt->error;
 }
 
 #ask for the password
@@ -58,9 +58,9 @@ $pt->userSetPass(
 		pass => $pass1,
 	}
 );
-if ( $pt->{error} ) {
+if ( $pt->error ) {
 	warn('plupass: Failed set the password for the user');
-	exit $pt->{error};
+	exit $pt->error;
 }
 
 exit 0;

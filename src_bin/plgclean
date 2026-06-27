@@ -25,15 +25,15 @@ my %opts = ();
 getopts( 'l', \%opts );
 
 my $pt = Plugtools->new;
-if ( $pt->{error} ) {
-	warn('plgadd:254: Failed to initialize the Plugtools object');
-	exit $pt->{error};
+if ( $pt->error ) {
+	warn('plgclean: Failed to initialize the Plugtools object');
+	exit $pt->error;
 }
 
 $pt->groupClean( { dump => $opts{l} } );
-if ( $pt->{error} ) {
+if ( $pt->error ) {
 	warn('plgclean: groupClean errored');
-	exit $pt->{error};
+	exit $pt->error;
 }
 exit 0;
 

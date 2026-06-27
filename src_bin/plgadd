@@ -56,9 +56,9 @@ if (!defined($opts{g})) {
 }
 
 my $pt=Plugtools->new;
-if ($pt->{error}) {
+if ($pt->error) {
 	warn('plgadd: Failed to initialize the Plugtools object');
-	exit $pt->{error};
+	exit $pt->error;
 }
 
 $pt->addGroup({
@@ -66,9 +66,9 @@ $pt->addGroup({
 			   gid=>$opts{G},
 			   dump=>$opts{l},
 			  });
-if ($pt->{error}) {
+if ($pt->error) {
 	warn('plgadd: addGroup errored');
-	exit $pt->{error};
+	exit $pt->error;
 }
 exit 0;
 

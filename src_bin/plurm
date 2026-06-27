@@ -37,9 +37,9 @@ if ( !defined( $opts{u} ) ) {
 }
 
 my $pt = Plugtools->new;
-if ( $pt->{error} ) {
-	warn('plgrm: Failed to initialize the Plugtools object');
-	exit $pt->{error};
+if ( $pt->error ) {
+	warn('plurm: Failed to initialize the Plugtools object');
+	exit $pt->error;
 }
 
 $pt->deleteUser(
@@ -49,9 +49,9 @@ $pt->deleteUser(
 		removeGroup => $opts{G},
 	}
 );
-if ( $pt->{error} ) {
-	warn('plgrm: Failed to remove the group');
-	exit $pt->{error};
+if ( $pt->error ) {
+	warn('plurm: Failed to remove the user');
+	exit $pt->error;
 }
 
 exit 0;

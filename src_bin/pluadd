@@ -51,9 +51,9 @@ if ( !defined( $opts{u} ) ) {
 }
 
 my $pt = Plugtools->new;
-if ( $pt->{error} ) {
+if ( $pt->error ) {
 	warn('pluadd: Failed to initialize the Plugtools object');
-	exit $pt->{error};
+	exit $pt->error;
 }
 
 $pt->addUser(
@@ -71,9 +71,9 @@ $pt->addUser(
 		chmodValue => $opts{P}
 	}
 );
-if ( $pt->{error} ) {
+if ( $pt->error ) {
 	warn('pluadd: Failed to add the user');
-	exit $pt->{error};
+	exit $pt->error;
 }
 
 exit 0;
