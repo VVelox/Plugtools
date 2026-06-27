@@ -1540,6 +1540,97 @@ sub groupClean{
 	return 1;
 }
 
+=head2 getGroups
+
+Returns all posixGroup entries found in LDAP under the configured group base.
+
+Returns an array ref of L<Net::LDAP::Entry> objects, or an empty array ref if
+no groups exist. Each entry provides the standard posixGroup attributes such
+as C<cn>, C<gidNumber>, and C<memberUid>.
+
+    my $groups = $pt->getGroups;
+    for my $entry (@{$groups}) {
+        printf "%-20s %s\n", $entry->get_value('cn'), $entry->get_value('gidNumber');
+    }
+
+=cut
+
+sub getGroups {
+	my $self = $_[0];
+
+	$self->errorblank;
+
+	my $ldap = $self->connect();
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{groupbase},
+		filter => '(objectClass=posixGroup)',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 27;
+		$self->{errorString} = 'Fetching posixGroup objects under "'
+			. $self->{ini}->{''}->{groupbase} . '" failed. '
+			. $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	my @groups;
+	my $entry = $mesg->pop_entry;
+	while ( defined($entry) ) {
+		push @groups, $entry;
+		$entry = $mesg->pop_entry;
+	}
+
+	return \@groups;
+}
+
+=head2 getUsers
+
+Returns all posixAccount entries found in LDAP under the configured user base.
+
+Returns an array ref of L<Net::LDAP::Entry> objects, or an empty array ref if
+no users exist. Each entry provides the standard posixAccount attributes such
+as C<uid>, C<uidNumber>, C<gidNumber>, C<homeDirectory>, C<loginShell>, and
+C<gecos>.
+
+    my $users = $pt->getUsers;
+    for my $entry (@{$users}) {
+        printf "%-20s %s\n", $entry->get_value('uid'), $entry->get_value('uidNumber');
+    }
+
+=cut
+
+sub getUsers {
+	my $self = $_[0];
+
+	$self->errorblank;
+
+	my $ldap = $self->connect();
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(objectClass=posixAccount)',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 37;
+		$self->{errorString} = 'Fetching posixAccount objects under "'
+			. $self->{ini}->{''}->{userbase} . '" failed. '
+			. $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	my @users;
+	my $entry = $mesg->pop_entry;
+	while ( defined($entry) ) {
+		push @users, $entry;
+		$entry = $mesg->pop_entry;
+	}
+
+	return \@users;
+}
+
 =head2 isLDAPgroup
 
 This tests if a group is in LDAP or not.
