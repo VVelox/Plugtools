@@ -13,27 +13,56 @@
   <!-- Attributes -->
   <div class="col-md-6">
     <div class="card">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        <strong>Account: <%= $username %></strong>
-        <a href="/users/<%= $username %>/edit" class="btn btn-sm btn-outline-secondary">Edit</a>
-      </div>
+      <div class="card-header"><strong>Account: <%= $username %></strong></div>
       <div class="card-body p-0">
         <table class="table table-sm mb-0">
           <tbody>
-            <tr><th class="ps-3" style="width:35%">Username</th>
-                <td><%= $entry->get_value('uid') %></td></tr>
-            <tr><th class="ps-3">UID</th>
-                <td><%= $entry->get_value('uidNumber') %></td></tr>
-            <tr><th class="ps-3">GID</th>
-                <td><%= $entry->get_value('gidNumber') %></td></tr>
-            <tr><th class="ps-3">GECOS</th>
-                <td><%= $entry->get_value('gecos') // '' %></td></tr>
-            <tr><th class="ps-3">Home</th>
-                <td><code><%= $entry->get_value('homeDirectory') %></code></td></tr>
-            <tr><th class="ps-3">Shell</th>
-                <td><code><%= $entry->get_value('loginShell') %></code></td></tr>
-            <tr><th class="ps-3">DN</th>
-                <td><small class="text-muted"><%= $entry->dn %></small></td></tr>
+            <tr>
+              <th class="ps-3" style="width:35%">Username</th>
+              <td><%= $entry->get_value('uid') %></td>
+              <td></td>
+            </tr>
+            <tr>
+              <th class="ps-3">UID</th>
+              <td><%= $entry->get_value('uidNumber') %></td>
+              <td class="text-end pe-3">
+                <button class="btn btn-sm btn-outline-secondary py-0"
+                        data-bs-toggle="modal" data-bs-target="#modal-uid">&#9998;</button>
+              </td>
+            </tr>
+            <tr>
+              <th class="ps-3">GID</th>
+              <td><%= $entry->get_value('gidNumber') %></td>
+              <td class="text-end pe-3">
+                <button class="btn btn-sm btn-outline-secondary py-0"
+                        data-bs-toggle="modal" data-bs-target="#modal-gid">&#9998;</button>
+              </td>
+            </tr>
+            <tr>
+              <th class="ps-3">GECOS</th>
+              <td><%= $entry->get_value('gecos') // '' %></td>
+              <td class="text-end pe-3">
+                <button class="btn btn-sm btn-outline-secondary py-0"
+                        data-bs-toggle="modal" data-bs-target="#modal-gecos">&#9998;</button>
+              </td>
+            </tr>
+            <tr>
+              <th class="ps-3">Home</th>
+              <td><code><%= $entry->get_value('homeDirectory') %></code></td>
+              <td></td>
+            </tr>
+            <tr>
+              <th class="ps-3">Shell</th>
+              <td><code><%= $entry->get_value('loginShell') %></code></td>
+              <td class="text-end pe-3">
+                <button class="btn btn-sm btn-outline-secondary py-0"
+                        data-bs-toggle="modal" data-bs-target="#modal-shell">&#9998;</button>
+              </td>
+            </tr>
+            <tr>
+              <th class="ps-3">DN</th>
+              <td colspan="2"><small class="text-muted"><%= $entry->dn %></small></td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -75,5 +104,101 @@
       </div>
       <button class="btn btn-danger">Delete User</button>
     </form>
+  </div>
+</div>
+
+<!-- Edit GECOS modal -->
+<div class="modal fade" id="modal-gecos" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="post" action="/users/<%= $username %>">
+        <input type="hidden" name="action" value="gecos">
+        <div class="modal-header">
+          <h5 class="modal-title">Edit GECOS</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <label class="form-label">GECOS / Full Name</label>
+          <input type="text" name="gecos" class="form-control"
+                 value="<%= $entry->get_value('gecos') // '' %>">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Shell modal -->
+<div class="modal fade" id="modal-shell" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="post" action="/users/<%= $username %>">
+        <input type="hidden" name="action" value="shell">
+        <div class="modal-header">
+          <h5 class="modal-title">Edit Shell</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <label class="form-label">Login Shell</label>
+          <input type="text" name="shell" class="form-control"
+                 value="<%= $entry->get_value('loginShell') // '' %>">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Edit UID modal -->
+<div class="modal fade" id="modal-uid" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="post" action="/users/<%= $username %>">
+        <input type="hidden" name="action" value="uid">
+        <div class="modal-header">
+          <h5 class="modal-title">Edit UID</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <label class="form-label">UID Number</label>
+          <input type="number" name="uid" class="form-control" min="0"
+                 value="<%= $entry->get_value('uidNumber') %>">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Edit GID modal -->
+<div class="modal fade" id="modal-gid" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="post" action="/users/<%= $username %>">
+        <input type="hidden" name="action" value="gid">
+        <div class="modal-header">
+          <h5 class="modal-title">Edit GID</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <label class="form-label">GID Number</label>
+          <input type="number" name="gid" class="form-control" min="0"
+                 value="<%= $entry->get_value('gidNumber') %>">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    </div>
   </div>
 </div>

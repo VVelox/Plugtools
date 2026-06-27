@@ -53,20 +53,6 @@ sub show {
 	$self->render( template => 'users/show', entry => $entry, username => $user );
 } ## end sub show
 
-sub edit {
-	my $self = shift;
-	my $user = $self->param('user');
-
-	my $entry;
-	eval { $entry = $self->pt->getUserEntry( { user => $user } ) };
-	if ($@) {
-		$self->flash( error => "Failed to fetch user '$user': $@" );
-		return $self->redirect_to('users_index');
-	}
-
-	$self->render( template => 'users/edit', entry => $entry, username => $user );
-} ## end sub edit
-
 sub update {
 	my $self   = shift;
 	my $user   = $self->param('user');
@@ -87,12 +73,12 @@ sub update {
 		$error = $@;
 	} else {
 		$self->flash( error => "Unknown action: $action" );
-		return $self->redirect_to( 'users_edit', user => $user );
+		return $self->redirect_to( 'users_show', user => $user );
 	}
 
 	if ($error) {
 		$self->flash( error => "Failed to update user '$user': $error" );
-		return $self->redirect_to( 'users_edit', user => $user );
+		return $self->redirect_to( 'users_show', user => $user );
 	}
 
 	$self->flash( success => "User '$user' updated successfully." );

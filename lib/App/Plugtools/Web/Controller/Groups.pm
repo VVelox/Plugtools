@@ -83,26 +83,6 @@ sub show {
 	);
 } ## end sub show
 
-sub edit {
-	my $self  = shift;
-	my $group = $self->param('group');
-
-	my $groups;
-	eval { $groups = $self->pt->getGroups };
-	if ($@) {
-		$self->flash( error => "Failed to fetch group '$group': $@" );
-		return $self->redirect_to('groups_index');
-	}
-
-	my ($entry) = grep { ( $_->get_value('cn') // '' ) eq $group } @{$groups};
-	unless ($entry) {
-		$self->flash( error => "Group '$group' not found in LDAP." );
-		return $self->redirect_to('groups_index');
-	}
-
-	$self->render( template => 'groups/edit', entry => $entry, groupname => $group );
-} ## end sub edit
-
 sub update {
 	my $self  = shift;
 	my $group = $self->param('group');

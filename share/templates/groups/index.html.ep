@@ -16,12 +16,12 @@
 <div class="alert alert-info">No groups found in LDAP.</div>
 % } else {
 <div class="table-responsive">
-  <table class="table table-striped table-hover table-sm align-middle">
+  <table id="groups-table" class="table table-striped table-hover table-sm align-middle">
     <thead class="table-dark">
       <tr>
-        <th>Group Name</th>
-        <th>GID</th>
-        <th>Members</th>
+        <th data-col="0" data-type="text"   class="sortable">Group Name <span class="sort-icon"></span></th>
+        <th data-col="1" data-type="number" class="sortable">GID <span class="sort-icon"></span></th>
+        <th data-col="2" data-type="number" class="sortable">Members <span class="sort-icon"></span></th>
         <th></th>
       </tr>
     </thead>
@@ -32,7 +32,7 @@
       <tr>
         <td><a href="/groups/<%= $cn %>"><%= $cn %></a></td>
         <td><%= $entry->get_value('gidNumber') %></td>
-        <td>
+        <td data-sort="<%= scalar @mem %>">
           % if (@mem) {
             <span class="badge bg-secondary"><%= scalar @mem %></span>
             <small class="text-muted ms-1"><%= join(', ', sort @mem) %></small>
@@ -53,3 +53,51 @@
   </table>
 </div>
 % }
+
+<style>
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { background-color: rgba(255,255,255,.05); }
+  .sort-icon::after { content: ' \2195'; opacity: .35; font-size: .75em; }
+  th.sort-asc  .sort-icon::after { content: ' \2191'; opacity: 1; }
+  th.sort-desc .sort-icon::after { content: ' \2193'; opacity: 1; }
+</style>
+
+<script>
+(function () {
+  var table   = document.getElementById('groups-table');
+  var tbody   = table.querySelector('tbody');
+  var headers = table.querySelectorAll('th.sortable');
+  var sortCol = 0, sortAsc = true;
+
+  function cellValue(row, col, type) {
+    var cell = row.cells[col];
+    // prefer data-sort attribute for cells with mixed content (e.g. Members)
+    if (cell.dataset.sort !== undefined) return cell.dataset.sort;
+    return cell.textContent.trim();
+  }
+
+  function sortTable(col, type, asc) {
+    var rows = Array.from(tbody.querySelectorAll('tr'));
+    rows.sort(function (a, b) {
+      var av = cellValue(a, col, type);
+      var bv = cellValue(b, col, type);
+      var cmp = (type === 'number')
+        ? (parseFloat(av) || 0) - (parseFloat(bv) || 0)
+        : av.localeCompare(bv);
+      return asc ? cmp : -cmp;
+    });
+    rows.forEach(function (r) { tbody.appendChild(r); });
+  }
+
+  headers.forEach(function (th) {
+    th.addEventListener('click', function () {
+      var col  = parseInt(th.dataset.col);
+      var type = th.dataset.type;
+      if (sortCol === col) { sortAsc = !sortAsc; } else { sortCol = col; sortAsc = true; }
+      headers.forEach(function (h) { h.classList.remove('sort-asc', 'sort-desc'); });
+      th.classList.add(sortAsc ? 'sort-asc' : 'sort-desc');
+      sortTable(col, type, sortAsc);
+    });
+  });
+})();
+</script>

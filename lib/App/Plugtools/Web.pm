@@ -44,7 +44,6 @@ sub startup {
 	$r->get('/users/add')->to('users#add')->name('users_add');
 	$r->post('/users')->to('users#create')->name('users_create');
 	$r->get('/users/:user')->to('users#show')->name('users_show');
-	$r->get('/users/:user/edit')->to('users#edit')->name('users_edit');
 	$r->post('/users/:user')->to('users#update')->name('users_update');
 	$r->post('/users/:user/delete')->to('users#delete')->name('users_delete');
 	$r->post('/users/:user/password')->to('users#password')->name('users_password');
@@ -55,7 +54,6 @@ sub startup {
 	$r->post('/groups')->to('groups#create')->name('groups_create');
 	$r->post('/groups/clean')->to('groups#clean')->name('groups_clean');
 	$r->get('/groups/:group')->to('groups#show')->name('groups_show');
-	$r->get('/groups/:group/edit')->to('groups#edit')->name('groups_edit');
 	$r->post('/groups/:group')->to('groups#update')->name('groups_update');
 	$r->post('/groups/:group/delete')->to('groups#delete')->name('groups_delete');
 	$r->post('/groups/:group/members')->to('groups#add_member')->name('groups_add_member');

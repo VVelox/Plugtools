@@ -1,22 +1,22 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title><%= title %> — Plugtools</title>
   <link rel="stylesheet" href="/bootstrap/css/bootstrap.min.css">
   <style>
-    body { background-color: #f8f9fa; }
-    .navbar-brand { font-weight: 600; letter-spacing: .05em; }
-    .table th { white-space: nowrap; }
-    .btn-sm { font-size: .8rem; }
+    body { padding-top: 56px; font-size: 0.9rem; }
+    .navbar-brand { color: #dc3545 !important; font-weight: 700; letter-spacing: 2px; font-size: 1.1rem; }
+    .table-sm td, .table-sm th { white-space: nowrap; font-size: 0.82rem; }
+    .form-label { font-size: 0.78rem; color: #adb5bd; margin-bottom: 2px; }
   </style>
 </head>
 <body>
 
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark fixed-top border-bottom border-danger border-opacity-25">
   <div class="container-fluid">
-    <a class="navbar-brand" href="/">&#128296; Plugtools</a>
+    <a class="navbar-brand" href="/">&#128296; PLUGTOOLS</a>
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse"
             data-bs-target="#navbarNav">
       <span class="navbar-toggler-icon"></span>
@@ -36,7 +36,7 @@
   </div>
 </nav>
 
-<div class="container-fluid mt-4 px-4">
+<div class="container-fluid mt-3 px-4">
 
   % if (my $err = flash('error')) {
   <div class="alert alert-danger alert-dismissible fade show" role="alert">
