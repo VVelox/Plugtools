@@ -51,15 +51,9 @@ This specifies a config file to read other than the default.
 
     #initilize it and read the default config
     my $pt=Plugtools->new();
-    if($pt->error){
-        print "Error!\n";
-    }
 
     #initilize it and read '/some/config'
     my $pt=Plugtools->new({ config=>'/some/config' });
-    if($pt->error){
-        print "Error!\n";
-    }
 
 =cut
 
@@ -76,7 +70,7 @@ sub new {
 		errorFilename => undef,
 		errorString   => '',
 		errorExtra    => {
-			all_errors_fatal => 0,
+			all_errors_fatal => 1,
 			flags            => {
 				1  => 'readConfigFailed',
 				2  => 'missingRequired',
@@ -137,9 +131,6 @@ sub new {
 	}
 
 	$self->readConfig($args{config});
-	if ($self->{error}) {
-		$self->{perror}=$self->{error};
-	}
 
 	return $self;
 }
@@ -165,9 +156,6 @@ If this is true, call the dump method on the create Net::LDAP::Entry object.
     $pt->addGroup({
                    group=>'someGroup',
                    })
-    if($pt->error){
-        print "Error!\n";
-    }
 
     #do more
     $pt->addGroup({
@@ -175,9 +163,6 @@ If this is true, call the dump method on the create Net::LDAP::Entry object.
                    gid=>'4444',
                    dump=>'1',
                    })
-    if($pt->error){
-        print "Error!\n";
-    }
 
 =cut
 
@@ -188,10 +173,7 @@ sub addGroup{
 		%args= %{$_[1]};
 	};
 
-	#blanks any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#error if we don't have a group name
 	if (!defined($args{group})) {
@@ -274,10 +256,6 @@ sub addGroup{
 
 	#connect to the LDAP server
 	my $ldap=$self->connect();
-	if ($self->{error}) {
-		warn('Plugtools addGroup: Failed to connect to LDAP');
-		return undef;
-	}
 
 	#call a plugin if needed
 	if (defined($self->{ini}->{''}->{pluginAddGroup})) {
@@ -287,15 +265,11 @@ sub addGroup{
 					   do=>'pluginAddGroup',
 					   },
 					  \%args);
-		if ($self->{error}) {
-			warn('Plugtools addGroup: plugin errored');
-			return undef;
-		}
 	}
 
 	#add it
 	my $mesg=$entry->update($ldap);
-	if (!$mesg->{errorMessage} eq '') {
+	if ($mesg->{errorMessage} ne '') {
 		$self->{error}=19;
 		$self->{errorString}='$entry->update($ldap) failed. $mesg->{errorMessage}="'.
 		                     $mesg->{errorMessage}.'"';
@@ -380,9 +354,6 @@ If this is true, call the dump method on the create Net::LDAP::Entry object.
     $pt->addUser({
                   user=>'someUser',
                   })
-    if($pt->error){
-        print "Error!\n";
-    }
 
     #do more
     $pt->addUser({
@@ -392,9 +363,6 @@ If this is true, call the dump method on the create Net::LDAP::Entry object.
                   gid=>'4444',
                   dump=>'1',
                    })
-    if($pt->error){
-        print "Error!\n";
-    }
 
 =cut
 
@@ -405,10 +373,7 @@ sub addUser{
 		%args= %{$_[1]};
 	};
 
-	#blank any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#error if no user has been specified
 	if (!defined($args{user})) {
@@ -474,10 +439,6 @@ sub addUser{
 						 gid=>$args{gid},
 						 dump=>$args{dump},
 						 });
-		if ($self->{error}) {
-			warn('Plugtools addUser: addGroup failed');
-			return undef;
-		}
 	}
 
 	#gets the GID
@@ -500,10 +461,6 @@ sub addUser{
 
 	#connect to the LDAP server
 	my $ldap=$self->connect();
-	if ($self->{error}) {
-		warn('Plugtools addUser: Failed to connect to LDAP');
-		return undef;
-	}
 
 	#call a plugin if needed
 	if (defined($self->{ini}->{''}->{pluginAddUser})) {
@@ -513,10 +470,6 @@ sub addUser{
 					   do=>'pluginAddUser',
 					   },
 					  \%args);
-		if ($self->{error}) {
-			warn('Plugtools addUser: plugin errored');
-			return undef;
-		}
 	}
 
 	#add it
@@ -597,19 +550,13 @@ This forms a LDAP connection using the information in
 config file.
 
     my $ldap=$pt->connect;
-    if($pt->error){
-        print "Error!\n";
-    }
 
 =cut
 
 sub connect{
 	my $self=$_[0];
 
-	#blanks any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#try to connect
 	my $ldap = Net::LDAP->new($self->{ini}->{''}->{server}, port=>$self->{ini}->{''}->{port});
@@ -644,7 +591,7 @@ sub connect{
 	$mesg=$ldap->bind($self->{ini}->{''}->{bind},
 					  password=>$self->{ini}->{''}->{pass},
 					  );
-	if (!$mesg->{errorMessage} eq '') {
+	if ($mesg->{errorMessage} ne '') {
 		$self->{error}=13;
 		$self->{errorString}='Binding to the LDAP server failed. $mesg->{errorMessage}="'.
 		                     $mesg->{errorMessage}.'"';
@@ -660,9 +607,6 @@ sub connect{
 This removes a group.
 
     $pt->deleteGroup('someGroup');
-    if($pt->error){
-        print "Error!\n";
-    }
 
 =cut
 
@@ -670,10 +614,7 @@ sub deleteGroup{
 	my $self=$_[0];
 	my $group=$_[1];
 
-	#blank any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#error if we don't have a group name
 	if (!defined($group)) {
@@ -694,10 +635,6 @@ sub deleteGroup{
 
 	#connect to the LDAP server
 	my $ldap=$self->connect();
-	if ($self->{error}) {
-		warn('Plugtools deleteGroup: Failed to connect to LDAP');
-		return undef;
-	}
 
 	#search and get the first entry
 	my $mesg=$ldap->search(
@@ -725,16 +662,12 @@ sub deleteGroup{
 					  {
 					   group=>$group,
 					   });
-		if ($self->{error}) {
-			warn('Plugtools deleteGroup: plugin errored');
-			return undef;
-		}
 	}
 
 	#delete the entry
 	$entry->delete();
 	$mesg=$entry->update($ldap);
-	if (!$mesg->{errorMessage} eq '') {
+	if ($mesg->{errorMessage} ne '') {
 		$self->{error}=13;
 		$self->{errorString}='Deleting entry "'.$entry->dn.'" failed. $mesg->{errorMessage}="'.
 		                     $mesg->{errorMessage}.'"';
@@ -774,9 +707,6 @@ Remove the primary group if it is empty.
     $pt->deleteUser({
                   user=>'someUser',
                   })
-    if($pt->error){
-        print "Error!\n";
-    }
 
     #do more
     $pt->deleteUser({
@@ -784,9 +714,6 @@ Remove the primary group if it is empty.
                      removeHome=>'1',
                      removeGroup=>'0',
                      })
-    if($pt->error){
-        print "Error!\n";
-    }
 
 =cut
 
@@ -797,10 +724,7 @@ sub deleteUser{
 		%args= %{$_[1]};
 	};
 
-	#blank any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#make sure a group if specifed
 	if (!defined($args{user})) {
@@ -829,10 +753,6 @@ sub deleteUser{
 
 	#connect to the LDAP server
 	my $ldap=$self->connect();
-	if ($self->{error}) {
-		warn('Plugtools deleteUser: Failed to connect to LDAP');
-		return undef;
-	}
 
 	#search and get the first entry
 	my $mesg=$ldap->search(
@@ -861,10 +781,6 @@ sub deleteUser{
 										  user=>$args{user},
 										  group=>$gname,
 										  });
-		if ($self->{error}) {
-			warn('Plugtools deleteUser: onlyMember errored');
-			return undef;
-		}
 	}
 
 	#call a plugin if needed
@@ -875,17 +791,13 @@ sub deleteUser{
 					   do=>'pluginDeleteUser',
 					   },
 					  \%args);
-		if ($self->{error}) {
-			warn('Plugtools deleteUser: plugin errored');
-			return undef;
-		}
 	}
 
 
 	#delete the entry
 	$entry->delete();
 	$mesg=$entry->update($ldap);
-	if (!$mesg->{errorMessage} eq '') {
+	if ($mesg->{errorMessage} ne '') {
 		$self->{error}=13;
 		$self->{errorString}='Deleting entry "'.$entry->dn.'" failed. $mesg->{errorMessage}="'.
 		                     $mesg->{errorMessage}.'"';
@@ -899,27 +811,15 @@ sub deleteUser{
 		if ($onlyMember) {
 			#figure out if it is a LDAP group or not
 			my $returned=$self->isLDAPgroup($gname);
-			if ($self->{error}) {
-				warn('Plugtools deleteUser: isLDAPgroup errored');
-				return undef;
-			}
 			#if it is a LDAP group, remove it
 			if ($returned) {
 				$self->deleteGroup($gname);
-				if ($self->{error}) {
-					warn('Plugtools deleteUser: deleteGroup failed');
-					return undef;
-				}
 			}
 		}
 	}
 
 	#remove the user from what ever groups they are in, in LDAP
 	$self->removeUserFromGroups($args{user});
-	if ($self->{error}) {
-		warn('Plugtools deleteUser: removeUserFromGroups failed');
-		return undef;
-	}
 
 	#remove the primary group if requested...
 	if (!defined($args{removeHome})) {
@@ -943,9 +843,6 @@ sub deleteUser{
 This locates a DN for a already setup group.
 
     my $dn=$pt->findGroupDN('someGroup');
-    if($pt->error){
-        print "Error!";
-    }
 
 =cut
 
@@ -953,10 +850,7 @@ sub findGroupDN{
 	my $self=$_[0];
 	my $group=$_[1];
 
-	#blank any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#make sure a group if specifed
 	if (!defined($group)) {
@@ -977,10 +871,6 @@ sub findGroupDN{
 
 	#connect to the LDAP server
 	my $ldap=$self->connect();
-	if ($self->{error}) {
-		warn('Plugtools findGroupDN: Failed to connect to LDAP');
-		return undef;
-	}
 
 	#search and get the first entry
 	my $mesg=$ldap->search(
@@ -1007,9 +897,6 @@ sub findGroupDN{
 This locates a DN for a already setup group.
 
     my $dn=$pt->findUserDN('someUser');
-    if($pt->error){
-        print "Error!";
-    }
 
 =cut
 
@@ -1017,10 +904,7 @@ sub findUserDN{
 	my $self=$_[0];
 	my $user=$_[1];
 
-	#blank any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#make sure a group if specifed
 	if (!defined($user)) {
@@ -1041,10 +925,6 @@ sub findUserDN{
 
 	#connect to the LDAP server
 	my $ldap=$self->connect();
-	if ($self->{error}) {
-		warn('Plugtools findUserDN: Failed to connect to LDAP');
-		return undef;
-	}
 
 	#search and get the first entry
 	my $mesg=$ldap->search(
@@ -1080,9 +960,6 @@ of.
     my $entry=$pt->getUserEntry({
                                  user=>'someUser',
                                  });
-    if($pt->error){
-        print "Error!\n";
-    }
 
 =cut
 
@@ -1093,11 +970,7 @@ sub getUserEntry{
 		%args= %{$_[1]};
 	};
 
-
-	#blank any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#error if we don't have a group name
 	if (!defined($args{user})) {
@@ -1118,17 +991,13 @@ sub getUserEntry{
 
 	#connect to the LDAP server
 	my $ldap=$self->connect();
-	if ($self->{error}) {
-		warn('Plugtools getUserEntry: Failed to connect to LDAP');
-		return undef;
-	}
 
 	#search and get the first entry
 	my $mesg=$ldap->search(
 						   base=>$self->{ini}->{''}->{userbase},
 						   filter=>'(&(uid='.$args{user}.') (uidNumber='.$uid.'))'
 						   );
-	if (!$mesg->{errorMessage} eq '') {
+	if ($mesg->{errorMessage} ne '') {
 		$self->{error}=32;
 		$self->{errorString}='Fetching the entry for the user failed under "'.
 		                     $self->{ini}->{''}->{userbase}.'"'.
@@ -1171,9 +1040,6 @@ Call the dump method on the entry afterwards.
                        group=>'someGroup',
                        user=>'someUser',
                        })
-    if($pt->error){
-        print "Error!\n";
-    }
 
 =cut
 
@@ -1184,10 +1050,7 @@ sub groupAddUser{
 		%args= %{$_[1]};
 	};
 
-	#blank any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#error if we don't have a group name
 	if (!defined($args{group})) {
@@ -1216,17 +1079,13 @@ sub groupAddUser{
 
 	#connect to the LDAP server
 	my $ldap=$self->connect();
-	if ($self->{error}) {
-		warn('Plugtools groupAddUser: Failed to connect to LDAP');
-		return undef;
-	}
 
 	#search and get the first entry
 	my $mesg=$ldap->search(
 						   base=>$self->{ini}->{''}->{groupbase},
 						   filter=>'(&(cn='.$args{group}.') (gidNumber='.$gid.'))'
 						   );
-	if (!$mesg->{errorMessage} eq '') {
+	if ($mesg->{errorMessage} ne '') {
 		$self->{error}=27;
 		$self->{errorString}='Fetching a list of posixGroup objects under "'.
 		                     $self->{ini}->{''}->{groupbase}.'"'.
@@ -1255,15 +1114,11 @@ sub groupAddUser{
 					   do=>'pluginGroupAddUser',
 					   },
 					  \%args);
-		if ($self->{error}) {
-			warn('Plugtools groupAddUser: plugin errored');
-			return undef;
-		}
 	}
 
 	#update the entry
 	my $mesg2=$entry->update($ldap);
-	if (!$mesg2->{errorMessage} eq '') {
+	if ($mesg2->{errorMessage} ne '') {
 		$self->{error}=13;
 		$self->{errorString}='Adding the user, "'.$args{user}.'", to  "'.$entry->dn.'" failed. $mesg2->{errorMessage}="'.
 		                     $mesg2->{errorMessage}.'"';
@@ -1306,9 +1161,6 @@ Call the dump method on the group afterwards.
                          group=>'someGroup',
                          gid=>'2222',
                          })
-    if($pt->error){
-        print "Error!\n";
-    }
 
 
 =cut
@@ -1320,10 +1172,7 @@ sub groupGIDchange {
 		%args= %{$_[1]};
 	};
 
-	#blank any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#error if we don't have a group name
 	if (!defined($args{group})) {
@@ -1360,17 +1209,13 @@ sub groupGIDchange {
 
 	#connect to the LDAP server
 	my $ldap=$self->connect();
-	if ($self->{error}) {
-		warn('Plugtools groupGIDchange: Failed to connect to LDAP');
-		return undef;
-	}
 
 	#search and get the first entry
 	my $mesg=$ldap->search(
 						   base=>$self->{ini}->{''}->{groupbase},
 						   filter=>'(&(cn='.$args{group}.') (gidNumber='.$gid.'))'
 						   );
-	if (!$mesg->{errorMessage} eq '') {
+	if ($mesg->{errorMessage} ne '') {
 		$self->{error}=27;
 		$self->{errorString}='Fetching a list of posixGroup objects under "'.
 		                     $self->{ini}->{''}->{groupbase}.'"'.
@@ -1400,10 +1245,6 @@ sub groupGIDchange {
 					   do=>'pluginGroupGIDchange',
 					   },
 					  \%args);
-		if ($self->{error}) {
-			warn('Plugtools groupGIDchange: plugin errored');
-			return undef;
-		}
 	}
 
 	#update the entry
@@ -1435,7 +1276,7 @@ sub groupGIDchange {
 						   base=>$self->{ini}->{''}->{userbase},
 						   filter=>'(&(objectClass=posixAccount) (gidNumber='.$gid.'))'
 						   );
-	if (!$mesg->{errorMessage} eq '') {
+	if ($mesg->{errorMessage} ne '') {
 		$self->{error}=37;
 		$self->{errorString}='The search for posixAccounts entries that need updating failed. base="'.
 		                     $self->{ini}->{''}->{userbase}.'" $mesg3->{errorMessage}="'.
@@ -1458,7 +1299,7 @@ sub groupGIDchange {
 
 		#update the entry
 		my $mesg4=$entry->update($ldap);
-		if (!$mesg2->{errorMessage} eq '') {
+		if ($mesg2->{errorMessage} ne '') {
 			$self->{error}=29;
 			$self->{errorString}='Changing the GID to "'.$args{gid}.'" from "'.$gid
 			                     .'" for  "'.$entry->dn.'" failed. $mesg4->{errorMessage}="'.
@@ -1506,9 +1347,6 @@ Call the dump method on the group afterwards.
                        group=>'someGroup',
                        user=>'someUser',
                        })
-    if($pt->error){
-        print "Error!\n";
-    }
 
 =cut
 
@@ -1519,10 +1357,7 @@ sub groupRemoveUser{
 		%args= %{$_[1]};
 	};
 
-	#blank any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#error if we don't have a group name
 	if (!defined($args{group})) {
@@ -1551,17 +1386,13 @@ sub groupRemoveUser{
 
 	#connect to the LDAP server
 	my $ldap=$self->connect();
-	if ($self->{error}) {
-		warn('Plugtools groupRemoveUser: Failed to connect to LDAP');
-		return undef;
-	}
 
 	#search and get the first entry
 	my $mesg=$ldap->search(
 						   base=>$self->{ini}->{''}->{groupbase},
 						   filter=>'(&(cn='.$args{group}.') (gidNumber='.$gid.'))'
 						   );
-	if (!$mesg->{errorMessage} eq '') {
+	if ($mesg->{errorMessage} ne '') {
 		$self->{error}=27;
 		$self->{errorString}='Fetching a list of posixGroup objects under "'.
 		                     $self->{ini}->{''}->{groupbase}.'"'.
@@ -1590,15 +1421,11 @@ sub groupRemoveUser{
 					   do=>'pluginGroupRemoveUser',
 					   },
 					  \%args);
-		if ($self->{error}) {
-			warn('Plugtools groupRemoveUser: plugin errored');
-			return undef;
-		}
 	}
 
 	#update the entry
 	my $mesg2=$entry->update($ldap);
-	if (!$mesg2->{errorMessage} eq '') {
+	if ($mesg2->{errorMessage} ne '') {
 		$self->{error}=13;
 		$self->{errorString}='Removing the user, "'.$args{user}.'", from  "'.$entry->dn.'" failed. $mesg2->{errorMessage}="'.
 		                     $mesg2->{errorMessage}.'"';
@@ -1626,15 +1453,9 @@ If this is specified, the dump method is called on any updated entry. If this is
 defined, it defaults to false.
 
     $pt->groupClean;
-    if($pt->error){
-        print "Error!\n";
-    }
 
     #do the same thing as above, but do $entry->dump for any changed entry
     $pt->groupClean({dump=>'1'});
-    if($pt->error){
-        print "Error!\n";
-    }
 
 =cut
 
@@ -1645,24 +1466,17 @@ sub groupClean{
 		%args= %{$_[1]};
 	};
 
-	#blank any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#connect to the LDAP server
 	my $ldap=$self->connect();
-	if ($self->{error}) {
-		warn('Plugtools groupClean: Failed to connect to LDAP');
-		return undef;
-	}
 
 	#search and get the first entry
 	my $mesg=$ldap->search(
 						   base=>$self->{ini}->{''}->{groupbase},
 						   filter=>'(objectClass=posixGroup)',
 						   );
-	if (!$mesg->{errorMessage} eq '') {
+	if ($mesg->{errorMessage} ne '') {
 		$self->{error}=27;
 		$self->{errorString}='Fetching a list of posixGroup objects under "'.
 		                     $self->{ini}->{''}->{groupbase}.'"'.
@@ -1702,7 +1516,7 @@ sub groupClean{
 			#if it changed, update it
 			if ($changed) {
 				my $mesg2=$entry->update($ldap);
-				if (!$mesg->{errorMessage} eq '') {
+				if ($mesg->{errorMessage} ne '') {
 					$self->{error}=28;
 					$self->{errorString}='Failed to update the entry, "'.$entry->dn.'". $mesg2->{errorMessage}="'.
 				                          $mesg2->{errorMessage}.'"';
@@ -1731,14 +1545,10 @@ sub groupClean{
 This tests if a group is in LDAP or not.
 
     my $returned=$pt->isLDAPgroup('someGroup');
-    if($pt->error){
-        print "Error!\n";
+    if($returned){
+        print "Yes!\n";
     }else{
-        if($returned){
-            print "Yes!\n";
-        }else{
-            print "No!\n";
-        }
+        print "No!\n";
     }
 
 =cut
@@ -1747,10 +1557,7 @@ sub isLDAPgroup{
 	my $self=$_[0];
 	my $group=$_[1];
 
-	#blank any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#make sure a group if specifed
 	if (!defined($group)) {
@@ -1771,10 +1578,6 @@ sub isLDAPgroup{
 
 	#connect to the LDAP server
 	my $ldap=$self->connect();
-	if ($self->{error}) {
-		warn('Plugtools isLDAPgroup: Failed to connect to LDAP');
-		return undef;
-	}
 
 	#search and get the first entry
 	my $mesg=$ldap->search(
@@ -1796,14 +1599,10 @@ sub isLDAPgroup{
 This tests if a group is in LDAP or not.
 
     my $returned=$pt->isLDAPuser('someUser');
-    if($pt->error){
-        print "Error!\n";
+    if($returned){
+        print "Yes!\n";
     }else{
-        if($returned){
-            print "Yes!\n";
-        }else{
-            print "No!\n";
-        }
+        print "No!\n";
     }
 
 =cut
@@ -1812,10 +1611,7 @@ sub isLDAPuser{
 	my $self=$_[0];
 	my $user=$_[1];
 
-	#blank any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#make sure a group if specifed
 	if (!defined($user)) {
@@ -1836,10 +1632,6 @@ sub isLDAPuser{
 
 	#connect to the LDAP server
 	my $ldap=$self->connect();
-	if ($self->{error}) {
-		warn('Plugtools isLDAPuser: Failed to connect to LDAP');
-		return undef;
-	}
 
 	#search and get the first entry
 	my $mesg=$ldap->search(
@@ -1881,9 +1673,6 @@ This is the group to check.
                        user=>'someUser',
                        group=>'someGroup',
                        });
-    if($pt->error){
-        print "Error!\n";
-    }
 
 
 =cut
@@ -1895,10 +1684,7 @@ sub onlyMember{
 		%args= %{$_[1]};
 	};
 
-	#blank any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#error is no group is specified
 	if (!defined($args{user})) {
@@ -2004,10 +1790,7 @@ sub plugin{
 		%args= %{$_[2]};
 	};
 
-	#blank any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#error if no LDAP connection is present
 	if (!defined($opts{ldap})) {
@@ -2103,9 +1886,6 @@ This removes a user from any group in LDAP they are a member of.
 No checks are made to see if the user exists or not.
 
     $pt->removeUserFromGroups('someUser');
-    if($pt->error){
-        print "Error!\n";
-    }
 
 =cut
 
@@ -2113,10 +1893,7 @@ sub removeUserFromGroups{
 	my $self=$_[0];
 	my $user=$_[1];
 
-	#blank any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#make sure a group if specifed
 	if (!defined($user)) {
@@ -2128,10 +1905,6 @@ sub removeUserFromGroups{
 
 	#connect to the LDAP server
 	my $ldap=$self->connect();
-	if ($self->{error}) {
-		warn('Plugtools removeUserFromGroups: Failed to connect to LDAP');
-		return undef;
-	}
 
 	#search and get the first entry
 	my $mesg=$ldap->search(
@@ -2152,7 +1925,7 @@ sub removeUserFromGroups{
 		$entry->delete('memberUid'=>$user);
 		my $mesg2=$entry->update($ldap);
 		#handles any errors
-		if (!$mesg2->{errorMessage} eq '') {
+		if ($mesg2->{errorMessage} ne '') {
 			$self->{error}=25;
 			$self->{errorString}='Deleting memberUid='.$user.' from the entry "'.$entry->dn.'" failed. $mesg2->{errorMessage}="'.
 			                      $mesg2->{errorMessage}.'"';
@@ -2177,15 +1950,9 @@ This reads the specified config.
 
     #reads the default config
     $pt->readConfig();
-    if($pt->error){
-        print "Error!";
-    }
 
     #reads the config '/some/config'
     $pt->readConfig('/some/config');
-    if($pt->error){
-        print "Error!";
-    }
 
 =cut
 
@@ -2193,10 +1960,7 @@ sub readConfig{
 	my $self=$_[0];
 	my $config=$_[1];
 
-	#blanks any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#if it is not defined, use the default one
 	if (!defined($config)) {
@@ -2323,9 +2087,6 @@ Call the dump method on the group afterwards.
                           user=>'someUser',
                           gecos=>'whatever',
                           });
-    if($pt->error){
-        print "Error!\n";
-    }
 
 =cut
 
@@ -2336,10 +2097,7 @@ sub userGECOSchange{
 		%args= %{$_[1]};
 	};
 
-	#blank any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#error if we don't have a group name
 	if (!defined($args{user})) {
@@ -2368,17 +2126,13 @@ sub userGECOSchange{
 
 	#connect to the LDAP server
 	my $ldap=$self->connect();
-	if ($self->{error}) {
-		warn('Plugtools userGECOSchange: Failed to connect to LDAP');
-		return undef;
-	}
 
 	#search and get the first entry
 	my $mesg=$ldap->search(
 						   base=>$self->{ini}->{''}->{userbase},
 						   filter=>'(&(uid='.$args{user}.') (uidNumber='.$uid.'))'
 						   );
-	if (!$mesg->{errorMessage} eq '') {
+	if ($mesg->{errorMessage} eq '') {
 		$self->{error}=32;
 		$self->{errorString}='Fetching the entry for the user failed under "'.
 		                     $self->{ini}->{''}->{groupbase}.'"'.
@@ -2408,15 +2162,11 @@ sub userGECOSchange{
 					   do=>'pluginUserGECOSchange',
 					   },
 					  \%args);
-		if ($self->{error}) {
-			warn('Plugtools userGECOSchange: plugin errored');
-			return undef;
-		}
 	}
 
 	#update the entry
 	my $mesg2=$entry->update($ldap);
-	if (!$mesg2->{errorMessage} eq '') {
+	if ($mesg2->{errorMessage} ne '') {
 		$self->{error}=34;
 		$self->{errorString}='Changing the GECOS to "'.$args{gecos}.'" from "'.$gecos
 		                     .'" for  "'.$entry->dn.'" failed. $mesg2->{errorMessage}="'.
@@ -2455,9 +2205,6 @@ Call the dump method on the group afterwards.
                           user=>'someUser',
                           shell=>'/bin/tcsh',
                           });
-    if($pt->error){
-        print "Error!\n";
-    }
 
 =cut
 
@@ -2468,10 +2215,7 @@ sub userShellChange{
 		%args= %{$_[1]};
 	}
 
-	#blank any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#error if we don't have a group name
 	if (!defined($args{user})) {
@@ -2500,17 +2244,13 @@ sub userShellChange{
 
 	#connect to the LDAP server
 	my $ldap=$self->connect();
-	if ($self->{error}) {
-		warn('Plugtools userShellChange: Failed to connect to LDAP');
-		return undef;
-	}
 
 	#search and get the first entry
 	my $mesg=$ldap->search(
 						   base=>$self->{ini}->{''}->{userbase},
 						   filter=>'(&(uid='.$args{user}.') (uidNumber='.$uid.'))'
 						   );
-	if (!$mesg->{errorMessage} eq '') {
+	if ($mesg->{errorMessage} ne '') {
 		$self->{error}=32;
 		$self->{errorString}='Fetching the entry for the user failed under "'.
 		                     $self->{ini}->{''}->{groupbase}.'"'.
@@ -2540,15 +2280,11 @@ sub userShellChange{
 					   do=>'pluginUserShellChange',
 					   },
 					  \%args);
-		if ($self->{error}) {
-			warn('Plugtools userShellChange: plugin errored');
-			return undef;
-		}
 	}
 
 	#update the entry
 	my $mesg2=$entry->update($ldap);
-	if (!$mesg2->{errorMessage} eq '') {
+	if ($mesg2->{errorMessage} ne '') {
 		$self->{error}=34;
 		$self->{errorString}='Changing the Shell to "'.$args{shell}.'" from "'.$shell
 		                     .'" for  "'.$entry->dn.'" failed. $mesg2->{errorMessage}="'.
@@ -2583,9 +2319,6 @@ This is the new password to set.
                       user=>'someUser',
                       pass=>'whatever',
                       });
-    if($pt->error){
-        print "Error!\n";
-    }
 
 =cut
 
@@ -2596,10 +2329,7 @@ sub userSetPass{
 		%args= %{$_[1]};
 	};
 
-	#blank any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#error if we don't have a user name
 	if (!defined($args{user})) {
@@ -2628,17 +2358,13 @@ sub userSetPass{
 
 	#connect to the LDAP server
 	my $ldap=$self->connect();
-	if ($self->{error}) {
-		warn('Plugtools userSetPass: Failed to connect to LDAP');
-		return undef;
-	}
 
 	#search and get the first entry
 	my $mesg=$ldap->search(
 						   base=>$self->{ini}->{''}->{userbase},
 						   filter=>'(&(uid='.$args{user}.') (uidNumber='.$uid.'))'
 						   );
-	if (!$mesg->{errorMessage} eq '') {
+	if ($mesg->{errorMessage} ne '') {
 		$self->{error}=32;
 		$self->{errorString}='Fetching the entry for the user under "'.
 		                     $self->{ini}->{''}->{userbase}.'"'.
@@ -2652,7 +2378,7 @@ sub userSetPass{
 	my $dn=$entry->dn;
 
 	my $mesg2=$ldap->set_password(user=>$dn, newpasswd=>$args{pass});
-	if (!$mesg->{errorMessage} eq '') {
+	if ($mesg->{errorMessage} ne '') {
 		$self->{error}=36;
 		$self->{errorString}='Fetching the entry for the user under "'.
 		                     $self->{ini}->{''}->{userbase}.'"'.
@@ -2669,17 +2395,13 @@ sub userSetPass{
 					   do=>'pluginUserSetPass',
 					   },
 					  \%args);
-		if ($self->{error}) {
-			warn('Plugtools userSetPass: plugin errored');
-			return undef;
-		}
 	}else {
 		return 1;
 	}
 
 	#update the entry
 	my $mesg3=$entry->update($ldap);
-	if (!$mesg3->{errorMessage} eq '') {
+	if ($mesg3->{errorMessage} ne '') {
 		$self->{error}=34;
 		$self->{errorString}='Calling the update method on the entry, "'.$entry->dn.'", failed. $mesg3->{errorMessage}="'.
 		                     $mesg3->{errorMessage}.'"';
@@ -2712,9 +2434,6 @@ Call the dump method on the group afterwards.
                         user=>'someUser',
                         gid=>'1234',
                         });
-    if($pt->error){
-        print "Error!\n";
-    }
 
 =cut
 
@@ -2725,10 +2444,7 @@ sub userGIDchange{
 		%args= %{$_[1]};
 	};
 
-	#blank any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#error if we don't have a group name
 	if (!defined($args{user})) {
@@ -2774,17 +2490,13 @@ sub userGIDchange{
 
 	#connect to the LDAP server
 	my $ldap=$self->connect();
-	if ($self->{error}) {
-		warn('Plugtools userGIDchange: Failed to connect to LDAP');
-		return undef;
-	}
 
 	#search and get the first entry
 	my $mesg=$ldap->search(
 						   base=>$self->{ini}->{''}->{userbase},
 						   filter=>'(&(uid='.$args{user}.') (uidNumber='.$uid.'))'
 						   );
-	if (!$mesg->{errorMessage} eq '') {
+	if ($mesg->{errorMessage} ne '') {
 		$self->{error}=32;
 		$self->{errorString}='Fetching the entry for the user failed under "'.
 		                     $self->{ini}->{''}->{userbase}.'"'.
@@ -2814,15 +2526,11 @@ sub userGIDchange{
 					   do=>'pluginUserGIDchange',
 					   },
 					  \%args);
-		if ($self->{error}) {
-			warn('Plugtools userGIDchange: plugin errored');
-			return undef;
-		}
 	}
 
 	#update the entry
 	my $mesg2=$entry->update($ldap);
-	if (!$mesg2->{errorMessage} eq '') {
+	if ($mesg2->{errorMessage} ne '') {
 		$self->{error}=29;
 		$self->{errorString}='Changing the GID to "'.$args{gid}.'" from "'.$gid
 		                     .'" for  "'.$entry->dn.'" failed. $mesg2->{errorMessage}="'.
@@ -2861,9 +2569,6 @@ Call the dump method on the group afterwards.
                         user=>'someUser',
                         uid=>'1234',
                         });
-    if($pt->error){
-        print "Error!\n";
-    }
 
 =cut
 
@@ -2874,10 +2579,7 @@ sub userUIDchange{
 		%args= %{$_[1]};
 	};
 
-	#blank any previous errors
-	if (!$self->errorblank) {
-		return undef;
-	}
+	$self->errorblank;
 
 	#error if we don't have a group name
 	if (!defined($args{user})) {
@@ -2914,17 +2616,13 @@ sub userUIDchange{
 
 	#connect to the LDAP server
 	my $ldap=$self->connect();
-	if ($self->{error}) {
-		warn('Plugtools userUIDchange: Failed to connect to LDAP');
-		return undef;
-	}
 
 	#search and get the first entry
 	my $mesg=$ldap->search(
 						   base=>$self->{ini}->{''}->{userbase},
 						   filter=>'(&(uid='.$args{user}.') (uidNumber='.$uid.'))'
 						   );
-	if (!$mesg->{errorMessage} eq '') {
+	if ($mesg->{errorMessage} ne '') {
 		$self->{error}=32;
 		$self->{errorString}='Fetching the entry for the user under "'.
 		                     $self->{ini}->{''}->{userbase}.'"'.
@@ -2954,15 +2652,11 @@ sub userUIDchange{
 					   do=>'pluginUserGIDchange',
 					   },
 					  \%args);
-		if ($self->{error}) {
-			warn('Plugtools userUIDchange: plugin errored');
-			return undef;
-		}
 	}
 
 	#update the entry
 	my $mesg2=$entry->update($ldap);
-	if (!$mesg2->{errorMessage} eq '') {
+	if ($mesg2->{errorMessage} ne '') {
 		$self->{error}=31;
 		$self->{errorString}='Changing the UID to "'.$args{uid}.'" from "'.$uid
 		                     .'" for  "'.$entry->dn.'" failed. $mesg2->{errorMessage}="'.
