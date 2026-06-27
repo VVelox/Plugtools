@@ -1,7 +1,7 @@
 Changes
 MANIFEST
 Makefile.PL
-README
+README.md
 src_bin/plgadd
 src_bin/pluadd
 src_bin/plgrm
@@ -10,7 +10,6 @@ src_bin/plurm
 src_bin/plgclean
 src_bin/plupass
 src_bin/plumod
-bin/.exists
 lib/App/Plugtools.pm
 lib/App/Plugtools/Plugins/Dump.pm
 t/00-load.t
