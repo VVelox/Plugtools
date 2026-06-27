@@ -1,6 +1,9 @@
 use strict;
 use warnings;
 use ExtUtils::MakeMaker;
+use File::ShareDir::Install;
+
+install_share 'share';
 
 WriteMakefile(
 	NAME          => 'App::Plugtools',
@@ -13,8 +16,9 @@ WriteMakefile(
 	PL_FILES    => {},
 	INST_SCRIPT => 'bin',
 	EXE_FILES   => [
-		'src_bin/plgadd', 'src_bin/plgclean', 'src_bin/plgmod',  'src_bin/plgrm',
-		'src_bin/pluadd', 'src_bin/plumod',   'src_bin/plupass', 'src_bin/plurm',
+		'src_bin/plgadd',         'src_bin/plgclean', 'src_bin/plgmod',
+		'src_bin/plgrm',          'src_bin/pluadd',   'src_bin/plumod',
+		'src_bin/plupass',        'src_bin/plurm',    'src_bin/mojo_plugtools',
 	],
 	PREREQ_PM => {
 		'Test::More'                        => 0,
@@ -30,7 +34,11 @@ WriteMakefile(
 		'String::ShellQuote'                => 0,
 		'Data::Dumper'                      => 0,
 		'Error::Helper'                     => '2.0.0',
+		'Mojolicious'                       => '9.0',
+		'File::ShareDir'                    => '1.0',
+		'File::ShareDir::Install'           => '0.13',
 	},
 	dist  => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
 	clean => { FILES    => 'App-Plugtools-*' },
 );
+

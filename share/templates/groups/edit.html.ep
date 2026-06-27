@@ -1,0 +1,27 @@
+% layout 'default';
+% title "Edit: $groupname";
+
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="/groups">Groups</a></li>
+    <li class="breadcrumb-item"><a href="/groups/<%= $groupname %>"><%= $groupname %></a></li>
+    <li class="breadcrumb-item active">Edit</li>
+  </ol>
+</nav>
+
+<div class="card" style="max-width:400px">
+  <div class="card-header"><strong>Edit GID: <%= $groupname %></strong></div>
+  <div class="card-body">
+    <form method="post" action="/groups/<%= $groupname %>">
+      <div class="mb-4">
+        <label class="form-label">GID Number</label>
+        <input type="number" name="gid" class="form-control" required
+               value="<%= $entry->get_value('gidNumber') %>">
+        <div class="form-text">Updating the GID will also update any users whose
+          primary GID matches the current value.</div>
+      </div>
+      <button class="btn btn-primary">Update GID</button>
+      <a href="/groups/<%= $groupname %>" class="btn btn-outline-secondary ms-2">Cancel</a>
+    </form>
+  </div>
+</div>

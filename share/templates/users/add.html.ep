@@ -1,0 +1,104 @@
+% layout 'default';
+% title 'Add User';
+
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="/users">Users</a></li>
+    <li class="breadcrumb-item active">Add</li>
+  </ol>
+</nav>
+
+<div class="card" style="max-width:640px">
+  <div class="card-header"><strong>Add User</strong></div>
+  <div class="card-body">
+    <form method="post" action="/users">
+
+      <h6 class="text-muted mb-3">Identity</h6>
+      <div class="row g-3 mb-4">
+        <div class="col-sm-6">
+          <label class="form-label">Username <span class="text-danger">*</span></label>
+          <input type="text" name="user" class="form-control" required>
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label">GECOS</label>
+          <input type="text" name="gecos" class="form-control"
+                 placeholder="Defaults to username">
+        </div>
+      </div>
+
+      <h6 class="text-muted mb-3">IDs</h6>
+      <div class="row g-3 mb-4">
+        <div class="col-sm-3">
+          <label class="form-label">UID</label>
+          <input type="number" name="uid" class="form-control"
+                 placeholder="Auto">
+        </div>
+        <div class="col-sm-4">
+          <label class="form-label">Primary Group</label>
+          <input type="text" name="group" class="form-control"
+                 placeholder="Defaults to username">
+        </div>
+        <div class="col-sm-3">
+          <label class="form-label">GID</label>
+          <input type="number" name="gid" class="form-control"
+                 placeholder="Auto">
+        </div>
+      </div>
+
+      <h6 class="text-muted mb-3">Environment</h6>
+      <div class="row g-3 mb-4">
+        <div class="col-sm-6">
+          <label class="form-label">Shell</label>
+          <input type="text" name="shell" class="form-control"
+                 placeholder="Default from config">
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label">Home Directory</label>
+          <input type="text" name="home" class="form-control"
+                 placeholder="Default from config">
+        </div>
+      </div>
+
+      <h6 class="text-muted mb-3">Home Setup</h6>
+      <div class="row g-3 mb-4">
+        <div class="col-sm-4">
+          <label class="form-label">Create Home</label>
+          <select name="createHome" class="form-select">
+            <option value="">Config default</option>
+            <option value="1">Yes</option>
+            <option value="0">No</option>
+          </select>
+        </div>
+        <div class="col-sm-4">
+          <label class="form-label">Skeleton Dir</label>
+          <input type="text" name="skel" class="form-control"
+                 placeholder="Default from config">
+        </div>
+        <div class="col-sm-4">
+          <label class="form-label">Chown Home</label>
+          <select name="chownHome" class="form-select">
+            <option value="">Config default</option>
+            <option value="1">Yes</option>
+            <option value="0">No</option>
+          </select>
+        </div>
+        <div class="col-sm-4">
+          <label class="form-label">Chmod Home</label>
+          <select name="chmodHome" class="form-select">
+            <option value="">Config default</option>
+            <option value="1">Yes</option>
+            <option value="0">No</option>
+          </select>
+        </div>
+        <div class="col-sm-4">
+          <label class="form-label">Chmod Value</label>
+          <input type="text" name="chmodValue" class="form-control"
+                 placeholder="e.g. 750">
+        </div>
+      </div>
+
+      <button class="btn btn-primary">Add User</button>
+      <a href="/users" class="btn btn-outline-secondary ms-2">Cancel</a>
+    </form>
+  </div>
+</div>

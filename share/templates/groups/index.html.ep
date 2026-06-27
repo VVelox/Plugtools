@@ -1,0 +1,55 @@
+% layout 'default';
+% title 'Groups';
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2>Groups</h2>
+  <div>
+    <form method="post" action="/groups/clean" class="d-inline"
+          onsubmit="return confirm('Remove stale members from all groups?')">
+      <button class="btn btn-outline-secondary me-2">Clean Groups</button>
+    </form>
+    <a href="/groups/add" class="btn btn-primary">+ Add Group</a>
+  </div>
+</div>
+
+% if (!@{$groups}) {
+<div class="alert alert-info">No groups found in LDAP.</div>
+% } else {
+<div class="table-responsive">
+  <table class="table table-striped table-hover table-sm align-middle">
+    <thead class="table-dark">
+      <tr>
+        <th>Group Name</th>
+        <th>GID</th>
+        <th>Members</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      % for my $entry (@{$groups}) {
+      % my $cn  = $entry->get_value('cn');
+      % my @mem = $entry->get_value('memberUid');
+      <tr>
+        <td><a href="/groups/<%= $cn %>"><%= $cn %></a></td>
+        <td><%= $entry->get_value('gidNumber') %></td>
+        <td>
+          % if (@mem) {
+            <span class="badge bg-secondary"><%= scalar @mem %></span>
+            <small class="text-muted ms-1"><%= join(', ', sort @mem) %></small>
+          % } else {
+            <span class="text-muted">—</span>
+          % }
+        </td>
+        <td class="text-end">
+          <a href="/groups/<%= $cn %>/edit" class="btn btn-outline-secondary btn-sm">Edit</a>
+          <form method="post" action="/groups/<%= $cn %>/delete" class="d-inline"
+                onsubmit="return confirm('Delete group <%= $cn %>?')">
+            <button class="btn btn-outline-danger btn-sm">Delete</button>
+          </form>
+        </td>
+      </tr>
+      % }
+    </tbody>
+  </table>
+</div>
+% }

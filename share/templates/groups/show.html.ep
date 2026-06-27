@@ -1,0 +1,87 @@
+% layout 'default';
+% title $groupname;
+
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="/groups">Groups</a></li>
+    <li class="breadcrumb-item active"><%= $groupname %></li>
+  </ol>
+</nav>
+
+<div class="row g-4">
+
+  <!-- Attributes -->
+  <div class="col-md-5">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Group: <%= $groupname %></strong>
+        <a href="/groups/<%= $groupname %>/edit"
+           class="btn btn-sm btn-outline-secondary">Edit GID</a>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <tbody>
+            <tr><th class="ps-3" style="width:35%">Name</th>
+                <td><%= $entry->get_value('cn') %></td></tr>
+            <tr><th class="ps-3">GID</th>
+                <td><%= $entry->get_value('gidNumber') %></td></tr>
+            <tr><th class="ps-3">DN</th>
+                <td><small class="text-muted"><%= $entry->dn %></small></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Members -->
+  <div class="col-md-7">
+    <div class="card">
+      <div class="card-header"><strong>Members</strong></div>
+      <div class="card-body">
+        % my @members = sort $entry->get_value('memberUid');
+        % if (@members) {
+        <ul class="list-group list-group-flush mb-3">
+          % for my $uid (@members) {
+          <li class="list-group-item d-flex justify-content-between align-items-center px-0">
+            <a href="/users/<%= $uid %>"><%= $uid %></a>
+            <form method="post"
+                  action="/groups/<%= $groupname %>/members/<%= $uid %>/delete"
+                  onsubmit="return confirm('Remove <%= $uid %> from <%= $groupname %>?')">
+              <button class="btn btn-outline-danger btn-sm">Remove</button>
+            </form>
+          </li>
+          % }
+        </ul>
+        % } else {
+        <p class="text-muted">No explicit members.</p>
+        % }
+
+        % if (@{$non_members}) {
+        <form method="post" action="/groups/<%= $groupname %>/members"
+              class="d-flex gap-2">
+          <select name="user" class="form-select form-select-sm">
+            % for my $u (@{$non_members}) {
+            <option value="<%= $u->get_value('uid') %>">
+              <%= $u->get_value('uid') %>
+            </option>
+            % }
+          </select>
+          <button class="btn btn-primary btn-sm text-nowrap">Add Member</button>
+        </form>
+        % }
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Danger zone -->
+<div class="card border-danger mt-4" style="max-width:400px">
+  <div class="card-header text-danger"><strong>Danger Zone</strong></div>
+  <div class="card-body">
+    <form method="post" action="/groups/<%= $groupname %>/delete"
+          onsubmit="return confirm('Permanently delete group <%= $groupname %>?')">
+      <button class="btn btn-danger">Delete Group</button>
+    </form>
+  </div>
+</div>

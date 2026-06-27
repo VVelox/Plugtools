@@ -1,0 +1,52 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+
+# Grab --pt-config before Mojolicious sees the argv, then pass the rest through.
+use Getopt::Long qw(:config pass_through);
+GetOptions( 'pt-config=s' => \( my $pt_config ) );
+$ENV{PLUGTOOLS_CONFIG} = $pt_config if defined $pt_config;
+
+use App::Plugtools::Web;
+App::Plugtools::Web->start;
+
+=head1 NAME
+
+mojo_plugtools - Mojolicious web frontend for App::Plugtools
+
+=head1 SYNOPSIS
+
+  # Development server (port 3000)
+  mojo_plugtools daemon
+
+  # Custom port
+  mojo_plugtools daemon -l http://*:8080
+
+  # Production (prefork)
+  mojo_plugtools prefork -l http://*:8080
+
+  # With a custom plugtools config
+  mojo_plugtools daemon --pt-config /etc/plugtoolsrc
+
+=head1 DESCRIPTION
+
+Starts the App::Plugtools web interface. All standard Mojolicious server
+commands (daemon, prefork, etc.) are supported after any C<--pt-config>
+argument.
+
+=head1 ENVIRONMENT
+
+=head2 PLUGTOOLS_CONFIG
+
+Path to the plugtoolsrc config file. Overridden by C<--pt-config>.
+
+=head2 PLUGTOOLS_SECRET
+
+Session secret. Set this to a long random string in production.
+
+=head1 SEE ALSO
+
+L<App::Plugtools>, L<App::Plugtools::Web>
+
+=cut
