@@ -11,8 +11,8 @@ src_bin/plgclean
 src_bin/plupass
 src_bin/plumod
 bin/.exists
-lib/Plugtools.pm
-lib/Plugtools/Plugins/Dump.pm
+lib/App/Plugtools.pm
+lib/App/Plugtools/Plugins/Dump.pm
 t/00-load.t
 t/01-load.t
 t/pod-coverage.t

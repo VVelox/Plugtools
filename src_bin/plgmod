@@ -3,7 +3,7 @@
 use strict;
 use warnings;
 use Getopt::Std;
-use Plugtools;
+use App::Plugtools;
 
 $Getopt::Std::STANDARD_HELP_VERSION = 1;
 
@@ -34,9 +34,9 @@ sub main::HELP_MESSAGE {
 			  "remove - -g, -u\n".
 			  "gid - -g, -G\n".
 			  "\n".
-			  "For more info, see the the perldocs for Plugtools and plgmod...\n".
+			  "For more info, see the the perldocs for App::Plugtools and plgmod...\n".
 			  "perldoc plgmod\n".
-			  "perldoc Plugtools\n";
+			  "perldoc App::Plugtools\n";
 }
 
 #gets the options
@@ -53,9 +53,9 @@ if (!defined($opts{a})) {
 	exit 25;
 }
 
-my $pt=Plugtools->new;
+my $pt=App::Plugtools->new;
 if ($pt->error) {
-	warn('plgmod: Failed to initialize the Plugtools object');
+	warn('plgmod: Failed to initialize the App::Plugtools object');
 	exit $pt->error;
 }
 
@@ -151,7 +151,7 @@ updated if the GID of a group is changed.
 
 =head1 EXIT CODES
 
-If the exit code is not listed below, it is what was the error code returned by Plugtools.
+If the exit code is not listed below, it is what was the error code returned by App::Plugtools.
 
 =head2 254
 

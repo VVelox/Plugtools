@@ -3,7 +3,7 @@
 use strict;
 use warnings;
 use Getopt::Std;
-use Plugtools;
+use App::Plugtools;
 
 $Getopt::Std::STANDARD_HELP_VERSION = 1;
 
@@ -15,18 +15,18 @@ sub main::VERSION_MESSAGE {
 #print help
 sub main::HELP_MESSAGE {
 	print "\n" . "\n"
-		. "For more info, see the the perldocs for Plugtools and plgclean...\n"
+		. "For more info, see the the perldocs for App::Plugtools and plgclean...\n"
 		. "perldoc plgclean\n"
-		. "perldoc Plugtools\n";
+		. "perldoc App::Plugtools\n";
 }
 
 #gets the options
 my %opts = ();
 getopts( 'l', \%opts );
 
-my $pt = Plugtools->new;
+my $pt = App::Plugtools->new;
 if ( $pt->error ) {
-	warn('plgclean: Failed to initialize the Plugtools object');
+	warn('plgclean: Failed to initialize the App::Plugtools object');
 	exit $pt->error;
 }
 
@@ -53,7 +53,7 @@ If this is specified, any modified entry is printed to STDOUT.
 
 =head1 EXIT CODES
 
-If Plugtools encounters an error, the exit code is the returned error code.
+If App::Plugtools encounters an error, the exit code is the returned error code.
 
 =head1 ACKNOWLEDGEMENTS
 

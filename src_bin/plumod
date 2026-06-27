@@ -3,7 +3,7 @@
 use strict;
 use warnings;
 use Getopt::Std;
-use Plugtools;
+use App::Plugtools;
 
 $Getopt::Std::STANDARD_HELP_VERSION = 1;
 
@@ -26,9 +26,9 @@ sub main::HELP_MESSAGE {
 		. "gid - Change the primary GID for a user.\n"
 		. "uid - Change the UID for a user.\n"
 		. "shell - Change the shell for a user.\n" . "\n"
-		. "For more info, see the the perldocs for Plugtools and plurm...\n"
+		. "For more info, see the the perldocs for App::Plugtools and plurm...\n"
 		. "perldoc plurm\n"
-		. "perldoc Plugtools\n";
+		. "perldoc App::Plugtools\n";
 } ## end sub main::HELP_MESSAGE
 
 #gets the options
@@ -45,9 +45,9 @@ if ( !defined( $opts{a} ) ) {
 	exit 253;
 }
 
-my $pt = Plugtools->new;
+my $pt = App::Plugtools->new;
 if ( $pt->error ) {
-	warn('plumod: Failed to initialize the Plugtools object');
+	warn('plumod: Failed to initialize the App::Plugtools object');
 	exit $pt->error;
 }
 
@@ -166,7 +166,7 @@ The new UID for a user.
 
 =head1 EXIT CODES
 
-If the exit code is not listed below, it is what was the error code returned by Plugtools.
+If the exit code is not listed below, it is what was the error code returned by App::Plugtools.
 
 =head2 254
 

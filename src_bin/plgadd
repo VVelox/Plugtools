@@ -25,7 +25,7 @@
 use strict;
 use warnings;
 use Getopt::Std;
-use Plugtools;
+use App::Plugtools;
 
 $Getopt::Std::STANDARD_HELP_VERSION = 1;
 
@@ -41,9 +41,9 @@ sub main::HELP_MESSAGE {
 			  "-G <GID>  - The GID to use for the group.\n".
 			  "-l  - If \$entry->dump should be called for a newly created entry.\n".
 			  "\n".
-			  "For more info, see the the perldocs for Plugtools and plgadd...\n".
+			  "For more info, see the the perldocs for App::Plugtools and plgadd...\n".
 			  "perldoc plgadd\n".
-			  "perldoc Plugtools\n";
+			  "perldoc App::Plugtools\n";
 }
 
 #gets the options
@@ -55,9 +55,9 @@ if (!defined($opts{g})) {
 	exit 254;
 }
 
-my $pt=Plugtools->new;
+my $pt=App::Plugtools->new;
 if ($pt->error) {
-	warn('plgadd: Failed to initialize the Plugtools object');
+	warn('plgadd: Failed to initialize the App::Plugtools object');
 	exit $pt->error;
 }
 
@@ -96,7 +96,7 @@ The GID for the group.
 
 =head1 EXIT CODES
 
-If the exit code is not listed below, it is what was the error code returned by Plugtools.
+If the exit code is not listed below, it is what was the error code returned by App::Plugtools.
 
 =head2 254
 
@@ -138,7 +138,7 @@ any
 
 =head2 SEE ALSO
 
-Plugtools
+App::Plugtools
 
 =head1 README
 

@@ -3,10 +3,10 @@ use warnings;
 use ExtUtils::MakeMaker;
 
 WriteMakefile(
-	NAME          => 'Plugtools',
+	NAME          => 'App::Plugtools',
 	AUTHOR        => 'Zane C. Bowers <vvelox@vvelox.net>',
-	VERSION_FROM  => 'lib/Plugtools.pm',
-	ABSTRACT_FROM => 'lib/Plugtools.pm',
+	VERSION_FROM  => 'lib/App/Plugtools.pm',
+	ABSTRACT_FROM => 'lib/App/Plugtools.pm',
 	( $ExtUtils::MakeMaker::VERSION >= 6.3002
 		? ( 'LICENSE' => 'perl' )
 		: () ),
@@ -32,5 +32,5 @@ WriteMakefile(
 		'Error::Helper'                     => '2.0.0',
 	},
 	dist  => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
-	clean => { FILES    => 'Plugtools-*' },
+	clean => { FILES    => 'App-Plugtools-*' },
 );

@@ -3,7 +3,7 @@
 use Test::More tests => 1;
 
 BEGIN {
-	use_ok( 'Plugtools::Plugins::Dump' );
+	use_ok( 'App::Plugtools::Plugins::Dump' );
 }
 
-diag( "Testing Plugtools::Plugins::Dump $Plugtools::Plugins::Dump::VERSION, Perl $], $^X" );
+diag( "Testing App::Plugtools::Plugins::Dump $App::Plugtools::Plugins::Dump::VERSION, Perl $], $^X" );
