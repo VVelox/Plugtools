@@ -8,8 +8,8 @@ use Getopt::Long qw(:config pass_through);
 GetOptions( 'pt-config=s' => \( my $pt_config ) );
 $ENV{PLUGTOOLS_CONFIG} = $pt_config if defined $pt_config;
 
-use App::Plugtools::Web;
-App::Plugtools::Web->start;
+use Mojolicious::Commands;
+Mojolicious::Commands->start_app('App::Plugtools::Web');
 
 =head1 NAME
 
