@@ -14,7 +14,7 @@ sub index {
 
 	my @sorted = sort { $a->get_value('uid') cmp $b->get_value('uid') } @{$users};
 	$self->render( template => 'users/index', users => \@sorted );
-}
+} ## end sub index
 
 sub add {
 	my $self = shift;
@@ -37,7 +37,7 @@ sub create {
 
 	$self->flash( success => "User '$params{user}' added successfully." );
 	$self->redirect_to('users_index');
-}
+} ## end sub create
 
 sub show {
 	my $self = shift;
@@ -51,7 +51,7 @@ sub show {
 	}
 
 	$self->render( template => 'users/show', entry => $entry, username => $user );
-}
+} ## end sub show
 
 sub edit {
 	my $self = shift;
@@ -65,7 +65,7 @@ sub edit {
 	}
 
 	$self->render( template => 'users/edit', entry => $entry, username => $user );
-}
+} ## end sub edit
 
 sub update {
 	my $self   = shift;
@@ -76,20 +76,16 @@ sub update {
 	if ( $action eq 'gecos' ) {
 		eval { $self->pt->userGECOSchange( { user => $user, gecos => $self->param('gecos') } ) };
 		$error = $@;
-	}
-	elsif ( $action eq 'shell' ) {
+	} elsif ( $action eq 'shell' ) {
 		eval { $self->pt->userShellChange( { user => $user, shell => $self->param('shell') } ) };
 		$error = $@;
-	}
-	elsif ( $action eq 'uid' ) {
+	} elsif ( $action eq 'uid' ) {
 		eval { $self->pt->userUIDchange( { user => $user, uid => $self->param('uid') } ) };
 		$error = $@;
-	}
-	elsif ( $action eq 'gid' ) {
+	} elsif ( $action eq 'gid' ) {
 		eval { $self->pt->userGIDchange( { user => $user, gid => $self->param('gid') } ) };
 		$error = $@;
-	}
-	else {
+	} else {
 		$self->flash( error => "Unknown action: $action" );
 		return $self->redirect_to( 'users_edit', user => $user );
 	}
@@ -101,7 +97,7 @@ sub update {
 
 	$self->flash( success => "User '$user' updated successfully." );
 	$self->redirect_to( 'users_show', user => $user );
-}
+} ## end sub update
 
 sub delete {
 	my $self        = shift;
@@ -109,10 +105,7 @@ sub delete {
 	my $removeHome  = $self->param('removeHome')  // 0;
 	my $removeGroup = $self->param('removeGroup') // 1;
 
-	eval {
-		$self->pt->deleteUser(
-			{ user => $user, removeHome => $removeHome, removeGroup => $removeGroup } );
-	};
+	eval { $self->pt->deleteUser( { user => $user, removeHome => $removeHome, removeGroup => $removeGroup } ); };
 	if ($@) {
 		$self->flash( error => "Failed to delete user '$user': $@" );
 		return $self->redirect_to( 'users_show', user => $user );
@@ -120,7 +113,7 @@ sub delete {
 
 	$self->flash( success => "User '$user' deleted successfully." );
 	$self->redirect_to('users_index');
-}
+} ## end sub delete
 
 sub password {
 	my $self = shift;
@@ -135,6 +128,6 @@ sub password {
 
 	$self->flash( success => "Password updated for '$user'." );
 	$self->redirect_to( 'users_show', user => $user );
-}
+} ## end sub password
 
 1;

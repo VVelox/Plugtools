@@ -14,7 +14,7 @@ sub index {
 
 	my @sorted = sort { $a->get_value('cn') cmp $b->get_value('cn') } @{$groups};
 	$self->render( template => 'groups/index', groups => \@sorted );
-}
+} ## end sub index
 
 sub add {
 	my $self = shift;
@@ -22,7 +22,7 @@ sub add {
 }
 
 sub create {
-	my $self  = shift;
+	my $self   = shift;
 	my %params = map { $_ => $self->param($_) } qw(group gid);
 	delete $params{$_} for grep { !defined $params{$_} || $params{$_} eq '' } keys %params;
 
@@ -34,7 +34,7 @@ sub create {
 
 	$self->flash( success => "Group '$params{group}' added successfully." );
 	$self->redirect_to('groups_index');
-}
+} ## end sub create
 
 sub clean {
 	my $self = shift;
@@ -47,7 +47,7 @@ sub clean {
 
 	$self->flash( success => 'Group clean completed: stale members removed.' );
 	$self->redirect_to('groups_index');
-}
+} ## end sub clean
 
 sub show {
 	my $self  = shift;
@@ -72,7 +72,7 @@ sub show {
 	eval { $all_users = $self->pt->getUsers };
 	$all_users //= [];
 	my @member_uids = $entry->get_value('memberUid');
-	my %is_member   = map { $_ => 1 } @member_uids;
+	my %is_member   = map       { $_ => 1 } @member_uids;
 	my @non_members = sort grep { !$is_member{ $_->get_value('uid') } } @{$all_users};
 
 	$self->render(
@@ -81,7 +81,7 @@ sub show {
 		groupname   => $group,
 		non_members => \@non_members,
 	);
-}
+} ## end sub show
 
 sub edit {
 	my $self  = shift;
@@ -101,7 +101,7 @@ sub edit {
 	}
 
 	$self->render( template => 'groups/edit', entry => $entry, groupname => $group );
-}
+} ## end sub edit
 
 sub update {
 	my $self  = shift;
@@ -116,7 +116,7 @@ sub update {
 
 	$self->flash( success => "Group '$group' GID updated successfully." );
 	$self->redirect_to( 'groups_show', group => $group );
-}
+} ## end sub update
 
 sub delete {
 	my $self  = shift;
@@ -130,7 +130,7 @@ sub delete {
 
 	$self->flash( success => "Group '$group' deleted successfully." );
 	$self->redirect_to('groups_index');
-}
+} ## end sub delete
 
 sub add_member {
 	my $self  = shift;
@@ -145,7 +145,7 @@ sub add_member {
 
 	$self->flash( success => "User '$user' added to group '$group'." );
 	$self->redirect_to( 'groups_show', group => $group );
-}
+} ## end sub add_member
 
 sub remove_member {
 	my $self  = shift;
@@ -160,6 +160,6 @@ sub remove_member {
 
 	$self->flash( success => "User '$user' removed from group '$group'." );
 	$self->redirect_to( 'groups_show', group => $group );
-}
+} ## end sub remove_member
 
 1;

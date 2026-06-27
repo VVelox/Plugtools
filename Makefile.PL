@@ -16,9 +16,9 @@ WriteMakefile(
 	PL_FILES    => {},
 	INST_SCRIPT => 'bin',
 	EXE_FILES   => [
-		'src_bin/plgadd',         'src_bin/plgclean', 'src_bin/plgmod',
-		'src_bin/plgrm',          'src_bin/pluadd',   'src_bin/plumod',
-		'src_bin/plupass',        'src_bin/plurm',    'src_bin/mojo_plugtools',
+		'src_bin/plgadd', 'src_bin/plgclean', 'src_bin/plgmod',  'src_bin/plgrm',
+		'src_bin/pluadd', 'src_bin/plumod',   'src_bin/plupass', 'src_bin/plurm',
+		'src_bin/mojo_plugtools',
 	],
 	PREREQ_PM => {
 		'Test::More'                        => 0,

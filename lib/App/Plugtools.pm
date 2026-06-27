@@ -25,7 +25,6 @@ Version 1.3.0
 
 our $VERSION = '1.3.0';
 
-
 =head1 SYNOPSIS
 
     use App::Plugtools;
@@ -59,9 +58,9 @@ This specifies a config file to read other than the default.
 
 sub new {
 	my %args;
-	if(defined($_[1])){
-		%args= %{$_[1]};
-	};
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
 
 	my $self = {
 		perror        => undef,
@@ -126,14 +125,14 @@ sub new {
 	};
 	bless $self;
 
-	if (!defined($args{config})) {
-		$args{config}=xdg_config_home().'/plugtoolsrc';
+	if ( !defined( $args{config} ) ) {
+		$args{config} = xdg_config_home() . '/plugtoolsrc';
 	}
 
-	$self->readConfig($args{config});
+	$self->readConfig( $args{config} );
 
 	return $self;
-}
+} ## end sub new
 
 =head2 addGroup
 
@@ -166,119 +165,126 @@ If this is true, call the dump method on the create Net::LDAP::Entry object.
 
 =cut
 
-sub addGroup{
-	my $self=$_[0];
+sub addGroup {
+	my $self = $_[0];
 	my %args;
-	if(defined($_[1])){
-		%args= %{$_[1]};
-	};
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
 
 	$self->errorblank;
 
 	#error if we don't have a group name
-	if (!defined($args{group})) {
-		$self->{error}=6;
-		$self->{errorString}='No group name specified';
+	if ( !defined( $args{group} ) ) {
+		$self->{error}       = 6;
+		$self->{errorString} = 'No group name specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the user already exists
-	my ($gname,$gpasswd,$gid,$members) = getgrnam($args{group});
-	if (defined($gname)) {
-		$self->{error}=10;
-		$self->{errorString}='The group "'.$args{group}.'" already exists';
+	my ( $gname, $gpasswd, $gid, $members ) = getgrnam( $args{group} );
+	if ( defined($gname) ) {
+		$self->{error}       = 10;
+		$self->{errorString} = 'The group "' . $args{group} . '" already exists';
 		$self->warn;
 		return undef;
 	}
 
 	#if we don't have a GID, find the first free one
-	if (!defined($args{gid})) {
-		my $gidhelper=Sys::Group::GIDhelper->new({min=>$self->{ini}->{''}->{GIDstart}});
-		my $gid=$gidhelper->firstfree();
-		if (!defined($gid)) {
-			$self->{error}=4;
-			$self->{errorString}='Could not locate a free GID';
+	if ( !defined( $args{gid} ) ) {
+		my $gidhelper = Sys::Group::GIDhelper->new( { min => $self->{ini}->{''}->{GIDstart} } );
+		my $gid       = $gidhelper->firstfree();
+		if ( !defined($gid) ) {
+			$self->{error}       = 4;
+			$self->{errorString} = 'Could not locate a free GID';
 			$self->warn;
 			return undef;
 		}
-		$args{gid}=$gid;
-	}
+		$args{gid} = $gid;
+	} ## end if ( !defined( $args{gid} ) )
 
-	($gname,$gpasswd,$gid,$members) = getgrnam($args{gid});
-	if (defined($gid)) {
-		$self->{error}=20;
-		$self->{errorString}='The GID "'.$args{gid}.'" already exists.';
+	( $gname, $gpasswd, $gid, $members ) = getgrnam( $args{gid} );
+	if ( defined($gid) ) {
+		$self->{error}       = 20;
+		$self->{errorString} = 'The GID "' . $args{gid} . '" already exists.';
 		$self->warn;
 		return undef;
 	}
 
 	#make sure the GID is complete numeric
-	if (!($args{gid}=~/^[0123456789]*$/)) {
-		$self->{error}=8;
-		$self->{errorString}='The specified GID, "'.$args{gid}.'", is not numeric';
+	if ( !( $args{gid} =~ /^[0123456789]*$/ ) ) {
+		$self->{error}       = 8;
+		$self->{errorString} = 'The specified GID, "' . $args{gid} . '", is not numeric';
 		$self->warn;
 		return undef;
 	}
 
 	#initiates the Net::LDAP::posixAccount
-	my $entrycreator=Net::LDAP::posixGroup->new({ baseDN=>$self->{ini}->{''}->{groupbase} });
-	if ((!defined($entrycreator))||(defined($entrycreator->{error}))) {
-		$self->{error}=12;
-		if(!defined($entrycreator)){
-			$self->{errorString}='Net::LDAP::posixGroup->create returned a undefined object';
-		}else {
-			$self->{errorString}='Net::LDAP::posixGroup->create errored. error="'.
-			                     $entrycreator->{error}.'" errorString="'.
-								 $entrycreator->{errorString}.'"';
+	my $entrycreator = Net::LDAP::posixGroup->new( { baseDN => $self->{ini}->{''}->{groupbase} } );
+	if ( ( !defined($entrycreator) ) || ( defined( $entrycreator->{error} ) ) ) {
+		$self->{error} = 12;
+		if ( !defined($entrycreator) ) {
+			$self->{errorString} = 'Net::LDAP::posixGroup->create returned a undefined object';
+		} else {
+			$self->{errorString}
+				= 'Net::LDAP::posixGroup->create errored. error="'
+				. $entrycreator->{error}
+				. '" errorString="'
+				. $entrycreator->{errorString} . '"';
 		}
 		$self->warn;
 		return undef;
-	}
-	my $entry=$entrycreator->create({
-									 name=>$args{group},
-									 gid=>$args{gid},
-									 primary=>$self->{ini}->{''}->{groupPrimary},
-									 });
-	if (defined($entrycreator->{error})) {
-		$self->{error}=12;
-		$self->{errorString}='Net::LDAP::posixGroup->create errored. error="'.
-		                      $entrycreator->{error}.'" errorString="'.
-							  $entrycreator->{errorString}.'"';
+	} ## end if ( ( !defined($entrycreator) ) || ( defined...))
+	my $entry = $entrycreator->create(
+		{
+			name    => $args{group},
+			gid     => $args{gid},
+			primary => $self->{ini}->{''}->{groupPrimary},
+		}
+	);
+	if ( defined( $entrycreator->{error} ) ) {
+		$self->{error} = 12;
+		$self->{errorString}
+			= 'Net::LDAP::posixGroup->create errored. error="'
+			. $entrycreator->{error}
+			. '" errorString="'
+			. $entrycreator->{errorString} . '"';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( defined( $entrycreator->{error} ) )
 
 	#dump it if asked
-	if ($args{dump}) {
+	if ( $args{dump} ) {
 		$entry->dump;
 	}
 
 	#connect to the LDAP server
-	my $ldap=$self->connect();
+	my $ldap = $self->connect();
 
 	#call a plugin if needed
-	if (defined($self->{ini}->{''}->{pluginAddGroup})) {
-		$self->plugin({
-					   ldap=>$ldap,
-					   entry=>$entry,
-					   do=>'pluginAddGroup',
-					   },
-					  \%args);
-	}
+	if ( defined( $self->{ini}->{''}->{pluginAddGroup} ) ) {
+		$self->plugin(
+			{
+				ldap  => $ldap,
+				entry => $entry,
+				do    => 'pluginAddGroup',
+			},
+			\%args
+		);
+	} ## end if ( defined( $self->{ini}->{''}->{pluginAddGroup...}))
 
 	#add it
-	my $mesg=$entry->update($ldap);
-	if ($mesg->{errorMessage} ne '') {
-		$self->{error}=19;
-		$self->{errorString}='$entry->update($ldap) failed. $mesg->{errorMessage}="'.
-		                     $mesg->{errorMessage}.'"';
+	my $mesg = $entry->update($ldap);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 19;
+		$self->{errorString} = '$entry->update($ldap) failed. $mesg->{errorMessage}="' . $mesg->{errorMessage} . '"';
 		$self->warn;
 		return undef;
 	}
 
 	return 1;
-}
+} ## end sub addGroup
 
 =head2 addUser
 
@@ -366,183 +372,190 @@ If this is true, call the dump method on the create Net::LDAP::Entry object.
 
 =cut
 
-sub addUser{
-	my $self=$_[0];
+sub addUser {
+	my $self = $_[0];
 	my %args;
-	if(defined($_[1])){
-		%args= %{$_[1]};
-	};
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
 
 	$self->errorblank;
 
 	#error if no user has been specified
-	if (!defined($args{user})) {
-		$self->{error}=5;
-		$self->{errorString}='No user name specified';
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the user already exists
-	my ($name,$passwd,$uid,$gid,$quota,$comment,$gcos,$dir,$shell,$expire) = getpwnam($args{user});
-	if (defined($name)) {
-		$self->{error}=9;
-		$self->{errorString}='The user "'.$args{user}.'" already exists';
+	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gcos, $dir, $shell, $expire ) = getpwnam( $args{user} );
+	if ( defined($name) ) {
+		$self->{error}       = 9;
+		$self->{errorString} = 'The user "' . $args{user} . '" already exists';
 		$self->warn;
 		return undef;
 	}
 
 	#make sure we have gecos
-	if (!defined($args{gecos})) {
-		$args{gecos}=$args{user};
+	if ( !defined( $args{gecos} ) ) {
+		$args{gecos} = $args{user};
 	}
 
 	#make sure we have a shell
-	if (!defined($args{shell})) {
-		$args{shell}=$self->{ini}->{''}->{defaultShell};
+	if ( !defined( $args{shell} ) ) {
+		$args{shell} = $self->{ini}->{''}->{defaultShell};
 	}
 
 	#make sure we have a group name
-	if (!defined($args{group})) {
-		$args{group}=$args{user};
+	if ( !defined( $args{group} ) ) {
+		$args{group} = $args{user};
 	}
 
 	#makes sure the UID is defined
-	if (!defined($args{uid})) {
+	if ( !defined( $args{uid} ) ) {
 		#gets it if it not defined
-		my $uidhelper=Sys::User::UIDhelper->new({
-												 min=>$self->{ini}->{''}->{UIDstart}
-												 });
-		my $uid=$uidhelper->firstfree();
-		if (!defined($uid)) {
-			$self->{error}=3;
-			$self->{errorString}='Could not locate a free UID';
+		my $uidhelper = Sys::User::UIDhelper->new(
+			{
+				min => $self->{ini}->{''}->{UIDstart}
+			}
+		);
+		my $uid = $uidhelper->firstfree();
+		if ( !defined($uid) ) {
+			$self->{error}       = 3;
+			$self->{errorString} = 'Could not locate a free UID';
 			$self->warn;
 			return undef;
 		}
-		$args{uid}=$uid;
-	}
+		$args{uid} = $uid;
+	} ## end if ( !defined( $args{uid} ) )
 
 	#make sure the UID is complete numeric
-	if (!($args{uid}=~/^[0123456789]*$/)) {
-		$self->{error}=7;
-		$self->{errorString}='The specified UID, "'.$args{uid}.'", is not numeric';
+	if ( !( $args{uid} =~ /^[0123456789]*$/ ) ) {
+		$self->{error}       = 7;
+		$self->{errorString} = 'The specified UID, "' . $args{uid} . '", is not numeric';
 		$self->warn;
 		return undef;
 	}
 
 	#check if the group exists or not
-	my ($gname,$gpasswd,$ggid,$members) = getgrnam($args{group});
-	if (!defined($gname)) {
-		$self->addGroup({
-						 group=>$args{group},
-						 gid=>$args{gid},
-						 dump=>$args{dump},
-						 });
+	my ( $gname, $gpasswd, $ggid, $members ) = getgrnam( $args{group} );
+	if ( !defined($gname) ) {
+		$self->addGroup(
+			{
+				group => $args{group},
+				gid   => $args{gid},
+				dump  => $args{dump},
+			}
+		);
 	}
 
 	#gets the GID
-	($gname,$gpasswd,$args{gid},$members) = getgrnam($args{group});
+	( $gname, $gpasswd, $args{gid}, $members ) = getgrnam( $args{group} );
 
 	#build the user
-	$args{home}=$self->{ini}->{''}->{HOMEproto};
-	$args{home}=~s/\%\%USERNAME\%\%/$args{user}/g;
+	$args{home} = $self->{ini}->{''}->{HOMEproto};
+	$args{home} =~ s/\%\%USERNAME\%\%/$args{user}/g;
 
 	#initiates the Net::LDAP::posixAccount
-	my $entrycreator=Net::LDAP::posixAccount->new({ baseDN=>$self->{ini}->{''}->{userbase} });
-	my $entry=$entrycreator->create({
-									 name=>$args{user},
-									 uid=>$args{uid},
-									 gid=>$args{gid},
-									 home=>$args{home},
-									 loginShell=>$args{shell},
-									 primary=>$self->{ini}->{''}->{userPrimary},
-									 });
+	my $entrycreator = Net::LDAP::posixAccount->new( { baseDN => $self->{ini}->{''}->{userbase} } );
+	my $entry        = $entrycreator->create(
+		{
+			name       => $args{user},
+			uid        => $args{uid},
+			gid        => $args{gid},
+			home       => $args{home},
+			loginShell => $args{shell},
+			primary    => $self->{ini}->{''}->{userPrimary},
+		}
+	);
 
 	#connect to the LDAP server
-	my $ldap=$self->connect();
+	my $ldap = $self->connect();
 
 	#call a plugin if needed
-	if (defined($self->{ini}->{''}->{pluginAddUser})) {
-		$self->plugin({
-					   ldap=>$ldap,
-					   entry=>$entry,
-					   do=>'pluginAddUser',
-					   },
-					  \%args);
-	}
+	if ( defined( $self->{ini}->{''}->{pluginAddUser} ) ) {
+		$self->plugin(
+			{
+				ldap  => $ldap,
+				entry => $entry,
+				do    => 'pluginAddUser',
+			},
+			\%args
+		);
+	} ## end if ( defined( $self->{ini}->{''}->{pluginAddUser...}))
 
 	#add it
-	my $mesg=$entry->update($ldap);
-	if ($mesg->{errorMessage} ne '') {
-		$self->{error}=19;
-		$self->{errorString}='$entry->update($ldap) failed. $mesg->{errorMessage}="'.
-		                     $mesg->{errorMessage}.'"';
+	my $mesg = $entry->update($ldap);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 19;
+		$self->{errorString} = '$entry->update($ldap) failed. $mesg->{errorMessage}="' . $mesg->{errorMessage} . '"';
 		$self->warn;
 		return undef;
 	}
 
 	#dump it if needed
-	if ($args{dump}) {
+	if ( $args{dump} ) {
 		$entry->dump;
 	}
 
 	#create the home directory if needed, after getting the required values
-	if (!defined($args{createHome})) {
-		$args{createHome}=$self->{ini}->{''}->{createHome};
+	if ( !defined( $args{createHome} ) ) {
+		$args{createHome} = $self->{ini}->{''}->{createHome};
 	}
-	if (!defined($args{skel})) {
-		$args{skel}=$self->{ini}->{''}->{skeletonHome};
+	if ( !defined( $args{skel} ) ) {
+		$args{skel} = $self->{ini}->{''}->{skeletonHome};
 	}
-	if (!defined($args{chownHome})) {
-		$args{chownHome}=$self->{ini}->{''}->{chownHome};
+	if ( !defined( $args{chownHome} ) ) {
+		$args{chownHome} = $self->{ini}->{''}->{chownHome};
 	}
-	if (!defined($args{chmodHome})) {
-		$args{chmodHome}=$self->{ini}->{''}->{chmodHome};
+	if ( !defined( $args{chmodHome} ) ) {
+		$args{chmodHome} = $self->{ini}->{''}->{chmodHome};
 	}
-	if (!defined($args{chmodValue})) {
-		$args{chmodValue}=$self->{ini}->{''}->{chmodValue};
+	if ( !defined( $args{chmodValue} ) ) {
+		$args{chmodValue} = $self->{ini}->{''}->{chmodValue};
 	}
-	if ($args{createHome}) {
-		if (! -e $args{home}) {
+	if ( $args{createHome} ) {
+		if ( !-e $args{home} ) {
 			#copy it
-			system( 'cp -r '.shell_quote($args{skel}).' '.shell_quote($args{home}) );
-			if ($? ne '0') {
-				$self->{error}=22;
-				$self->{errorString}='Copying home from "'.$args{skel}.'" to "'.$args{home}.'" failed';
+			system( 'cp -r ' . shell_quote( $args{skel} ) . ' ' . shell_quote( $args{home} ) );
+			if ( $? ne '0' ) {
+				$self->{error}       = 22;
+				$self->{errorString} = 'Copying home from "' . $args{skel} . '" to "' . $args{home} . '" failed';
 				$self->warn;
 				return undef;
 			}
 
 			#chown it if needed
-			if ($args{chownHome}) {
-				system( 'chown -R '.shell_quote($args{user}).':'.shell_quote($args{group})
-						.' '.shell_quote($args{home}) );
-				if ($? ne '0') {
-					$self->{error}=23;
-					$self->{errorString}='Chowning "'.$args{home}.'" to "'.$args{chmodValue}.'" failed';
+			if ( $args{chownHome} ) {
+				system(   'chown -R '
+						. shell_quote( $args{user} ) . ':'
+						. shell_quote( $args{group} ) . ' '
+						. shell_quote( $args{home} ) );
+				if ( $? ne '0' ) {
+					$self->{error}       = 23;
+					$self->{errorString} = 'Chowning "' . $args{home} . '" to "' . $args{chmodValue} . '" failed';
 					$self->warn;
 					return undef;
 				}
-			}
+			} ## end if ( $args{chownHome} )
 
 			#chmod it if needed
-			if ($args{chmodHome}) {
-				system( 'chmod -R '.shell_quote($args{chmodValue}).' '.shell_quote($args{home}) );
-				if ($? ne '0') {
-					$self->{error}=24;
-					$self->{errorString}='Chmoding "'.$args{home}.'" to "'.$args{chmodValue}.'" failed';
+			if ( $args{chmodHome} ) {
+				system( 'chmod -R ' . shell_quote( $args{chmodValue} ) . ' ' . shell_quote( $args{home} ) );
+				if ( $? ne '0' ) {
+					$self->{error}       = 24;
+					$self->{errorString} = 'Chmoding "' . $args{home} . '" to "' . $args{chmodValue} . '" failed';
 					$self->warn;
 					return undef;
 				}
 			}
-		}
-	}
-
-
+		} ## end if ( !-e $args{home} )
+	} ## end if ( $args{createHome} )
 
 	return 1;
-}
+} ## end sub addUser
 
 =head2 connect
 
@@ -553,54 +566,51 @@ config file.
 
 =cut
 
-sub connect{
-	my $self=$_[0];
+sub connect {
+	my $self = $_[0];
 
 	$self->errorblank;
 
 	#try to connect
-	my $ldap = Net::LDAP->new($self->{ini}->{''}->{server}, port=>$self->{ini}->{''}->{port});
+	my $ldap = Net::LDAP->new( $self->{ini}->{''}->{server}, port => $self->{ini}->{''}->{port} );
 
 	#check if it connected or not
-	if (!$ldap) {
-		$self->{error}=11;
-		$self->{errorString}='Failed to connect to LDAP';
+	if ( !$ldap ) {
+		$self->{error}       = 11;
+		$self->{errorString} = 'Failed to connect to LDAP';
 		$self->warn;
 		return undef;
 	}
 
 	#start TLS if it is needed
 	my $mesg;
-	if ($self->{ini}->{''}->{starttls}) {
-		$mesg=$ldap->start_tls(
-							   verify=>$self->{ini}->{''}->{TLSverify},
-							   sslversion=>$self->{ini}->{''}->{SSLversion},
-							   ciphers=>$self->{ini}->{''}->{SSLciphers},
-							   );
+	if ( $self->{ini}->{''}->{starttls} ) {
+		$mesg = $ldap->start_tls(
+			verify     => $self->{ini}->{''}->{TLSverify},
+			sslversion => $self->{ini}->{''}->{SSLversion},
+			ciphers    => $self->{ini}->{''}->{SSLciphers},
+		);
 
-		if ($mesg->{errorMessage} ne '') {
-			$self->{error}=13;
-			$self->{errorString}='$ldap->start_tls failed. $mesg->{errorMessage}="'.
-			                     $mesg->{errorMessage}.'"';
+		if ( $mesg->{errorMessage} ne '' ) {
+			$self->{error}       = 13;
+			$self->{errorString} = '$ldap->start_tls failed. $mesg->{errorMessage}="' . $mesg->{errorMessage} . '"';
 			$self->warn;
 			return undef;
 		}
-	}
+	} ## end if ( $self->{ini}->{''}->{starttls} )
 
 	#bind
-	$mesg=$ldap->bind($self->{ini}->{''}->{bind},
-					  password=>$self->{ini}->{''}->{pass},
-					  );
-	if ($mesg->{errorMessage} ne '') {
-		$self->{error}=13;
-		$self->{errorString}='Binding to the LDAP server failed. $mesg->{errorMessage}="'.
-		                     $mesg->{errorMessage}.'"';
+	$mesg = $ldap->bind( $self->{ini}->{''}->{bind}, password => $self->{ini}->{''}->{pass}, );
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error} = 13;
+		$self->{errorString}
+			= 'Binding to the LDAP server failed. $mesg->{errorMessage}="' . $mesg->{errorMessage} . '"';
 		$self->warn;
 		return undef;
 	}
 
 	return $ldap;
-}
+} ## end sub connect
 
 =head2 deleteGroup
 
@@ -610,73 +620,78 @@ This removes a group.
 
 =cut
 
-sub deleteGroup{
-	my $self=$_[0];
-	my $group=$_[1];
+sub deleteGroup {
+	my $self  = $_[0];
+	my $group = $_[1];
 
 	$self->errorblank;
 
 	#error if we don't have a group name
-	if (!defined($group)) {
-		$self->{error}=6;
-		$self->{errorString}='No group name specified';
+	if ( !defined($group) ) {
+		$self->{error}       = 6;
+		$self->{errorString} = 'No group name specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the user does not exists
-	my ($gname,$gpasswd,$gid,$members) = getgrnam($group);
-	if (!defined($gname)) {
-		$self->{error}=10;
-		$self->{errorString}='The group "'.$group.'" does not exist';
+	my ( $gname, $gpasswd, $gid, $members ) = getgrnam($group);
+	if ( !defined($gname) ) {
+		$self->{error}       = 10;
+		$self->{errorString} = 'The group "' . $group . '" does not exist';
 		$self->warn;
 		return undef;
 	}
 
 	#connect to the LDAP server
-	my $ldap=$self->connect();
+	my $ldap = $self->connect();
 
 	#search and get the first entry
-	my $mesg=$ldap->search(
-						   base=>$self->{ini}->{''}->{groupbase},
-						   filter=>'(&(cn='.$group.') (gidNumber='.$gid.'))'
-						   );
-	my $entry=$mesg->pop_entry;
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{groupbase},
+		filter => '(&(cn=' . $group . ') (gidNumber=' . $gid . '))'
+	);
+	my $entry = $mesg->pop_entry;
 
 	#if $entry is not defined or does not exist under the specified base
-	if (!defined($entry)) {
-		$self->{error}=15;
-		$self->{errorString}='The group "'.$group.'" does not exist in specified group base, "'.
-		                     $self->{ini}->{''}->{groupbase}.'", ';
+	if ( !defined($entry) ) {
+		$self->{error} = 15;
+		$self->{errorString}
+			= 'The group "'
+			. $group
+			. '" does not exist in specified group base, "'
+			. $self->{ini}->{''}->{groupbase} . '", ';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( !defined($entry) )
 
 	#call a plugin if needed
-	if (defined($self->{ini}->{''}->{pluginDeleteGroup})) {
-		$self->plugin({
-					   ldap=>$ldap,
-					   entry=>$entry,
-					   do=>'pluginDeleteGroup',
-					   },
-					  {
-					   group=>$group,
-					   });
-	}
+	if ( defined( $self->{ini}->{''}->{pluginDeleteGroup} ) ) {
+		$self->plugin(
+			{
+				ldap  => $ldap,
+				entry => $entry,
+				do    => 'pluginDeleteGroup',
+			},
+			{
+				group => $group,
+			}
+		);
+	} ## end if ( defined( $self->{ini}->{''}->{pluginDeleteGroup...}))
 
 	#delete the entry
 	$entry->delete();
-	$mesg=$entry->update($ldap);
-	if ($mesg->{errorMessage} ne '') {
-		$self->{error}=13;
-		$self->{errorString}='Deleting entry "'.$entry->dn.'" failed. $mesg->{errorMessage}="'.
-		                     $mesg->{errorMessage}.'"';
+	$mesg = $entry->update($ldap);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error} = 13;
+		$self->{errorString}
+			= 'Deleting entry "' . $entry->dn . '" failed. $mesg->{errorMessage}="' . $mesg->{errorMessage} . '"';
 		$self->warn;
 		return undef;
 	}
 
 	return 1;
-}
+} ## end sub deleteGroup
 
 =head2 deleteUser
 
@@ -717,126 +732,132 @@ Remove the primary group if it is empty.
 
 =cut
 
-sub deleteUser{
-	my $self=$_[0];
+sub deleteUser {
+	my $self = $_[0];
 	my %args;
-	if(defined($_[1])){
-		%args= %{$_[1]};
-	};
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
 
 	$self->errorblank;
 
 	#make sure a group if specifed
-	if (!defined($args{user})) {
-		$self->{error}=5;
-		$self->{errorString}='No user name specified';
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the user already exists
-	my ($name,$passwd,$uid,$gid,$quota,$comment,$gcos,$dir,$shell,$expire) = getpwnam($args{user});
-	if (!defined($name)) {
-		$self->{error}=17;
-		$self->{errorString}='The user "'.$args{user}.'" does not exists';
+	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gcos, $dir, $shell, $expire ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exists';
 		$self->warn;
 		return undef;
 	}
 
 	#check if the group exists or not
-	my ($gname,$gpasswd,$ggid,$members) = getgrgid($gid);
-	my $removeGroup=0;
+	my ( $gname, $gpasswd, $ggid, $members ) = getgrgid($gid);
+	my $removeGroup = 0;
 	#set the group to be removed if it exists
-	if (defined($ggid)) {
-		$removeGroup=1;
+	if ( defined($ggid) ) {
+		$removeGroup = 1;
 	}
 
 	#connect to the LDAP server
-	my $ldap=$self->connect();
+	my $ldap = $self->connect();
 
 	#search and get the first entry
-	my $mesg=$ldap->search(
-						   base=>$self->{ini}->{''}->{userbase},
-						   filter=>'(&(uid='.$args{user}.') (uidNumber='.$uid.'))'
-						   );
-	my $entry=$mesg->pop_entry;
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	my $entry = $mesg->pop_entry;
 
 	#if $entry is not defined or does not exist under the specified base
-	if (!defined($entry)) {
-		$self->{error}=18;
-		$self->{errorString}='The user "'.$args{user}.'" does not exist in specified group base, "'.
-		                     $self->{ini}->{''}->{userbase}.'", ';
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "'
+			. $args{user}
+			. '" does not exist in specified group base, "'
+			. $self->{ini}->{''}->{userbase} . '", ';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( !defined($entry) )
 
 	#we check this here as checking it after wards after deleting the user does not work
 	my $onlyMember;
-	if (!defined($args{removeGroup})) {
-		$args{removeGroup}=$self->{ini}->{''}->{removeGroup};
+	if ( !defined( $args{removeGroup} ) ) {
+		$args{removeGroup} = $self->{ini}->{''}->{removeGroup};
 	}
-	if ($args{removeGroup}) {
+	if ( $args{removeGroup} ) {
 		#check if it the only member of that group
-		$onlyMember=$self->onlyMember({
-										  user=>$args{user},
-										  group=>$gname,
-										  });
+		$onlyMember = $self->onlyMember(
+			{
+				user  => $args{user},
+				group => $gname,
+			}
+		);
 	}
 
 	#call a plugin if needed
-	if (defined($self->{ini}->{''}->{pluginDeleteUser})) {
-		$self->plugin({
-					   ldap=>$ldap,
-					   entry=>$entry,
-					   do=>'pluginDeleteUser',
-					   },
-					  \%args);
-	}
-
+	if ( defined( $self->{ini}->{''}->{pluginDeleteUser} ) ) {
+		$self->plugin(
+			{
+				ldap  => $ldap,
+				entry => $entry,
+				do    => 'pluginDeleteUser',
+			},
+			\%args
+		);
+	} ## end if ( defined( $self->{ini}->{''}->{pluginDeleteUser...}))
 
 	#delete the entry
 	$entry->delete();
-	$mesg=$entry->update($ldap);
-	if ($mesg->{errorMessage} ne '') {
-		$self->{error}=13;
-		$self->{errorString}='Deleting entry "'.$entry->dn.'" failed. $mesg->{errorMessage}="'.
-		                     $mesg->{errorMessage}.'"';
+	$mesg = $entry->update($ldap);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error} = 13;
+		$self->{errorString}
+			= 'Deleting entry "' . $entry->dn . '" failed. $mesg->{errorMessage}="' . $mesg->{errorMessage} . '"';
 		$self->warn;
 		return undef;
 	}
 
 	#remove the primary group if requested...
-	if ($args{removeGroup}) {
+	if ( $args{removeGroup} ) {
 		#proceede further if it is the only member
 		if ($onlyMember) {
 			#figure out if it is a LDAP group or not
-			my $returned=$self->isLDAPgroup($gname);
+			my $returned = $self->isLDAPgroup($gname);
 			#if it is a LDAP group, remove it
 			if ($returned) {
 				$self->deleteGroup($gname);
 			}
 		}
-	}
+	} ## end if ( $args{removeGroup} )
 
 	#remove the user from what ever groups they are in, in LDAP
-	$self->removeUserFromGroups($args{user});
+	$self->removeUserFromGroups( $args{user} );
 
 	#remove the primary group if requested...
-	if (!defined($args{removeHome})) {
-		$args{removeHome}=$self->{ini}->{''}->{removeHome};
+	if ( !defined( $args{removeHome} ) ) {
+		$args{removeHome} = $self->{ini}->{''}->{removeHome};
 	}
-	if ($args{removeHome}) {
-		system( 'rm -rf '.shell_quote($dir) );
-		if ($? ne '0') {
-			$self->{error}=26;
-			$self->{errorString}='rm -rf '.shell_quote($dir).' has failed failed';
+	if ( $args{removeHome} ) {
+		system( 'rm -rf ' . shell_quote($dir) );
+		if ( $? ne '0' ) {
+			$self->{error}       = 26;
+			$self->{errorString} = 'rm -rf ' . shell_quote($dir) . ' has failed failed';
 			$self->warn;
 			return undef;
 		}
 	}
 
 	return 1;
-}
+} ## end sub deleteUser
 
 =head2 findGroupDN
 
@@ -846,51 +867,54 @@ This locates a DN for a already setup group.
 
 =cut
 
-sub findGroupDN{
-	my $self=$_[0];
-	my $group=$_[1];
+sub findGroupDN {
+	my $self  = $_[0];
+	my $group = $_[1];
 
 	$self->errorblank;
 
 	#make sure a group if specifed
-	if (!defined($group)) {
-		$self->{error}=6;
-		$self->{errorString}='No group name specified';
+	if ( !defined($group) ) {
+		$self->{error}       = 6;
+		$self->{errorString} = 'No group name specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the user does not exists
-	my ($gname,$gpasswd,$gid,$members) = getgrnam($group);
-	if (!defined($gname)) {
-		$self->{error}=14;
-		$self->{errorString}='The group "'.$group.'" does not exist';
+	my ( $gname, $gpasswd, $gid, $members ) = getgrnam($group);
+	if ( !defined($gname) ) {
+		$self->{error}       = 14;
+		$self->{errorString} = 'The group "' . $group . '" does not exist';
 		$self->warn;
 		return undef;
 	}
 
 	#connect to the LDAP server
-	my $ldap=$self->connect();
+	my $ldap = $self->connect();
 
 	#search and get the first entry
-	my $mesg=$ldap->search(
-						   base=>$self->{ini}->{''}->{groupbase},
-						   filter=>'(&(cn='.$group.') (gidNumber='.$gid.'))'
-						   );
-	my $entry=$mesg->pop_entry;
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{groupbase},
+		filter => '(&(cn=' . $group . ') (gidNumber=' . $gid . '))'
+	);
+	my $entry = $mesg->pop_entry;
 
 	#if $entry is not defined or does not exist under the specified base
-	if (!defined($entry)) {
-		$self->{error}=15;
-		$self->{errorString}='The group "'.$group.'" does not exist in specified group base, "'.
-		                     $self->{ini}->{''}->{groupbase}.'", ';
+	if ( !defined($entry) ) {
+		$self->{error} = 15;
+		$self->{errorString}
+			= 'The group "'
+			. $group
+			. '" does not exist in specified group base, "'
+			. $self->{ini}->{''}->{groupbase} . '", ';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( !defined($entry) )
 
 	#if we get here, it means we have a entry... thus we have a DN
 	return $entry->dn;
-}
+} ## end sub findGroupDN
 
 =head2 findUserDN
 
@@ -900,51 +924,54 @@ This locates a DN for a already setup group.
 
 =cut
 
-sub findUserDN{
-	my $self=$_[0];
-	my $user=$_[1];
+sub findUserDN {
+	my $self = $_[0];
+	my $user = $_[1];
 
 	$self->errorblank;
 
 	#make sure a group if specifed
-	if (!defined($user)) {
-		$self->{error}=5;
-		$self->{errorString}='No user name specified';
+	if ( !defined($user) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the user already exists
-	my ($name,$passwd,$uid,$gid,$quota,$comment,$gcos,$dir,$shell,$expire) = getpwnam($user);
-	if (!defined($name)) {
-		$self->{error}=17;
-		$self->{errorString}='The user "'.$user.'" does not exists';
+	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gcos, $dir, $shell, $expire ) = getpwnam($user);
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $user . '" does not exists';
 		$self->warn;
 		return undef;
 	}
 
 	#connect to the LDAP server
-	my $ldap=$self->connect();
+	my $ldap = $self->connect();
 
 	#search and get the first entry
-	my $mesg=$ldap->search(
-						   base=>$self->{ini}->{''}->{userbase},
-						   filter=>'(&(uid='.$user.') (uidNumber='.$uid.'))'
-						   );
-	my $entry=$mesg->pop_entry;
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $user . ') (uidNumber=' . $uid . '))'
+	);
+	my $entry = $mesg->pop_entry;
 
 	#if $entry is not defined or does not exist under the specified base
-	if (!defined($entry)) {
-		$self->{error}=18;
-		$self->{errorString}='The user "'.$user.'" does not exist in specified group base, "'.
-		                     $self->{ini}->{''}->{userbase}.'", ';
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "'
+			. $user
+			. '" does not exist in specified group base, "'
+			. $self->{ini}->{''}->{userbase} . '", ';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( !defined($entry) )
 
 	#if we get here, it means we have a entry... thus we have a DN
 	return $entry->dn;
-}
+} ## end sub findUserDN
 
 =head2 getUserEntry
 
@@ -963,60 +990,65 @@ of.
 
 =cut
 
-sub getUserEntry{
-	my $self=$_[0];
+sub getUserEntry {
+	my $self = $_[0];
 	my %args;
-	if(defined($_[1])){
-		%args= %{$_[1]};
-	};
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
 
 	$self->errorblank;
 
 	#error if we don't have a group name
-	if (!defined($args{user})) {
-		$self->{error}=5;
-		$self->{errorString}='No user name specified';
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the user already exists
-	my ($name,$passwd,$uid,$gid,$quota,$comment,$gecos,$dir,$shell,$expire) = getpwnam($args{user});
-	if (!defined($name)) {
-		$self->{error}=17;
-		$self->{errorString}='The user "'.$args{user}.'" does not exists';
+	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gecos, $dir, $shell, $expire ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exists';
 		$self->warn;
 		return undef;
 	}
 
 	#connect to the LDAP server
-	my $ldap=$self->connect();
+	my $ldap = $self->connect();
 
 	#search and get the first entry
-	my $mesg=$ldap->search(
-						   base=>$self->{ini}->{''}->{userbase},
-						   filter=>'(&(uid='.$args{user}.') (uidNumber='.$uid.'))'
-						   );
-	if ($mesg->{errorMessage} ne '') {
-		$self->{error}=32;
-		$self->{errorString}='Fetching the entry for the user failed under "'.
-		                     $self->{ini}->{''}->{userbase}.'"'.
-		                     $mesg->{errorMessage}.'"';
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error} = 32;
+		$self->{errorString}
+			= 'Fetching the entry for the user failed under "'
+			. $self->{ini}->{''}->{userbase} . '"'
+			. $mesg->{errorMessage} . '"';
 		$self->warn;
 		return undef;
 	}
-	my $entry=$mesg->pop_entry;
+	my $entry = $mesg->pop_entry;
 
-	if (!defined($entry)) {
-		$self->{error}=18;
-		$self->{errorString}='The user "'.$args{user}.'" was not found under'.
-		                     'the base "'.$self->{ini}->{''}->{userbase}.'"';
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "'
+			. $args{user}
+			. '" was not found under'
+			. 'the base "'
+			. $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( !defined($entry) )
 
 	return $entry;
-}
+} ## end sub getUserEntry
 
 =head2 groupAddUser
 
@@ -1043,96 +1075,107 @@ Call the dump method on the entry afterwards.
 
 =cut
 
-sub groupAddUser{
-	my $self=$_[0];
+sub groupAddUser {
+	my $self = $_[0];
 	my %args;
-	if(defined($_[1])){
-		%args= %{$_[1]};
-	};
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
 
 	$self->errorblank;
 
 	#error if we don't have a group name
-	if (!defined($args{group})) {
-		$self->{error}=6;
-		$self->{errorString}='No group name specified';
+	if ( !defined( $args{group} ) ) {
+		$self->{error}       = 6;
+		$self->{errorString} = 'No group name specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if no user has been specified
-	if (!defined($args{user})) {
-		$self->{error}=5;
-		$self->{errorString}='No user name specified';
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the user does not exists
-	my ($gname,$gpasswd,$gid,$members) = getgrnam($args{group});
-	if (!defined($gname)) {
-		$self->{error}=14;
-		$self->{errorString}='The group "'.$args{group}.'" does not exist';
+	my ( $gname, $gpasswd, $gid, $members ) = getgrnam( $args{group} );
+	if ( !defined($gname) ) {
+		$self->{error}       = 14;
+		$self->{errorString} = 'The group "' . $args{group} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
 
 	#connect to the LDAP server
-	my $ldap=$self->connect();
+	my $ldap = $self->connect();
 
 	#search and get the first entry
-	my $mesg=$ldap->search(
-						   base=>$self->{ini}->{''}->{groupbase},
-						   filter=>'(&(cn='.$args{group}.') (gidNumber='.$gid.'))'
-						   );
-	if ($mesg->{errorMessage} ne '') {
-		$self->{error}=27;
-		$self->{errorString}='Fetching a list of posixGroup objects under "'.
-		                     $self->{ini}->{''}->{groupbase}.'"'.
-		                     $mesg->{errorMessage}.'"';
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{groupbase},
+		filter => '(&(cn=' . $args{group} . ') (gidNumber=' . $gid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error} = 27;
+		$self->{errorString}
+			= 'Fetching a list of posixGroup objects under "'
+			. $self->{ini}->{''}->{groupbase} . '"'
+			. $mesg->{errorMessage} . '"';
 		$self->warn;
 		return undef;
 	}
-	my $entry=$mesg->pop_entry;
+	my $entry = $mesg->pop_entry;
 
 	#if $entry is not defined or does not exist under the specified base
-	if (!defined($entry)) {
-		$self->{error}=15;
-		$self->{errorString}='The group "'.$args{group}.'" does not exist in specified group base, "'.
-		                     $self->{ini}->{''}->{groupbase}.'", ';
+	if ( !defined($entry) ) {
+		$self->{error} = 15;
+		$self->{errorString}
+			= 'The group "'
+			. $args{group}
+			. '" does not exist in specified group base, "'
+			. $self->{ini}->{''}->{groupbase} . '", ';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( !defined($entry) )
 
-	$entry->add(memberUid=>$args{user});
+	$entry->add( memberUid => $args{user} );
 
 	#call a plugin if needed
-	if (defined($self->{ini}->{''}->{pluginGroupAddUser})) {
-		$self->plugin({
-					   ldap=>$ldap,
-					   entry=>$entry,
-					   do=>'pluginGroupAddUser',
-					   },
-					  \%args);
-	}
+	if ( defined( $self->{ini}->{''}->{pluginGroupAddUser} ) ) {
+		$self->plugin(
+			{
+				ldap  => $ldap,
+				entry => $entry,
+				do    => 'pluginGroupAddUser',
+			},
+			\%args
+		);
+	} ## end if ( defined( $self->{ini}->{''}->{pluginGroupAddUser...}))
 
 	#update the entry
-	my $mesg2=$entry->update($ldap);
-	if ($mesg2->{errorMessage} ne '') {
-		$self->{error}=13;
-		$self->{errorString}='Adding the user, "'.$args{user}.'", to  "'.$entry->dn.'" failed. $mesg2->{errorMessage}="'.
-		                     $mesg2->{errorMessage}.'"';
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error} = 13;
+		$self->{errorString}
+			= 'Adding the user, "'
+			. $args{user}
+			. '", to  "'
+			. $entry->dn
+			. '" failed. $mesg2->{errorMessage}="'
+			. $mesg2->{errorMessage} . '"';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg2->{errorMessage} ne '' )
 
 	#dump the entry if asked
-	if ($args{dump}) {
+	if ( $args{dump} ) {
 		$entry->dump;
 	}
 
 	return 1;
-}
+} ## end sub groupAddUser
 
 =head2 groupGIDchange
 
@@ -1166,164 +1209,182 @@ Call the dump method on the group afterwards.
 =cut
 
 sub groupGIDchange {
-	my $self=$_[0];
+	my $self = $_[0];
 	my %args;
-	if(defined($_[1])){
-		%args= %{$_[1]};
-	};
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
 
 	$self->errorblank;
 
 	#error if we don't have a group name
-	if (!defined($args{group})) {
-		$self->{error}=6;
-		$self->{errorString}='No group name specified';
+	if ( !defined( $args{group} ) ) {
+		$self->{error}       = 6;
+		$self->{errorString} = 'No group name specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if no user has been specified
-	if (!defined($args{gid})){
-		$self->{error}=28;
-		$self->{errorString}='No GID specified';
+	if ( !defined( $args{gid} ) ) {
+		$self->{error}       = 28;
+		$self->{errorString} = 'No GID specified';
 		$self->warn;
 		return undef;
 	}
 
 	#make sure the GID is complete numeric
-	if (!($args{gid}=~/^[0123456789]*$/)) {
-		$self->{error}=8;
-		$self->{errorString}='The specified GID, "'.$args{gid}.'", is not numeric';
+	if ( !( $args{gid} =~ /^[0123456789]*$/ ) ) {
+		$self->{error}       = 8;
+		$self->{errorString} = 'The specified GID, "' . $args{gid} . '", is not numeric';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the user does not exists
-	my ($gname,$gpasswd,$gid,$members) = getgrnam($args{group});
-	if (!defined($gname)) {
-		$self->{error}=14;
-		$self->{errorString}='The group "'.$args{group}.'" does not exist';
+	my ( $gname, $gpasswd, $gid, $members ) = getgrnam( $args{group} );
+	if ( !defined($gname) ) {
+		$self->{error}       = 14;
+		$self->{errorString} = 'The group "' . $args{group} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
 
 	#connect to the LDAP server
-	my $ldap=$self->connect();
+	my $ldap = $self->connect();
 
 	#search and get the first entry
-	my $mesg=$ldap->search(
-						   base=>$self->{ini}->{''}->{groupbase},
-						   filter=>'(&(cn='.$args{group}.') (gidNumber='.$gid.'))'
-						   );
-	if ($mesg->{errorMessage} ne '') {
-		$self->{error}=27;
-		$self->{errorString}='Fetching a list of posixGroup objects under "'.
-		                     $self->{ini}->{''}->{groupbase}.'"'.
-		                     $mesg->{errorMessage}.'"';
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{groupbase},
+		filter => '(&(cn=' . $args{group} . ') (gidNumber=' . $gid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error} = 27;
+		$self->{errorString}
+			= 'Fetching a list of posixGroup objects under "'
+			. $self->{ini}->{''}->{groupbase} . '"'
+			. $mesg->{errorMessage} . '"';
 		$self->warn;
 		return undef;
 	}
-	my $entry=$mesg->pop_entry;
+	my $entry = $mesg->pop_entry;
 
 	#if $entry is not defined or does not exist under the specified base
-	if (!defined($entry)) {
-		$self->{error}=15;
-		$self->{errorString}='The group "'.$args{group}.'" does not exist in specified group base, "'.
-		                     $self->{ini}->{''}->{groupbase}.'", ';
+	if ( !defined($entry) ) {
+		$self->{error} = 15;
+		$self->{errorString}
+			= 'The group "'
+			. $args{group}
+			. '" does not exist in specified group base, "'
+			. $self->{ini}->{''}->{groupbase} . '", ';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( !defined($entry) )
 
-	$entry->delete(gidNumber=>$gid);
-	$entry->add(gidNumber=>$args{gid});
+	$entry->delete( gidNumber => $gid );
+	$entry->add( gidNumber => $args{gid} );
 
 	#call a plugin if needed
-	if (defined($self->{ini}->{''}->{pluginGroupGIDchange})) {
-		$self->plugin({
-					   ldap=>$ldap,
-					   entry=>$entry,
-					   do=>'pluginGroupGIDchange',
-					   },
-					  \%args);
-	}
+	if ( defined( $self->{ini}->{''}->{pluginGroupGIDchange} ) ) {
+		$self->plugin(
+			{
+				ldap  => $ldap,
+				entry => $entry,
+				do    => 'pluginGroupGIDchange',
+			},
+			\%args
+		);
+	} ## end if ( defined( $self->{ini}->{''}->{pluginGroupGIDchange...}))
 
 	#update the entry
-	my $mesg2=$entry->update($ldap);
-	if ($mesg2->{errorMessage} ne '') {
-		$self->{error}=29;
-		$self->{errorString}='Updating the GID from "'.$gid.'" to "'.$args{gid}.
-		                     '" for "'.$entry->dn.'" failed. $mesg2->{errorMEssage}="'.
-		                     $mesg2->{errorMessage}.'"';
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error} = 29;
+		$self->{errorString}
+			= 'Updating the GID from "'
+			. $gid
+			. '" to "'
+			. $args{gid}
+			. '" for "'
+			. $entry->dn
+			. '" failed. $mesg2->{errorMEssage}="'
+			. $mesg2->{errorMessage} . '"';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg2->{errorMessage} ne '' )
 
 	#dump the entry if asked
-	if ($args{dump}) {
+	if ( $args{dump} ) {
 		$entry->dump;
 	}
 
 	#return successfully now if don't have to update any possible users
-	if (!defined($args{userUpdate})) {
-		$args{userUpdate}=$self->{ini}->{''}->{userUpdate};
+	if ( !defined( $args{userUpdate} ) ) {
+		$args{userUpdate} = $self->{ini}->{''}->{userUpdate};
 	}
-	if (!$args{userUpdate}) {
+	if ( !$args{userUpdate} ) {
 		return 1;
 	}
 
 	#we now do another search for the purpose of updating any users with the old GID
-	my $mesg3=$ldap->search(
-						   base=>$self->{ini}->{''}->{userbase},
-						   filter=>'(&(objectClass=posixAccount) (gidNumber='.$gid.'))'
-						   );
-	if ($mesg->{errorMessage} ne '') {
-		$self->{error}=37;
-		$self->{errorString}='The search for posixAccounts entries that need updating failed. base="'.
-		                     $self->{ini}->{''}->{userbase}.'" $mesg3->{errorMessage}="'.
-		                     $mesg3->{errorMessage}.'"';
+	my $mesg3 = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(objectClass=posixAccount) (gidNumber=' . $gid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error} = 37;
+		$self->{errorString}
+			= 'The search for posixAccounts entries that need updating failed. base="'
+			. $self->{ini}->{''}->{userbase}
+			. '" $mesg3->{errorMessage}="'
+			. $mesg3->{errorMessage} . '"';
 		$self->warn;
 		return undef;
-	}
-	$entry=$mesg3->pop_entry;
+	} ## end if ( $mesg->{errorMessage} ne '' )
+	$entry = $mesg3->pop_entry;
 
 	#if no entries are found, nothing needs updated
-	if (!defined($entry)) {
+	if ( !defined($entry) ) {
 		return 1;
 	}
 
 	#go through each one and update it
-	my $loop=1;
+	my $loop = 1;
 	while ($loop) {
-		$entry->delete('gidNumber'=>$gid);
-		$entry->add(gidNumber=>$args{gid});
+		$entry->delete( 'gidNumber' => $gid );
+		$entry->add( gidNumber => $args{gid} );
 
 		#update the entry
-		my $mesg4=$entry->update($ldap);
-		if ($mesg2->{errorMessage} ne '') {
-			$self->{error}=29;
-			$self->{errorString}='Changing the GID to "'.$args{gid}.'" from "'.$gid
-			                     .'" for  "'.$entry->dn.'" failed. $mesg4->{errorMessage}="'.
-								 $mesg4->{errorMessage}.'"';
+		my $mesg4 = $entry->update($ldap);
+		if ( $mesg2->{errorMessage} ne '' ) {
+			$self->{error} = 29;
+			$self->{errorString}
+				= 'Changing the GID to "'
+				. $args{gid}
+				. '" from "'
+				. $gid
+				. '" for  "'
+				. $entry->dn
+				. '" failed. $mesg4->{errorMessage}="'
+				. $mesg4->{errorMessage} . '"';
 			$self->warn;
 			return undef;
-		}
+		} ## end if ( $mesg2->{errorMessage} ne '' )
 
 		#dump the entry if asked
-		if ($args{dump}) {
+		if ( $args{dump} ) {
 			$entry->dump;
 		}
 
 		#get the next entry and decide it it should continue or not
-		$entry=$mesg3->pop_entry;
-		if (!defined($entry)) {
-			$loop=0;
+		$entry = $mesg3->pop_entry;
+		if ( !defined($entry) ) {
+			$loop = 0;
 		}
-	}
-
-
+	} ## end while ($loop)
 
 	return 1;
-}
+} ## end sub groupGIDchange
 
 =head2 groupRemoveUser
 
@@ -1350,96 +1411,107 @@ Call the dump method on the group afterwards.
 
 =cut
 
-sub groupRemoveUser{
-	my $self=$_[0];
+sub groupRemoveUser {
+	my $self = $_[0];
 	my %args;
-	if(defined($_[1])){
-		%args= %{$_[1]};
-	};
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
 
 	$self->errorblank;
 
 	#error if we don't have a group name
-	if (!defined($args{group})) {
-		$self->{error}=6;
-		$self->{errorString}='No group name specified';
+	if ( !defined( $args{group} ) ) {
+		$self->{error}       = 6;
+		$self->{errorString} = 'No group name specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if no user has been specified
-	if (!defined($args{user})) {
-		$self->{error}=5;
-		$self->{errorString}='No user name specified';
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the user does not exists
-	my ($gname,$gpasswd,$gid,$members) = getgrnam($args{group});
-	if (!defined($gname)) {
-		$self->{error}=14;
-		$self->{errorString}='The group "'.$args{group}.'" does not exist';
+	my ( $gname, $gpasswd, $gid, $members ) = getgrnam( $args{group} );
+	if ( !defined($gname) ) {
+		$self->{error}       = 14;
+		$self->{errorString} = 'The group "' . $args{group} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
 
 	#connect to the LDAP server
-	my $ldap=$self->connect();
+	my $ldap = $self->connect();
 
 	#search and get the first entry
-	my $mesg=$ldap->search(
-						   base=>$self->{ini}->{''}->{groupbase},
-						   filter=>'(&(cn='.$args{group}.') (gidNumber='.$gid.'))'
-						   );
-	if ($mesg->{errorMessage} ne '') {
-		$self->{error}=27;
-		$self->{errorString}='Fetching a list of posixGroup objects under "'.
-		                     $self->{ini}->{''}->{groupbase}.'"'.
-		                     $mesg->{errorMessage}.'"';
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{groupbase},
+		filter => '(&(cn=' . $args{group} . ') (gidNumber=' . $gid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error} = 27;
+		$self->{errorString}
+			= 'Fetching a list of posixGroup objects under "'
+			. $self->{ini}->{''}->{groupbase} . '"'
+			. $mesg->{errorMessage} . '"';
 		$self->warn;
 		return undef;
 	}
-	my $entry=$mesg->pop_entry;
+	my $entry = $mesg->pop_entry;
 
 	#if $entry is not defined or does not exist under the specified base
-	if (!defined($entry)) {
-		$self->{error}=15;
-		$self->{errorString}='The group "'.$args{group}.'" does not exist in specified group base, "'.
-		                     $self->{ini}->{''}->{groupbase}.'", ';
+	if ( !defined($entry) ) {
+		$self->{error} = 15;
+		$self->{errorString}
+			= 'The group "'
+			. $args{group}
+			. '" does not exist in specified group base, "'
+			. $self->{ini}->{''}->{groupbase} . '", ';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( !defined($entry) )
 
-	$entry->delete(memberUid=>$args{user});
+	$entry->delete( memberUid => $args{user} );
 
 	#call a plugin if needed
-	if (defined($self->{ini}->{''}->{pluginGroupRemoveUser})) {
-		$self->plugin({
-					   ldap=>$ldap,
-					   entry=>$entry,
-					   do=>'pluginGroupRemoveUser',
-					   },
-					  \%args);
-	}
+	if ( defined( $self->{ini}->{''}->{pluginGroupRemoveUser} ) ) {
+		$self->plugin(
+			{
+				ldap  => $ldap,
+				entry => $entry,
+				do    => 'pluginGroupRemoveUser',
+			},
+			\%args
+		);
+	} ## end if ( defined( $self->{ini}->{''}->{pluginGroupRemoveUser...}))
 
 	#update the entry
-	my $mesg2=$entry->update($ldap);
-	if ($mesg2->{errorMessage} ne '') {
-		$self->{error}=13;
-		$self->{errorString}='Removing the user, "'.$args{user}.'", from  "'.$entry->dn.'" failed. $mesg2->{errorMessage}="'.
-		                     $mesg2->{errorMessage}.'"';
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error} = 13;
+		$self->{errorString}
+			= 'Removing the user, "'
+			. $args{user}
+			. '", from  "'
+			. $entry->dn
+			. '" failed. $mesg2->{errorMessage}="'
+			. $mesg2->{errorMessage} . '"';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg2->{errorMessage} ne '' )
 
 	#dump the entry if asked
-	if ($args{dump}) {
+	if ( $args{dump} ) {
 		$entry->dump;
 	}
 
 	return 1;
-}
+} ## end sub groupRemoveUser
 
 =head2 groupClean
 
@@ -1459,86 +1531,91 @@ defined, it defaults to false.
 
 =cut
 
-sub groupClean{
-	my $self=$_[0];
+sub groupClean {
+	my $self = $_[0];
 	my %args;
-	if(defined($_[1])){
-		%args= %{$_[1]};
-	};
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
 
 	$self->errorblank;
 
 	#connect to the LDAP server
-	my $ldap=$self->connect();
+	my $ldap = $self->connect();
 
 	#search and get the first entry
-	my $mesg=$ldap->search(
-						   base=>$self->{ini}->{''}->{groupbase},
-						   filter=>'(objectClass=posixGroup)',
-						   );
-	if ($mesg->{errorMessage} ne '') {
-		$self->{error}=27;
-		$self->{errorString}='Fetching a list of posixGroup objects under "'.
-		                     $self->{ini}->{''}->{groupbase}.'"'.
-		                     $mesg->{errorMessage}.'"';
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{groupbase},
+		filter => '(objectClass=posixGroup)',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error} = 27;
+		$self->{errorString}
+			= 'Fetching a list of posixGroup objects under "'
+			. $self->{ini}->{''}->{groupbase} . '"'
+			. $mesg->{errorMessage} . '"';
 		$self->warn;
 		return undef;
 	}
 
 	#get the first entry
-	my $entry=$mesg->pop_entry;
+	my $entry = $mesg->pop_entry;
 
 	#if the entry is not defined, there are no groups
-	if (!defined($entry)) {
+	if ( !defined($entry) ) {
 		return 1;
 	}
 
 	#process each one
-	my $loop=1;
+	my $loop = 1;
 	while ($loop) {
-		my @members=$entry->get_value('memberUid');
+		my @members = $entry->get_value('memberUid');
 		#if there is no $members[0], it means the group
 		#has no members listed
-		if (defined($members[0])) {
-			my $int=0;
-			my $changed=0;#records if any changes have happened or not
-			while (defined($members[$int])) {
-				my ($name,$passwd,$uid,$gid,$quota,$comment,$gcos,$dir,$shell,$expire) = getpwnam($members[$int]);
+		if ( defined( $members[0] ) ) {
+			my $int     = 0;
+			my $changed = 0;    #records if any changes have happened or not
+			while ( defined( $members[$int] ) ) {
+				my ( $name, $passwd, $uid, $gid, $quota, $comment, $gcos, $dir, $shell, $expire )
+					= getpwnam( $members[$int] );
 				#if it is not defined, it means the user does not exist
-				if (!defined($name)) {
-					$entry->delete('memberUid'=>$members[$int]);
-					$changed=1;
+				if ( !defined($name) ) {
+					$entry->delete( 'memberUid' => $members[$int] );
+					$changed = 1;
 				}
 
 				$int++;
-			}
+			} ## end while ( defined( $members[$int] ) )
 
 			#if it changed, update it
 			if ($changed) {
-				my $mesg2=$entry->update($ldap);
-				if ($mesg->{errorMessage} ne '') {
-					$self->{error}=28;
-					$self->{errorString}='Failed to update the entry, "'.$entry->dn.'". $mesg2->{errorMessage}="'.
-				                          $mesg2->{errorMessage}.'"';
+				my $mesg2 = $entry->update($ldap);
+				if ( $mesg->{errorMessage} ne '' ) {
+					$self->{error} = 28;
+					$self->{errorString}
+						= 'Failed to update the entry, "'
+						. $entry->dn
+						. '". $mesg2->{errorMessage}="'
+						. $mesg2->{errorMessage} . '"';
 					$self->warn;
 					return undef;
-				}
-				if ($args{dump}) {
+				} ## end if ( $mesg->{errorMessage} ne '' )
+				if ( $args{dump} ) {
 					$entry->dump;
 				}
-			}
-		}
+			} ## end if ($changed)
+		} ## end if ( defined( $members[0] ) )
 
 		#get the next entry
-		$entry=$mesg->pop_entry;
+		$entry = $mesg->pop_entry;
 		#exit this loop if it is not defined... meaning we reached the end
-		if (!defined($entry)) {
-			$loop=0;
+		if ( !defined($entry) ) {
+			$loop = 0;
 		}
-	}
+	} ## end while ($loop)
 
 	return 1;
-}
+} ## end sub groupClean
 
 =head2 getGroups
 
@@ -1567,13 +1644,15 @@ sub getGroups {
 		filter => '(objectClass=posixGroup)',
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 27;
-		$self->{errorString} = 'Fetching posixGroup objects under "'
-			. $self->{ini}->{''}->{groupbase} . '" failed. '
+		$self->{error} = 27;
+		$self->{errorString}
+			= 'Fetching posixGroup objects under "'
+			. $self->{ini}->{''}->{groupbase}
+			. '" failed. '
 			. $mesg->{errorMessage};
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg->{errorMessage} ne '' )
 
 	my @groups;
 	my $entry = $mesg->pop_entry;
@@ -1583,7 +1662,7 @@ sub getGroups {
 	}
 
 	return \@groups;
-}
+} ## end sub getGroups
 
 =head2 getUsers
 
@@ -1613,13 +1692,15 @@ sub getUsers {
 		filter => '(objectClass=posixAccount)',
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 37;
-		$self->{errorString} = 'Fetching posixAccount objects under "'
-			. $self->{ini}->{''}->{userbase} . '" failed. '
+		$self->{error} = 37;
+		$self->{errorString}
+			= 'Fetching posixAccount objects under "'
+			. $self->{ini}->{''}->{userbase}
+			. '" failed. '
 			. $mesg->{errorMessage};
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg->{errorMessage} ne '' )
 
 	my @users;
 	my $entry = $mesg->pop_entry;
@@ -1629,7 +1710,7 @@ sub getUsers {
 	}
 
 	return \@users;
-}
+} ## end sub getUsers
 
 =head2 isLDAPgroup
 
@@ -1644,46 +1725,46 @@ This tests if a group is in LDAP or not.
 
 =cut
 
-sub isLDAPgroup{
-	my $self=$_[0];
-	my $group=$_[1];
+sub isLDAPgroup {
+	my $self  = $_[0];
+	my $group = $_[1];
 
 	$self->errorblank;
 
 	#make sure a group if specifed
-	if (!defined($group)) {
-		$self->{error}=6;
-		$self->{errorString}='No group name specified';
+	if ( !defined($group) ) {
+		$self->{error}       = 6;
+		$self->{errorString} = 'No group name specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the user does not exists
-	my ($gname,$gpasswd,$gid,$members) = getgrnam($group);
-	if (!defined($gname)) {
-		$self->{error}=10;
-		$self->{errorString}='The group "'.$group.'" does not exist';
+	my ( $gname, $gpasswd, $gid, $members ) = getgrnam($group);
+	if ( !defined($gname) ) {
+		$self->{error}       = 10;
+		$self->{errorString} = 'The group "' . $group . '" does not exist';
 		$self->warn;
 		return undef;
 	}
 
 	#connect to the LDAP server
-	my $ldap=$self->connect();
+	my $ldap = $self->connect();
 
 	#search and get the first entry
-	my $mesg=$ldap->search(
-						   base=>$self->{ini}->{''}->{groupbase},
-						   filter=>'(&(cn='.$group.') (gidNumber='.$gid.'))'
-						   );
-	my $entry=$mesg->pop_entry;
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{groupbase},
+		filter => '(&(cn=' . $group . ') (gidNumber=' . $gid . '))'
+	);
+	my $entry = $mesg->pop_entry;
 
 	#if $entry is not defined or does not exist under the specified base
-	if (!defined($entry)) {
+	if ( !defined($entry) ) {
 		return undef;
 	}
 
 	return 1;
-}
+} ## end sub isLDAPgroup
 
 =head2 isLDAPuser
 
@@ -1698,46 +1779,46 @@ This tests if a group is in LDAP or not.
 
 =cut
 
-sub isLDAPuser{
-	my $self=$_[0];
-	my $user=$_[1];
+sub isLDAPuser {
+	my $self = $_[0];
+	my $user = $_[1];
 
 	$self->errorblank;
 
 	#make sure a group if specifed
-	if (!defined($user)) {
-		$self->{error}=5;
-		$self->{errorString}='No user name specified';
+	if ( !defined($user) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the user already exists
-	my ($name,$passwd,$uid,$gid,$quota,$comment,$gcos,$dir,$shell,$expire) = getpwnam($user);
-	if (!defined($name)) {
-		$self->{error}=17;
-		$self->{errorString}='The user "'.$user.'" does not exists';
+	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gcos, $dir, $shell, $expire ) = getpwnam($user);
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $user . '" does not exists';
 		$self->warn;
 		return undef;
 	}
 
 	#connect to the LDAP server
-	my $ldap=$self->connect();
+	my $ldap = $self->connect();
 
 	#search and get the first entry
-	my $mesg=$ldap->search(
-						   base=>$self->{ini}->{''}->{userbase},
-						   filter=>'(&(uid='.$user.') (uidNumber='.$uid.'))'
-						   );
-	my $entry=$mesg->pop_entry;
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $user . ') (uidNumber=' . $uid . '))'
+	);
+	my $entry = $mesg->pop_entry;
 
 	#if $entry is not defined or does not exist under the specified base
-	if (!defined($entry)) {
+	if ( !defined($entry) ) {
 		return undef;
 	}
 
 	return 1;
-}
+} ## end sub isLDAPuser
 
 =head2 onlyMember
 
@@ -1768,72 +1849,71 @@ This is the group to check.
 
 =cut
 
-sub onlyMember{
-	my $self=$_[0];
+sub onlyMember {
+	my $self = $_[0];
 	my %args;
-	if(defined($_[1])){
-		%args= %{$_[1]};
-	};
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
 
 	$self->errorblank;
 
 	#error is no group is specified
-	if (!defined($args{user})) {
-		$self->{error}=5;
-		$self->{errorString}='No user name specified.';
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified.';
 		$self->warn;
 		return undef;
 	}
-
 
 	#error is no group is specified
-	if (!defined($args{group})) {
-		$self->{error}=6;
-		$self->{errorString}='No group name specified.';
+	if ( !defined( $args{group} ) ) {
+		$self->{error}       = 6;
+		$self->{errorString} = 'No group name specified.';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the user already exists
-	my ($gname,$gpasswd,$ggid,$members) = getgrnam($args{group});
-	if (!defined($gname)) {
-		$self->{error}=14;
-		$self->{errorString}='The group "'.$args{group}.'" does not exist';
+	my ( $gname, $gpasswd, $ggid, $members ) = getgrnam( $args{group} );
+	if ( !defined($gname) ) {
+		$self->{error}       = 14;
+		$self->{errorString} = 'The group "' . $args{group} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the user already exists
-	my ($name,$passwd,$uid,$gid,$quota,$comment,$gcos,$dir,$shell,$expire) = getpwnam($args{user});
-	if (!defined($name)) {
-		$self->{error}=17;
-		$self->{errorString}='The user "'.$args{user}.'" does not exists';
+	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gcos, $dir, $shell, $expire ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exists';
 		$self->warn;
 		return undef;
 	}
 
 	#break the list of members apart
-	my @membersA=split(/,/, $members);
+	my @membersA = split( /,/, $members );
 
 	#handle it if there are no group members
-	if (!defined($membersA[0])) {
+	if ( !defined( $membersA[0] ) ) {
 		#if the group's GID and the user's primary GID are the same
 		#here then it means the user is not explicityly as a member of that group
-		if ($ggid eq $gid) {
+		if ( $ggid eq $gid ) {
 			return 1;
 		}
 
 		#if we get here, the group has no explicityly listed members
 		#and the user is not a member of the group
 		return undef;
-	}
+	} ## end if ( !defined( $membersA[0] ) )
 
 	#check each member to see if it is not the user in question
 	#while this may seem stupid, there is a possibiltiy that the user
 	#has been listed in a group more than once...
-	my $int=0;
-	while (defined($membersA[$int])) {
-		if ($membersA[$int] ne $args{user}) {
+	my $int = 0;
+	while ( defined( $membersA[$int] ) ) {
+		if ( $membersA[$int] ne $args{user} ) {
 			return undef;
 		}
 
@@ -1841,7 +1921,7 @@ sub onlyMember{
 	}
 
 	return 1;
-}
+} ## end sub onlyMember
 
 =head2 plugin
 
@@ -1869,106 +1949,108 @@ This is the hash that was passed to the function calling the plugin.
 
 =cut
 
-sub plugin{
-	my $self=$_[0];
+sub plugin {
+	my $self = $_[0];
 	my $opts;
 	my %opts;
-	if(defined($_[1])){
-		%opts= %{$_[1]};
-	};
+	if ( defined( $_[1] ) ) {
+		%opts = %{ $_[1] };
+	}
 	my %args;
-	if(defined($_[2])){
-		%args= %{$_[2]};
-	};
+	if ( defined( $_[2] ) ) {
+		%args = %{ $_[2] };
+	}
 
 	$self->errorblank;
 
 	#error if no LDAP connection is present
-	if (!defined($opts{ldap})) {
-		$self->{error}=38;
-		$self->{errorString}='No LDAP connection passed';
+	if ( !defined( $opts{ldap} ) ) {
+		$self->{error}       = 38;
+		$self->{errorString} = 'No LDAP connection passed';
 		$self->warn;
 		return undef;
 	}
 
 	#error if no LDAP connection is present
-	if (!defined($opts{do})) {
-		$self->{error}=39;
-		$self->{errorString}='What selection of plugins to process has not been specified. $opts{do} is undefined';
+	if ( !defined( $opts{do} ) ) {
+		$self->{error}       = 39;
+		$self->{errorString} = 'What selection of plugins to process has not been specified. $opts{do} is undefined';
 		$self->warn;
 		return undef;
 	}
 
 	#error if no LDAP connection is present
-	if (!defined($opts{entry})) {
-		$self->{error}=42;
-		$self->{errorString}='No Net::LDAP::Entry passed. $opts{entry} is undefined';
+	if ( !defined( $opts{entry} ) ) {
+		$self->{error}       = 42;
+		$self->{errorString} = 'No Net::LDAP::Entry passed. $opts{entry} is undefined';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the LDAP entry that is specified is not a Net::LDAP::Entry object
-	if (ref($opts{entry}) ne 'Net::LDAP::Entry') {
-		$self->{error}=43;
-		$self->{errorString}='$opts{entry} is not a Net::LDAP::Entry object';
+	if ( ref( $opts{entry} ) ne 'Net::LDAP::Entry' ) {
+		$self->{error}       = 43;
+		$self->{errorString} = '$opts{entry} is not a Net::LDAP::Entry object';
 		$self->warn;
 		return undef;
 	}
 
 	#error if no entry connection is present
-	if (ref($opts{ldap}) ne 'Net::LDAP') {
-		$self->{error}=44;
-		$self->{errorString}='$opts{ldap} is not a Net::LDAP object';
+	if ( ref( $opts{ldap} ) ne 'Net::LDAP' ) {
+		$self->{error}       = 44;
+		$self->{errorString} = '$opts{ldap} is not a Net::LDAP object';
 		$self->warn;
 		return undef;
 	}
 
 	#
-	$opts{self}=$self;
+	$opts{self} = $self;
 
 	#make sure the specified config exists
-	if (!defined( $self->{ini}->{''}->{$opts{do}} )) {
-		$self->{error}=40;
-		$self->{errorString}='The variable "'.$opts{do}.'" does not exist in the config';
+	if ( !defined( $self->{ini}->{''}->{ $opts{do} } ) ) {
+		$self->{error}       = 40;
+		$self->{errorString} = 'The variable "' . $opts{do} . '" does not exist in the config';
 		$self->warn;
 		return undef;
 	}
 
 	#split the plugin apart
-	my @plugins=split(/,/ , $self->{ini}->{''}->{$opts{do}});
+	my @plugins = split( /,/, $self->{ini}->{''}->{ $opts{do} } );
 
 	#process each one
-	my $int=0;
-	while (defined($plugins[$int])) {
+	my $int = 0;
+	while ( defined( $plugins[$int] ) ) {
 		my %returned;
-		my $run='use '.$plugins[$int].';'."\n".
-		        'my %returned='.$plugins[$int].'->plugin(\%opts, \%args);';
+		my $run = 'use ' . $plugins[$int] . ';' . "\n" . 'my %returned=' . $plugins[$int] . '->plugin(\%opts, \%args);';
 
 		#run it
-		my $ran=eval($run);
+		my $ran = eval($run);
 
 		#If we did not get a boolean true, then it failed
-		if (!$ran) {
-			$self->{error}=41;
-			$self->{errorString}='Executing the plugin "'.$plugins[$int].'" failed. $run="'.$run.'"';
+		if ( !$ran ) {
+			$self->{error}       = 41;
+			$self->{errorString} = 'Executing the plugin "' . $plugins[$int] . '" failed. $run="' . $run . '"';
 			$self->warn;
 			return undef;
 		}
 
 		#it errored...
-		if ($returned{error}) {
-			$self->{error}=45;
-			$self->{errorString}='The plugin returned a error. $returned{error}="'.$returned{error}.'" '.
-		 	                     '$returned{errorString}="'.$returned{errorString}.'"';
+		if ( $returned{error} ) {
+			$self->{error} = 45;
+			$self->{errorString}
+				= 'The plugin returned a error. $returned{error}="'
+				. $returned{error} . '" '
+				. '$returned{errorString}="'
+				. $returned{errorString} . '"';
 			$self->warn;
 			return undef;
-		}
+		} ## end if ( $returned{error} )
 
 		$int++;
-	}
+	} ## end while ( defined( $plugins[$int] ) )
 
 	return 1;
-}
+} ## end sub plugin
 
 =head2 removeUserFromGroups
 
@@ -1980,60 +2062,65 @@ No checks are made to see if the user exists or not.
 
 =cut
 
-sub removeUserFromGroups{
-	my $self=$_[0];
-	my $user=$_[1];
+sub removeUserFromGroups {
+	my $self = $_[0];
+	my $user = $_[1];
 
 	$self->errorblank;
 
 	#make sure a group if specifed
-	if (!defined($user)) {
-		$self->{error}=5;
-		$self->{errorString}='No user name specified';
+	if ( !defined($user) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
 		$self->warn;
 		return undef;
 	}
 
 	#connect to the LDAP server
-	my $ldap=$self->connect();
+	my $ldap = $self->connect();
 
 	#search and get the first entry
-	my $mesg=$ldap->search(
-						   base=>$self->{ini}->{''}->{groupbase},
-						   filter=>'(&(objectClass=posixGroup) (memberUid='.$user.'))'
-						   );
-	my $entry=$mesg->pop_entry;
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{groupbase},
+		filter => '(&(objectClass=posixGroup) (memberUid=' . $user . '))'
+	);
+	my $entry = $mesg->pop_entry;
 
 	#no groups with this user in them were found
-	if (!defined($entry)) {
+	if ( !defined($entry) ) {
 		return 1;
 	}
 
 	#exit it
-	my $loop=1;
+	my $loop = 1;
 	while ($loop) {
 		#remove the memberUid attribute that is equal to the user in question and update it
-		$entry->delete('memberUid'=>$user);
-		my $mesg2=$entry->update($ldap);
+		$entry->delete( 'memberUid' => $user );
+		my $mesg2 = $entry->update($ldap);
 		#handles any errors
-		if ($mesg2->{errorMessage} ne '') {
-			$self->{error}=25;
-			$self->{errorString}='Deleting memberUid='.$user.' from the entry "'.$entry->dn.'" failed. $mesg2->{errorMessage}="'.
-			                      $mesg2->{errorMessage}.'"';
+		if ( $mesg2->{errorMessage} ne '' ) {
+			$self->{error} = 25;
+			$self->{errorString}
+				= 'Deleting memberUid='
+				. $user
+				. ' from the entry "'
+				. $entry->dn
+				. '" failed. $mesg2->{errorMessage}="'
+				. $mesg2->{errorMessage} . '"';
 			$self->warn;
 			return undef;
-		}
+		} ## end if ( $mesg2->{errorMessage} ne '' )
 
 		#get the next entry
-		$entry=$mesg->pop_entry;
+		$entry = $mesg->pop_entry;
 		#if the next entry is not defined, there are no more so we exit the loop
-		if (!defined($entry)) {
-			$loop=0;
+		if ( !defined($entry) ) {
+			$loop = 0;
 		}
-	}
+	} ## end while ($loop)
 
 	return 1;
-}
+} ## end sub removeUserFromGroups
 
 =head2 readConfig
 
@@ -2047,114 +2134,114 @@ This reads the specified config.
 
 =cut
 
-sub readConfig{
-	my $self=$_[0];
-	my $config=$_[1];
+sub readConfig {
+	my $self   = $_[0];
+	my $config = $_[1];
 
 	$self->errorblank;
 
 	#if it is not defined, use the default one
-	if (!defined($config)) {
-		$config=xdg_config_home().'/plugtoolsrc';
+	if ( !defined($config) ) {
+		$config = xdg_config_home() . '/plugtoolsrc';
 	}
 
 	#reads the config
-	my $ini=ReadINI($config);
+	my $ini = ReadINI($config);
 
 	#errors if it is not defined... meaning it errored
-	if (!defined($ini)) {
-		$self->{error}=1;
-		$self->{errorString}='Failed to read the config';
+	if ( !defined($ini) ) {
+		$self->{error}       = 1;
+		$self->{errorString} = 'Failed to read the config';
 		$self->warn;
 		return undef;
 	}
 
 	#puts together a array to check for the required ones
 	my @required;
-	push(@required, 'bind');
-	push(@required, 'pass');
-	push(@required, 'userbase');
-	push(@required, 'groupbase');
-
+	push( @required, 'bind' );
+	push( @required, 'pass' );
+	push( @required, 'userbase' );
+	push( @required, 'groupbase' );
 
 	#make sure they are all defined
-	my $int=0;
-	while (defined($required[$int])) {
+	my $int = 0;
+	while ( defined( $required[$int] ) ) {
 		#error if it is not defined
-		if (!defined($ini->{''}->{$required[$int]})) {
-			$self->{error}=2;
-			$self->{errorString}='The required variable "'.$required[$int].'" is not defined in the config, "'.$config.'",';
+		if ( !defined( $ini->{''}->{ $required[$int] } ) ) {
+			$self->{error} = 2;
+			$self->{errorString}
+				= 'The required variable "' . $required[$int] . '" is not defined in the config, "' . $config . '",';
 			$self->warn;
 			return undef;
 		}
 
 		$int++;
-	}
+	} ## end while ( defined( $required[$int] ) )
 
 	#define the defaults if they are not defined
-	if (!defined($ini->{''}->{UIDstart})) {
-		$ini->{''}->{UIDstart}='1001';
+	if ( !defined( $ini->{''}->{UIDstart} ) ) {
+		$ini->{''}->{UIDstart} = '1001';
 	}
-	if (!defined($ini->{''}->{GIDstart})) {
-		$ini->{''}->{GIDstart}='1001';
+	if ( !defined( $ini->{''}->{GIDstart} ) ) {
+		$ini->{''}->{GIDstart} = '1001';
 	}
-	if (!defined($ini->{''}->{defaultShell})) {
-		$ini->{''}->{defaultShell}='/bin/tcsh';
+	if ( !defined( $ini->{''}->{defaultShell} ) ) {
+		$ini->{''}->{defaultShell} = '/bin/tcsh';
 	}
-	if (!defined($ini->{''}->{HOMEproto})) {
-		$ini->{''}->{HOMEproto}='/home/%%USERNAME%%/';
+	if ( !defined( $ini->{''}->{HOMEproto} ) ) {
+		$ini->{''}->{HOMEproto} = '/home/%%USERNAME%%/';
 	}
-	if (!defined($ini->{''}->{skeletonHome})) {
-		$ini->{''}->{skeletonHome}='/etc/skel/';
+	if ( !defined( $ini->{''}->{skeletonHome} ) ) {
+		$ini->{''}->{skeletonHome} = '/etc/skel/';
 	}
-	if (!defined($ini->{''}->{chmodValue})) {
-		$ini->{''}->{chmodValue}='640';
+	if ( !defined( $ini->{''}->{chmodValue} ) ) {
+		$ini->{''}->{chmodValue} = '640';
 	}
-	if (!defined($ini->{''}->{chmodHome})) {
-		$ini->{''}->{chmodHome}='1';
+	if ( !defined( $ini->{''}->{chmodHome} ) ) {
+		$ini->{''}->{chmodHome} = '1';
 	}
-	if (!defined($ini->{''}->{chownHome})) {
-		$ini->{''}->{chownHome}='1';
+	if ( !defined( $ini->{''}->{chownHome} ) ) {
+		$ini->{''}->{chownHome} = '1';
 	}
-	if (!defined($ini->{''}->{createHome})) {
-		$ini->{''}->{createHome}='1';
+	if ( !defined( $ini->{''}->{createHome} ) ) {
+		$ini->{''}->{createHome} = '1';
 	}
-	if (!defined($ini->{''}->{groupPrimary})) {
-		$ini->{''}->{groupPrimary}='cn';
+	if ( !defined( $ini->{''}->{groupPrimary} ) ) {
+		$ini->{''}->{groupPrimary} = 'cn';
 	}
-	if (!defined($ini->{''}->{userPrimary})) {
-		$ini->{''}->{userPrimary}='uid';
+	if ( !defined( $ini->{''}->{userPrimary} ) ) {
+		$ini->{''}->{userPrimary} = 'uid';
 	}
-	if (!defined($ini->{''}->{server})) {
-		$ini->{''}->{server}='127.0.0.1';
+	if ( !defined( $ini->{''}->{server} ) ) {
+		$ini->{''}->{server} = '127.0.0.1';
 	}
-	if (!defined($ini->{''}->{port})) {
-		$ini->{''}->{port}='389';
+	if ( !defined( $ini->{''}->{port} ) ) {
+		$ini->{''}->{port} = '389';
 	}
-	if (!defined($ini->{''}->{TLSverify})) {
-		$ini->{''}->{TLSverify}='none';
+	if ( !defined( $ini->{''}->{TLSverify} ) ) {
+		$ini->{''}->{TLSverify} = 'none';
 	}
-	if (!defined($ini->{''}->{SSLversion})) {
-		$ini->{''}->{SSLversion}='tlsv1';
+	if ( !defined( $ini->{''}->{SSLversion} ) ) {
+		$ini->{''}->{SSLversion} = 'tlsv1';
 	}
-	if (!defined($ini->{''}->{SSLciphers})) {
-		$ini->{''}->{SSLciphers}='ALL';
+	if ( !defined( $ini->{''}->{SSLciphers} ) ) {
+		$ini->{''}->{SSLciphers} = 'ALL';
 	}
-	if (!defined($ini->{''}->{removeHome})) {
-		$ini->{''}->{removeHome}='0';
+	if ( !defined( $ini->{''}->{removeHome} ) ) {
+		$ini->{''}->{removeHome} = '0';
 	}
-	if (!defined($ini->{''}->{removeGroup})) {
-		$ini->{''}->{removeGroup}='1';
+	if ( !defined( $ini->{''}->{removeGroup} ) ) {
+		$ini->{''}->{removeGroup} = '1';
 	}
-	if (!defined($ini->{''}->{userUpdate})) {
-		$ini->{''}->{userUpdate}='1';
+	if ( !defined( $ini->{''}->{userUpdate} ) ) {
+		$ini->{''}->{userUpdate} = '1';
 	}
 
 	#if we get here, the ini is good... so we save it
-	$self->{ini}=$ini;
+	$self->{ini} = $ini;
 
 	return 1;
-}
+} ## end sub readConfig
 
 =head2 userGECOSchange
 
@@ -2181,98 +2268,110 @@ Call the dump method on the group afterwards.
 
 =cut
 
-sub userGECOSchange{
-	my $self=$_[0];
+sub userGECOSchange {
+	my $self = $_[0];
 	my %args;
-	if(defined($_[1])){
-		%args= %{$_[1]};
-	};
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
 
 	$self->errorblank;
 
 	#error if we don't have a group name
-	if (!defined($args{user})) {
-		$self->{error}=5;
-		$self->{errorString}='No user name specified';
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if no user has been specified
-	if (!defined($args{gecos})){
-		$self->{error}=33;
-		$self->{errorString}='No GECOS specified';
+	if ( !defined( $args{gecos} ) ) {
+		$self->{error}       = 33;
+		$self->{errorString} = 'No GECOS specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the user already exists
-	my ($name,$passwd,$uid,$gid,$quota,$comment,$gecos,$dir,$shell,$expire) = getpwnam($args{user});
-	if (!defined($name)) {
-		$self->{error}=17;
-		$self->{errorString}='The user "'.$args{user}.'" does not exists';
+	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gecos, $dir, $shell, $expire ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exists';
 		$self->warn;
 		return undef;
 	}
 
 	#connect to the LDAP server
-	my $ldap=$self->connect();
+	my $ldap = $self->connect();
 
 	#search and get the first entry
-	my $mesg=$ldap->search(
-						   base=>$self->{ini}->{''}->{userbase},
-						   filter=>'(&(uid='.$args{user}.') (uidNumber='.$uid.'))'
-						   );
-	if ($mesg->{errorMessage} eq '') {
-		$self->{error}=32;
-		$self->{errorString}='Fetching the entry for the user failed under "'.
-		                     $self->{ini}->{''}->{groupbase}.'"'.
-		                     $mesg->{errorMessage}.'"';
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} eq '' ) {
+		$self->{error} = 32;
+		$self->{errorString}
+			= 'Fetching the entry for the user failed under "'
+			. $self->{ini}->{''}->{groupbase} . '"'
+			. $mesg->{errorMessage} . '"';
 		$self->warn;
 		return undef;
 	}
-	my $entry=$mesg->pop_entry;
+	my $entry = $mesg->pop_entry;
 
 	#if $entry is not defined or does not exist under the specified base
-	if (!defined($entry)) {
-		$self->{error}=18;
-		$self->{errorString}='The user "'.$args{user}.'" does not exist in specified group base, "'.
-		                     $self->{ini}->{''}->{userbase}.'", ';
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "'
+			. $args{user}
+			. '" does not exist in specified group base, "'
+			. $self->{ini}->{''}->{userbase} . '", ';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( !defined($entry) )
 
-	$entry->delete(gecos=>$gecos);
-	$entry->add(gecos=>$args{gecos});
+	$entry->delete( gecos => $gecos );
+	$entry->add( gecos => $args{gecos} );
 
 	#call a plugin if needed
-	if (defined($self->{ini}->{''}->{pluginUserGECOSchange})) {
-		$self->plugin({
-					   ldap=>$ldap,
-					   entry=>$entry,
-					   do=>'pluginUserGECOSchange',
-					   },
-					  \%args);
-	}
+	if ( defined( $self->{ini}->{''}->{pluginUserGECOSchange} ) ) {
+		$self->plugin(
+			{
+				ldap  => $ldap,
+				entry => $entry,
+				do    => 'pluginUserGECOSchange',
+			},
+			\%args
+		);
+	} ## end if ( defined( $self->{ini}->{''}->{pluginUserGECOSchange...}))
 
 	#update the entry
-	my $mesg2=$entry->update($ldap);
-	if ($mesg2->{errorMessage} ne '') {
-		$self->{error}=34;
-		$self->{errorString}='Changing the GECOS to "'.$args{gecos}.'" from "'.$gecos
-		                     .'" for  "'.$entry->dn.'" failed. $mesg2->{errorMessage}="'.
-		                     $mesg2->{errorMessage}.'"';
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Changing the GECOS to "'
+			. $args{gecos}
+			. '" from "'
+			. $gecos
+			. '" for  "'
+			. $entry->dn
+			. '" failed. $mesg2->{errorMessage}="'
+			. $mesg2->{errorMessage} . '"';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg2->{errorMessage} ne '' )
 
 	#dump the entry if asked
-	if ($args{dump}) {
+	if ( $args{dump} ) {
 		$entry->dump;
 	}
 
 	return 1;
-}
+} ## end sub userGECOSchange
 
 =head2 userShellChange
 
@@ -2299,98 +2398,110 @@ Call the dump method on the group afterwards.
 
 =cut
 
-sub userShellChange{
-	my $self=$_[0];
+sub userShellChange {
+	my $self = $_[0];
 	my %args;
-	if(defined($_[1])){
-		%args= %{$_[1]};
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
 	}
 
 	$self->errorblank;
 
 	#error if we don't have a group name
-	if (!defined($args{user})) {
-		$self->{error}=5;
-		$self->{errorString}='No user name specified';
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if no user has been specified
-	if (!defined($args{shell})){
-		$self->{error}=47;
-		$self->{errorString}='No shell specified';
+	if ( !defined( $args{shell} ) ) {
+		$self->{error}       = 47;
+		$self->{errorString} = 'No shell specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the user already exists
-	my ($name,$passwd,$uid,$gid,$quota,$comment,$gecos,$dir,$shell,$expire) = getpwnam($args{user});
-	if (!defined($name)) {
-		$self->{error}=17;
-		$self->{errorString}='The user "'.$args{user}.'" does not exists';
+	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gecos, $dir, $shell, $expire ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exists';
 		$self->warn;
 		return undef;
 	}
 
 	#connect to the LDAP server
-	my $ldap=$self->connect();
+	my $ldap = $self->connect();
 
 	#search and get the first entry
-	my $mesg=$ldap->search(
-						   base=>$self->{ini}->{''}->{userbase},
-						   filter=>'(&(uid='.$args{user}.') (uidNumber='.$uid.'))'
-						   );
-	if ($mesg->{errorMessage} ne '') {
-		$self->{error}=32;
-		$self->{errorString}='Fetching the entry for the user failed under "'.
-		                     $self->{ini}->{''}->{groupbase}.'"'.
-		                     $mesg->{errorMessage}.'"';
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error} = 32;
+		$self->{errorString}
+			= 'Fetching the entry for the user failed under "'
+			. $self->{ini}->{''}->{groupbase} . '"'
+			. $mesg->{errorMessage} . '"';
 		$self->warn;
 		return undef;
 	}
-	my $entry=$mesg->pop_entry;
+	my $entry = $mesg->pop_entry;
 
 	#if $entry is not defined or does not exist under the specified base
-	if (!defined($entry)) {
-		$self->{error}=18;
-		$self->{errorString}='The user "'.$args{user}.'" does not exist in specified group base, "'.
-		                     $self->{ini}->{''}->{userbase}.'", ';
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "'
+			. $args{user}
+			. '" does not exist in specified group base, "'
+			. $self->{ini}->{''}->{userbase} . '", ';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( !defined($entry) )
 
-	$entry->delete(loginShell=>$shell);
-	$entry->add(loginShell=>$args{shell});
+	$entry->delete( loginShell => $shell );
+	$entry->add( loginShell => $args{shell} );
 
 	#call a plugin if needed
-	if (defined($self->{ini}->{''}->{pluginUserShellChange})) {
-		$self->plugin({
-					   ldap=>$ldap,
-					   entry=>$entry,
-					   do=>'pluginUserShellChange',
-					   },
-					  \%args);
-	}
+	if ( defined( $self->{ini}->{''}->{pluginUserShellChange} ) ) {
+		$self->plugin(
+			{
+				ldap  => $ldap,
+				entry => $entry,
+				do    => 'pluginUserShellChange',
+			},
+			\%args
+		);
+	} ## end if ( defined( $self->{ini}->{''}->{pluginUserShellChange...}))
 
 	#update the entry
-	my $mesg2=$entry->update($ldap);
-	if ($mesg2->{errorMessage} ne '') {
-		$self->{error}=34;
-		$self->{errorString}='Changing the Shell to "'.$args{shell}.'" from "'.$shell
-		                     .'" for  "'.$entry->dn.'" failed. $mesg2->{errorMessage}="'.
-		                     $mesg2->{errorMessage}.'"';
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Changing the Shell to "'
+			. $args{shell}
+			. '" from "'
+			. $shell
+			. '" for  "'
+			. $entry->dn
+			. '" failed. $mesg2->{errorMessage}="'
+			. $mesg2->{errorMessage} . '"';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg2->{errorMessage} ne '' )
 
 	#dump the entry if asked
-	if ($args{dump}) {
+	if ( $args{dump} ) {
 		$entry->dump;
 	}
 
 	return 1;
-}
+} ## end sub userShellChange
 
 =head2 userSetPass
 
@@ -2413,95 +2524,102 @@ This is the new password to set.
 
 =cut
 
-sub userSetPass{
-	my $self=$_[0];
+sub userSetPass {
+	my $self = $_[0];
 	my %args;
-	if(defined($_[1])){
-		%args= %{$_[1]};
-	};
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
 
 	$self->errorblank;
 
 	#error if we don't have a user name
-	if (!defined($args{user})) {
-		$self->{error}=5;
-		$self->{errorString}='No user name specified';
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if we don't have a password
-	if (!defined($args{pass})) {
-		$self->{error}=35;
-		$self->{errorString}='No password specified.';
+	if ( !defined( $args{pass} ) ) {
+		$self->{error}       = 35;
+		$self->{errorString} = 'No password specified.';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the user already exists
-	my ($name,$passwd,$uid,$gid,$quota,$comment,$gcos,$dir,$shell,$expire) = getpwnam($args{user});
-	if (!defined($name)) {
-		$self->{error}=17;
-		$self->{errorString}='The user "'.$args{user}.'" does not exists';
+	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gcos, $dir, $shell, $expire ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exists';
 		$self->warn;
 		return undef;
 	}
 
 	#connect to the LDAP server
-	my $ldap=$self->connect();
+	my $ldap = $self->connect();
 
 	#search and get the first entry
-	my $mesg=$ldap->search(
-						   base=>$self->{ini}->{''}->{userbase},
-						   filter=>'(&(uid='.$args{user}.') (uidNumber='.$uid.'))'
-						   );
-	if ($mesg->{errorMessage} ne '') {
-		$self->{error}=32;
-		$self->{errorString}='Fetching the entry for the user under "'.
-		                     $self->{ini}->{''}->{userbase}.'"'.
-		                     $mesg->{errorMessage}.'"';
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error} = 32;
+		$self->{errorString}
+			= 'Fetching the entry for the user under "'
+			. $self->{ini}->{''}->{userbase} . '"'
+			. $mesg->{errorMessage} . '"';
 		$self->warn;
 		return undef;
 	}
-	my $entry=$mesg->pop_entry;
+	my $entry = $mesg->pop_entry;
 
 	#get the DN of the entry we will be changing
-	my $dn=$entry->dn;
+	my $dn = $entry->dn;
 
-	my $mesg2=$ldap->set_password(user=>$dn, newpasswd=>$args{pass});
-	if ($mesg->{errorMessage} ne '') {
-		$self->{error}=36;
-		$self->{errorString}='Fetching the entry for the user under "'.
-		                     $self->{ini}->{''}->{userbase}.'"'.
-		                     $mesg->{errorMessage}.'"';
+	my $mesg2 = $ldap->set_password( user => $dn, newpasswd => $args{pass} );
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error} = 36;
+		$self->{errorString}
+			= 'Fetching the entry for the user under "'
+			. $self->{ini}->{''}->{userbase} . '"'
+			. $mesg->{errorMessage} . '"';
 		$self->warn;
 		return undef;
 	}
 
 	#call a plugin if needed
-	if (defined($self->{ini}->{''}->{pluginUserSetPass})) {
-		$self->plugin({
-					   ldap=>$ldap,
-					   entry=>$entry,
-					   do=>'pluginUserSetPass',
-					   },
-					  \%args);
-	}else {
+	if ( defined( $self->{ini}->{''}->{pluginUserSetPass} ) ) {
+		$self->plugin(
+			{
+				ldap  => $ldap,
+				entry => $entry,
+				do    => 'pluginUserSetPass',
+			},
+			\%args
+		);
+	} else {
 		return 1;
 	}
 
 	#update the entry
-	my $mesg3=$entry->update($ldap);
-	if ($mesg3->{errorMessage} ne '') {
-		$self->{error}=34;
-		$self->{errorString}='Calling the update method on the entry, "'.$entry->dn.'", failed. $mesg3->{errorMessage}="'.
-		                     $mesg3->{errorMessage}.'"';
+	my $mesg3 = $entry->update($ldap);
+	if ( $mesg3->{errorMessage} ne '' ) {
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Calling the update method on the entry, "'
+			. $entry->dn
+			. '", failed. $mesg3->{errorMessage}="'
+			. $mesg3->{errorMessage} . '"';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg3->{errorMessage} ne '' )
 
 	return 1;
-}
+} ## end sub userSetPass
 
 =head2 userGIDchange
 
@@ -2528,115 +2646,127 @@ Call the dump method on the group afterwards.
 
 =cut
 
-sub userGIDchange{
-	my $self=$_[0];
+sub userGIDchange {
+	my $self = $_[0];
 	my %args;
-	if(defined($_[1])){
-		%args= %{$_[1]};
-	};
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
 
 	$self->errorblank;
 
 	#error if we don't have a group name
-	if (!defined($args{user})) {
-		$self->{error}=5;
-		$self->{errorString}='No user name specified';
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if no user has been specified
-	if (!defined($args{gid})){
-		$self->{error}=28;
-		$self->{errorString}='No GID specified';
+	if ( !defined( $args{gid} ) ) {
+		$self->{error}       = 28;
+		$self->{errorString} = 'No GID specified';
 		$self->warn;
 		return undef;
 	}
 
 	#make sure the GID is complete numeric
-	if (!($args{gid}=~/^[0123456789]*$/)) {
-		$self->{error}=8;
-		$self->{errorString}='The specified GID, "'.$args{gid}.'", is not numeric';
+	if ( !( $args{gid} =~ /^[0123456789]*$/ ) ) {
+		$self->{error}       = 8;
+		$self->{errorString} = 'The specified GID, "' . $args{gid} . '", is not numeric';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the user already exists
-	my ($name,$passwd,$uid,$gid,$quota,$comment,$gcos,$dir,$shell,$expire) = getpwnam($args{user});
-	if (!defined($name)) {
-		$self->{error}=17;
-		$self->{errorString}='The user "'.$args{user}.'" does not exists';
+	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gcos, $dir, $shell, $expire ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exists';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the user does not exists
-	my ($gname,$gpasswd,$ggid,$members) = getgrgid($args{gid});
-	if (!defined($gname)) {
-		$self->{error}=14;
-		$self->{errorString}='The group specified by GID "'.$args{gid}.'" does not exist';
+	my ( $gname, $gpasswd, $ggid, $members ) = getgrgid( $args{gid} );
+	if ( !defined($gname) ) {
+		$self->{error}       = 14;
+		$self->{errorString} = 'The group specified by GID "' . $args{gid} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
 
 	#connect to the LDAP server
-	my $ldap=$self->connect();
+	my $ldap = $self->connect();
 
 	#search and get the first entry
-	my $mesg=$ldap->search(
-						   base=>$self->{ini}->{''}->{userbase},
-						   filter=>'(&(uid='.$args{user}.') (uidNumber='.$uid.'))'
-						   );
-	if ($mesg->{errorMessage} ne '') {
-		$self->{error}=32;
-		$self->{errorString}='Fetching the entry for the user failed under "'.
-		                     $self->{ini}->{''}->{userbase}.'"'.
-		                     $mesg->{errorMessage}.'"';
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error} = 32;
+		$self->{errorString}
+			= 'Fetching the entry for the user failed under "'
+			. $self->{ini}->{''}->{userbase} . '"'
+			. $mesg->{errorMessage} . '"';
 		$self->warn;
 		return undef;
 	}
-	my $entry=$mesg->pop_entry;
+	my $entry = $mesg->pop_entry;
 
 	#if $entry is not defined or does not exist under the specified base
-	if (!defined($entry)) {
-		$self->{error}=18;
-		$self->{errorString}='The user "'.$args{user}.'" does not exist in specified group base, "'.
-		                     $self->{ini}->{''}->{userbase}.'", ';
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "'
+			. $args{user}
+			. '" does not exist in specified group base, "'
+			. $self->{ini}->{''}->{userbase} . '", ';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( !defined($entry) )
 
-	$entry->delete(gidNumber=>$gid);
-	$entry->add(gidNumber=>$args{gid});
+	$entry->delete( gidNumber => $gid );
+	$entry->add( gidNumber => $args{gid} );
 
 	#call a plugin if needed
-	if (defined($self->{ini}->{''}->{pluginUserGIDchange})) {
-		$self->plugin({
-					   ldap=>$ldap,
-					   entry=>$entry,
-					   do=>'pluginUserGIDchange',
-					   },
-					  \%args);
-	}
+	if ( defined( $self->{ini}->{''}->{pluginUserGIDchange} ) ) {
+		$self->plugin(
+			{
+				ldap  => $ldap,
+				entry => $entry,
+				do    => 'pluginUserGIDchange',
+			},
+			\%args
+		);
+	} ## end if ( defined( $self->{ini}->{''}->{pluginUserGIDchange...}))
 
 	#update the entry
-	my $mesg2=$entry->update($ldap);
-	if ($mesg2->{errorMessage} ne '') {
-		$self->{error}=29;
-		$self->{errorString}='Changing the GID to "'.$args{gid}.'" from "'.$gid
-		                     .'" for  "'.$entry->dn.'" failed. $mesg2->{errorMessage}="'.
-		                     $mesg2->{errorMessage}.'"';
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error} = 29;
+		$self->{errorString}
+			= 'Changing the GID to "'
+			. $args{gid}
+			. '" from "'
+			. $gid
+			. '" for  "'
+			. $entry->dn
+			. '" failed. $mesg2->{errorMessage}="'
+			. $mesg2->{errorMessage} . '"';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg2->{errorMessage} ne '' )
 
 	#dump the entry if asked
-	if ($args{dump}) {
+	if ( $args{dump} ) {
 		$entry->dump;
 	}
 
 	return 1;
-}
+} ## end sub userGIDchange
 
 =head2 userUIDchange
 
@@ -2663,106 +2793,118 @@ Call the dump method on the group afterwards.
 
 =cut
 
-sub userUIDchange{
-	my $self=$_[0];
+sub userUIDchange {
+	my $self = $_[0];
 	my %args;
-	if(defined($_[1])){
-		%args= %{$_[1]};
-	};
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
 
 	$self->errorblank;
 
 	#error if we don't have a group name
-	if (!defined($args{user})) {
-		$self->{error}=5;
-		$self->{errorString}='No user name specified';
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
 		$self->warn;
 		return undef;
 	}
 
 	#error if no user has been specified
-	if (!defined($args{uid})){
-		$self->{error}=30;
-		$self->{errorString}='No UID specified';
+	if ( !defined( $args{uid} ) ) {
+		$self->{error}       = 30;
+		$self->{errorString} = 'No UID specified';
 		$self->warn;
 		return undef;
 	}
 
 	#make sure the UID is complete numeric
-	if (!($args{uid}=~/^[0123456789]*$/)) {
-		$self->{error}=7;
-		$self->{errorString}='The specified UID, "'.$args{uid}.'", is not numeric';
+	if ( !( $args{uid} =~ /^[0123456789]*$/ ) ) {
+		$self->{error}       = 7;
+		$self->{errorString} = 'The specified UID, "' . $args{uid} . '", is not numeric';
 		$self->warn;
 		return undef;
 	}
 
 	#error if the user already exists
-	my ($name,$passwd,$uid,$gid,$quota,$comment,$gcos,$dir,$shell,$expire) = getpwnam($args{user});
-	if (!defined($name)) {
-		$self->{error}=17;
-		$self->{errorString}='The user "'.$args{user}.'" does not exists';
+	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gcos, $dir, $shell, $expire ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exists';
 		$self->warn;
 		return undef;
 	}
 
 	#connect to the LDAP server
-	my $ldap=$self->connect();
+	my $ldap = $self->connect();
 
 	#search and get the first entry
-	my $mesg=$ldap->search(
-						   base=>$self->{ini}->{''}->{userbase},
-						   filter=>'(&(uid='.$args{user}.') (uidNumber='.$uid.'))'
-						   );
-	if ($mesg->{errorMessage} ne '') {
-		$self->{error}=32;
-		$self->{errorString}='Fetching the entry for the user under "'.
-		                     $self->{ini}->{''}->{userbase}.'"'.
-		                     $mesg->{errorMessage}.'"';
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error} = 32;
+		$self->{errorString}
+			= 'Fetching the entry for the user under "'
+			. $self->{ini}->{''}->{userbase} . '"'
+			. $mesg->{errorMessage} . '"';
 		$self->warn;
 		return undef;
 	}
-	my $entry=$mesg->pop_entry;
+	my $entry = $mesg->pop_entry;
 
 	#if $entry is not defined or does not exist under the specified base
-	if (!defined($entry)) {
-		$self->{error}=18;
-		$self->{errorString}='The user "'.$args{user}.'" does not exist in specified group base, "'.
-		                     $self->{ini}->{''}->{userbase}.'", ';
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "'
+			. $args{user}
+			. '" does not exist in specified group base, "'
+			. $self->{ini}->{''}->{userbase} . '", ';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( !defined($entry) )
 
-	$entry->delete(uidNumber=>$uid);
-	$entry->add(uidNumber=>$args{uid});
+	$entry->delete( uidNumber => $uid );
+	$entry->add( uidNumber => $args{uid} );
 
 	#call a plugin if needed
-	if (defined($self->{ini}->{''}->{pluginUserUIDchange})) {
-		$self->plugin({
-					   ldap=>$ldap,
-					   entry=>$entry,
-					   do=>'pluginUserGIDchange',
-					   },
-					  \%args);
-	}
+	if ( defined( $self->{ini}->{''}->{pluginUserUIDchange} ) ) {
+		$self->plugin(
+			{
+				ldap  => $ldap,
+				entry => $entry,
+				do    => 'pluginUserGIDchange',
+			},
+			\%args
+		);
+	} ## end if ( defined( $self->{ini}->{''}->{pluginUserUIDchange...}))
 
 	#update the entry
-	my $mesg2=$entry->update($ldap);
-	if ($mesg2->{errorMessage} ne '') {
-		$self->{error}=31;
-		$self->{errorString}='Changing the UID to "'.$args{uid}.'" from "'.$uid
-		                     .'" for  "'.$entry->dn.'" failed. $mesg2->{errorMessage}="'.
-		                     $mesg2->{errorMessage}.'"';
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error} = 31;
+		$self->{errorString}
+			= 'Changing the UID to "'
+			. $args{uid}
+			. '" from "'
+			. $uid
+			. '" for  "'
+			. $entry->dn
+			. '" failed. $mesg2->{errorMessage}="'
+			. $mesg2->{errorMessage} . '"';
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg2->{errorMessage} ne '' )
 
 	#dump the entry if asked
-	if ($args{dump}) {
+	if ( $args{dump} ) {
 		$entry->dump;
 	}
 
 	return 1;
-}
+} ## end sub userUIDchange
 
 =head1 ERROR CODES
 

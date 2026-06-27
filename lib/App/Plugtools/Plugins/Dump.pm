@@ -38,23 +38,23 @@ The function that will be called by App::Plugtools.
 
 =cut
 
-sub plugin{
+sub plugin {
 	my %opts;
-	if(defined($_[1])){
-		%opts= %{$_[1]};
-	};
+	if ( defined( $_[1] ) ) {
+		%opts = %{ $_[1] };
+	}
 	my %args;
-	if(defined($_[2])){
-		%args= %{$_[2]};
-	};
+	if ( defined( $_[2] ) ) {
+		%args = %{ $_[2] };
+	}
 
-	print '%opts=...'."\n".Dumper(\%opts)."\n\n".'%args=...'."\n".Dumper(\%args);
+	print '%opts=...' . "\n" . Dumper( \%opts ) . "\n\n" . '%args=...' . "\n" . Dumper( \%args );
 
 	my %returned;
-	$returned{error}=undef;
+	$returned{error} = undef;
 
 	return %returned;
-}
+} ## end sub plugin
 
 =head1 ERROR CODES
 
@@ -117,4 +117,4 @@ under the same terms as Perl itself.
 
 =cut
 
-1; # End of App::Plugtools
+1;    # End of App::Plugtools

@@ -4,7 +4,7 @@ use Mojo::Base 'Mojolicious';
 use File::ShareDir qw(dist_dir);
 use App::Plugtools;
 
-our $VERSION = '1.3.0';
+our $VERSION = '0.0.1';
 
 sub startup {
 	my $self = shift;
@@ -13,8 +13,7 @@ sub startup {
 	my $share;
 	if ( -d 'share' ) {
 		$share = 'share';
-	}
-	else {
+	} else {
 		eval { $share = dist_dir('App-Plugtools') };
 		die "Cannot locate share dir (run 'make bootstrap' if not yet done): $@" if $@;
 	}
@@ -61,6 +60,6 @@ sub startup {
 	$r->post('/groups/:group/delete')->to('groups#delete')->name('groups_delete');
 	$r->post('/groups/:group/members')->to('groups#add_member')->name('groups_add_member');
 	$r->post('/groups/:group/members/:user/delete')->to('groups#remove_member')->name('groups_remove_member');
-}
+} ## end sub startup
 
 1;
