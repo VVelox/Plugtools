@@ -20,10 +20,12 @@ sub main::HELP_MESSAGE {
 		. "-g <GID>  - The GID to change the user to.\n"
 		. "-U <UID>  - The UID to change.\n"
 		. "-c <GECOS>  - The GECOS to set the user to.\n"
+		. "-H <home>  - The home directory to set the user to.\n"
 		. "-l  - Print any changes to LDAP.\n" . "\n"
 		. "actions:\n"
 		. "gecos - Change the GECOS field for a user.\n"
 		. "gid - Change the primary GID for a user.\n"
+		. "home - Change the home directory for a user.\n"
 		. "uid - Change the UID for a user.\n"
 		. "shell - Change the shell for a user.\n" . "\n"
 		. "For more info, see the the perldocs for App::Plugtools and plurm...\n"
@@ -33,7 +35,7 @@ sub main::HELP_MESSAGE {
 
 #gets the options
 my %opts = ();
-getopts( 'u:a:g:U:c:ls:', \%opts );
+getopts( 'u:a:g:U:c:ls:H:', \%opts );
 
 if ( !defined( $opts{u} ) ) {
 	warn('plumod:254: No user name specified');
@@ -93,6 +95,20 @@ if ( $opts{a} eq 'gid' ) {
 	}
 } ## end if ( $opts{a} eq 'gid' )
 
+if ( $opts{a} eq 'home' ) {
+	$pt->userHomeChange(
+		{
+			user => $opts{u},
+			home => $opts{H},
+			dump => $opts{l},
+		}
+	);
+	if ( $pt->error ) {
+		warn('plumod: Failed to modify the user');
+		exit $pt->error;
+	}
+} ## end if ( $opts{a} eq 'home' )
+
 if ( $opts{a} eq 'uid' ) {
 	$pt->userUIDchange(
 		{
@@ -117,6 +133,7 @@ plumod - Modify a user in LDAP.
 
 plumod B<-a> gecos B<-u> <user> B<-c> <gecos> [B<-l>]
 plumod B<-a> gid B<-u> <user> B<-g> <GID> [B<-l>]
+plumod B<-a> home B<-u> <user> B<-H> <home> [B<-l>]
 plumod B<-a> shell B<-u> <user> B<-s> <shell> [B<-l>]
 plumod B<-a> uid B<-u> <user> B<-U> <UID> [B<-l>]
 
@@ -136,6 +153,10 @@ Change the GECOS for a user.
 
 Change the gid for a user.
 
+=head4 home
+
+Change the home directory for a user.
+
 =head4 shell
 
 Change the shell for a user.
@@ -151,6 +172,10 @@ Specifiy the new GECOS for a user.
 =head2 -g <GID>
 
 The new GID for a user.
+
+=head2 -H <home>
+
+The new home directory for a user.
 
 =head2 -s <shell>
 
