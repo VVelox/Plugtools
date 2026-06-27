@@ -474,7 +474,7 @@ sub addUser{
 
 	#add it
 	my $mesg=$entry->update($ldap);
-	if (!$mesg->{errorMessage} eq '') {
+	if ($mesg->{errorMessage} ne '') {
 		$self->{error}=19;
 		$self->{errorString}='$entry->update($ldap) failed. $mesg->{errorMessage}="'.
 		                     $mesg->{errorMessage}.'"';
@@ -578,7 +578,7 @@ sub connect{
 							   ciphers=>$self->{ini}->{''}->{SSLciphers},
 							   );
 
-		if (!$mesg->{errorMessage} eq '') {
+		if ($mesg->{errorMessage} ne '') {
 			$self->{error}=13;
 			$self->{errorString}='$ldap->start_tls failed. $mesg->{errorMessage}="'.
 			                     $mesg->{errorMessage}.'"';
@@ -1249,7 +1249,7 @@ sub groupGIDchange {
 
 	#update the entry
 	my $mesg2=$entry->update($ldap);
-	if (!$mesg2->{errorMessage} eq '') {
+	if ($mesg2->{errorMessage} ne '') {
 		$self->{error}=29;
 		$self->{errorString}='Updating the GID from "'.$gid.'" to "'.$args{gid}.
 		                     '" for "'.$entry->dn.'" failed. $mesg2->{errorMEssage}="'.
