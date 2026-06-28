@@ -175,6 +175,12 @@ sub update {
 	} elsif ( $action eq 'postalAddress_remove' ) {
 		eval { $self->pt->userPostalAddressRemove( { user => $user, postalAddress => $self->param('postalAddress') } ) };
 		$error = $@;
+	} elsif ( $action eq 'cn_add' ) {
+		eval { $self->pt->userCNadd( { user => $user, cn => $self->param('cn') } ) };
+		$error = $@;
+	} elsif ( $action eq 'cn_remove' ) {
+		eval { $self->pt->userCNremove( { user => $user, cn => $self->param('cn') } ) };
+		$error = $@;
 	} else {
 		$self->flash( error => "Unknown action: $action" );
 		return $self->redirect_to( 'users_show', user => $user );

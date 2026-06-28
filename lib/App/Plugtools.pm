@@ -141,6 +141,8 @@ sub new {
 				67 => 'noNetgroupName',
 				68 => 'noTripleSpecified',
 				69 => 'noMemberSpecified',
+				70 => 'noCN',
+				71 => 'lastCN',
 			},
 			fatal_flags      => {},
 			perror_not_fatal => 0,
@@ -6465,6 +6467,187 @@ sub userConvertToInetOrgPerson {
 	$new_entry->dump if $args{dump};
 	return 1;
 } ## end sub userConvertToInetOrgPerson
+
+=head2 userCNadd
+
+Add an additional C<cn> value to a user entry.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid) to act on. Required.
+
+=head4 cn
+
+The CN value to add. Required.
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userCNadd({ user => 'jsmith', cn => 'John Smith' });
+
+=cut
+
+sub userCNadd {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{cn} ) || $args{cn} eq '' ) {
+		$self->{error}       = 70;
+		$self->{errorString} = 'No CN value specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->add( cn => $args{cn} );
+
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Adding cn "' . $args{cn} . '" for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userCNadd
+
+=head2 userCNremove
+
+Remove a C<cn> value from a user entry.  Refuses to remove the last
+remaining value since C<cn> is a MUST attribute of posixAccount.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid) to act on. Required.
+
+=head4 cn
+
+The CN value to remove. Required.
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userCNremove({ user => 'jsmith', cn => 'J Smith' });
+
+=cut
+
+sub userCNremove {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{cn} ) || $args{cn} eq '' ) {
+		$self->{error}       = 70;
+		$self->{errorString} = 'No CN value specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	my @current = $entry->get_value('cn');
+	if ( @current <= 1 ) {
+		$self->{error}       = 71;
+		$self->{errorString} = 'Cannot remove the last cn value from "' . $args{user} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->delete( cn => [ $args{cn} ] );
+
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Removing cn "' . $args{cn} . '" for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userCNremove
 
 # Format a Net::LDAP::Entry as a human-readable string for diagnostic output.
 sub _entryToString {

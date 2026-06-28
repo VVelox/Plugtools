@@ -28,6 +28,32 @@
               <td><%= $entry->get_value('uid') %></td>
               <td></td>
             </tr>
+            % my @cn_vals = $entry->get_value('cn');
+            <tr>
+              <th class="ps-3 align-top">CN</th>
+              <td colspan="2" class="pe-3">
+                % for my $cn_val (sort @cn_vals) {
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                  <span><%= $cn_val %></span>
+                  % if (@cn_vals > 1) {
+                  <form method="post" action="/users/<%= $username %>" class="d-inline ms-2 flex-shrink-0"
+                        data-confirm="Remove CN value &#39;<%= $cn_val %>&#39;?">
+                    <input type="hidden" name="action" value="cn_remove">
+                    <input type="hidden" name="cn" value="<%= $cn_val %>">
+                    <button class="btn btn-outline-danger btn-sm py-0" title="Remove">&#10005;</button>
+                  </form>
+                  % } else {
+                  <span data-bs-toggle="tooltip" title="Cannot remove the last CN value">
+                    <button class="btn btn-outline-danger btn-sm py-0" disabled>&#10005;</button>
+                  </span>
+                  % }
+                % }
+                <div class="mt-1">
+                  <button class="btn btn-sm btn-outline-primary py-0"
+                          data-bs-toggle="modal" data-bs-target="#modal-cn-add">+ Add</button>
+                </div>
+              </td>
+            </tr>
             <tr>
               <th class="ps-3">UID</th>
               <td><%= $entry->get_value('uidNumber') %></td>
@@ -243,6 +269,28 @@
 </div>
 
 <!-- ===== POSIX modals ===== -->
+
+<div class="modal fade" id="modal-cn-add" tabindex="-1">
+  <div class="modal-dialog"><div class="modal-content">
+    <form method="post" action="/users/<%= $username %>">
+      <input type="hidden" name="action" value="cn_add">
+      <div class="modal-header">
+        <h5 class="modal-title">Add CN Value</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label">Common Name</label>
+        <input type="text" name="cn" class="form-control" required
+               placeholder="e.g. Jane Doe">
+        <div class="form-text">Additional CN values supplement the primary name used for LDAP lookups.</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">Add</button>
+      </div>
+    </form>
+  </div></div>
+</div>
 
 <div class="modal fade" id="modal-password-remove" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
