@@ -60,7 +60,28 @@ sub show {
 		close $fh;
 	}
 
-	$self->render( template => 'users/show', entry => $entry, username => $user, shells => \@shells );
+	my ( @member_groups, @nonmember_groups );
+	my $all_groups;
+	eval { $all_groups = $self->pt->getGroups };
+	if ( !$@ && $all_groups ) {
+		for my $g ( sort { $a->get_value('cn') cmp $b->get_value('cn') } @{$all_groups} ) {
+			my %members = map { $_ => 1 } $g->get_value('memberUid');
+			if ( $members{$user} ) {
+				push @member_groups, $g;
+			} else {
+				push @nonmember_groups, $g;
+			}
+		}
+	}
+
+	$self->render(
+		template       => 'users/show',
+		entry          => $entry,
+		username       => $user,
+		shells         => \@shells,
+		member_groups  => \@member_groups,
+		nonmember_groups => \@nonmember_groups,
+	);
 } ## end sub show
 
 sub update {
@@ -208,5 +229,44 @@ sub password {
 	$self->flash( success => "Password updated for '$user'." );
 	$self->redirect_to( 'users_show', user => $user );
 } ## end sub password
+
+sub add_to_group {
+	my $self   = shift;
+	my $user   = $self->param('user');
+	my @groups = @{ $self->every_param('group') };
+
+	my ( @added, @failed );
+	for my $group (@groups) {
+		eval { $self->pt->groupAddUser( { user => $user, group => $group } ) };
+		if ($@) {
+			push @failed, $group;
+		} else {
+			push @added, $group;
+		}
+	}
+
+	if (@failed) {
+		$self->flash( error => "Failed to add '$user' to: " . join( ', ', @failed ) );
+	}
+	if (@added) {
+		$self->flash( success => "Added '$user' to: " . join( ', ', @added ) );
+	}
+	$self->redirect_to( 'users_show', user => $user );
+} ## end sub add_to_group
+
+sub remove_from_group {
+	my $self  = shift;
+	my $user  = $self->param('user');
+	my $group = $self->param('group');
+
+	eval { $self->pt->groupRemoveUser( { user => $user, group => $group } ) };
+	if ($@) {
+		$self->flash( error => "Failed to remove '$user' from group '$group': $@" );
+		return $self->redirect_to( 'users_show', user => $user );
+	}
+
+	$self->flash( success => "Removed '$user' from group '$group'." );
+	$self->redirect_to( 'users_show', user => $user );
+} ## end sub remove_from_group
 
 1;

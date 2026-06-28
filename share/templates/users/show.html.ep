@@ -181,6 +181,41 @@
 </div>
 % } # end inetOrgPerson else
 
+<!-- Group Memberships -->
+<div class="card mt-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <strong>Group Memberships</strong>
+    % if (@{$nonmember_groups}) {
+    <button class="btn btn-sm btn-outline-primary py-0"
+            data-bs-toggle="modal" data-bs-target="#modal-group-add">+ Add to Group</button>
+    % }
+  </div>
+  <div class="card-body p-0">
+    % if (@{$member_groups}) {
+    <table class="table table-sm mb-0">
+      <tbody>
+        % for my $g (@{$member_groups}) {
+        % my $gname = $g->get_value('cn');
+        <tr>
+          <td class="ps-3"><a href="/groups/<%= $gname %>"><%= $gname %></a></td>
+          <td class="text-muted"><small>GID <%= $g->get_value('gidNumber') %></small></td>
+          <td class="text-end pe-3">
+            <form method="post" action="/users/<%= $username %>/groups/<%= $gname %>/remove"
+                  onsubmit="return confirm('Remove <%= $username %> from group <%= $gname %>?')"
+                  class="d-inline">
+              <button class="btn btn-outline-danger btn-sm py-0" title="Remove from group">&#10005;</button>
+            </form>
+          </td>
+        </tr>
+        % }
+      </tbody>
+    </table>
+    % } else {
+    <p class="text-muted p-3 mb-0">Not a member of any supplementary groups.</p>
+    % }
+  </div>
+</div>
+
 <!-- Danger zone -->
 <div class="card border-danger mt-4">
   <div class="card-header text-danger"><strong>Danger Zone</strong></div>
@@ -633,3 +668,55 @@
     </form>
   </div></div>
 </div>
+
+<!-- ===== Group membership modal ===== -->
+
+% if (@{$nonmember_groups}) {
+<div class="modal fade" id="modal-group-add" tabindex="-1">
+  <div class="modal-dialog modal-lg"><div class="modal-content">
+    <form method="post" action="/users/<%= $username %>/groups">
+      <div class="modal-header">
+        <h5 class="modal-title">Add to Groups</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0">
+        <table class="table table-sm table-hover mb-0" id="group-add-table">
+          <thead>
+            <tr>
+              <th style="width:1%" class="ps-3">
+                <input type="checkbox" id="group-add-all" title="Select all">
+              </th>
+              <th>Group</th>
+              <th>GID</th>
+            </tr>
+          </thead>
+          <tbody>
+            % for my $g (@{$nonmember_groups}) {
+            % my $gname = $g->get_value('cn');
+            <tr style="cursor:pointer" onclick="var cb=this.querySelector('input[type=checkbox]');cb.checked=!cb.checked">
+              <td class="ps-3">
+                <input type="checkbox" name="group" value="<%= $gname %>"
+                       onclick="event.stopPropagation()">
+              </td>
+              <td><%= $gname %></td>
+              <td class="text-muted"><small><%= $g->get_value('gidNumber') %></small></td>
+            </tr>
+            % }
+          </tbody>
+        </table>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">Add Selected</button>
+      </div>
+    </form>
+  </div></div>
+</div>
+<script>
+document.getElementById('group-add-all').addEventListener('change', function() {
+  document.querySelectorAll('#group-add-table input[name=group]').forEach(function(cb) {
+    cb.checked = document.getElementById('group-add-all').checked;
+  });
+});
+</script>
+% }
