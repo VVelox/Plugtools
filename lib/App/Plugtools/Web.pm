@@ -10,14 +10,7 @@ our $VERSION = '0.0.1';
 sub startup {
 	my $self = shift;
 
-	# Locate share dir: prefer local ./share for development
-	my $share;
-	if ( -d 'share' ) {
-		$share = 'share';
-	} else {
-		eval { $share = dist_dir('App-Plugtools') };
-		die "Cannot locate share dir (run 'make bootstrap' if not yet done): $@" if $@;
-	}
+	my $share = dist_dir('App-Plugtools');
 	push @{ $self->renderer->paths }, "$share/templates";
 	push @{ $self->static->paths },   "$share/public";
 
