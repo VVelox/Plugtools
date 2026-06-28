@@ -35,7 +35,7 @@
         <td class="text-end">
           <a href="/users/<%= $uid %>/edit" class="btn btn-outline-secondary btn-sm">Edit</a>
           <form method="post" action="/users/<%= $uid %>/delete" class="d-inline"
-                onsubmit="return confirm('Delete user <%= $uid %>?')">
+                data-confirm="Delete user <%= $uid %>?">
             <button class="btn btn-outline-danger btn-sm">Delete</button>
           </form>
         </td>

@@ -165,7 +165,7 @@
       display name, and postal address.
     </p>
     <form method="post" action="/users/<%= $username %>/inetorgperson"
-          onsubmit="return confirm('Convert <%= $username %> to inetOrgPerson?')">
+          data-confirm="Convert <%= $username %> to inetOrgPerson?">
       <button class="btn btn-outline-primary">Convert to inetOrgPerson</button>
     </form>
   </div>
@@ -192,7 +192,7 @@
           <td class="text-muted"><small>GID <%= $g->get_value('gidNumber') %></small></td>
           <td class="text-end pe-3">
             <form method="post" action="/users/<%= $username %>/groups/<%= $gname %>/remove"
-                  onsubmit="return confirm('Remove <%= $username %> from group <%= $gname %>?')"
+                  data-confirm="Remove <%= $username %> from group <%= $gname %>?"
                   class="d-inline">
               <button class="btn btn-outline-danger btn-sm py-0" title="Remove from group">&#10005;</button>
             </form>
@@ -212,7 +212,7 @@
   <div class="card-header text-danger"><strong>Danger Zone</strong></div>
   <div class="card-body">
     <form method="post" action="/users/<%= $username %>/delete"
-          onsubmit="return confirm('Permanently delete user <%= $username %>?')">
+          data-confirm="Permanently delete user <%= $username %>?">
       <div class="form-check mb-2">
         <input class="form-check-input" type="checkbox" name="removeHome" value="1" id="removeHome">
         <label class="form-check-label" for="removeHome">Remove home directory</label>

@@ -5,7 +5,7 @@
   <h2>Groups</h2>
   <div>
     <form method="post" action="/groups/clean" class="d-inline"
-          onsubmit="return confirm('Remove stale members from all groups?')">
+          data-confirm="Remove stale members from all groups?">
       <button class="btn btn-outline-secondary me-2">Clean Groups</button>
     </form>
     <a href="/groups/add" class="btn btn-primary">+ Add Group</a>
@@ -43,7 +43,7 @@
         <td class="text-end">
           <a href="/groups/<%= $cn %>/edit" class="btn btn-outline-secondary btn-sm">Edit</a>
           <form method="post" action="/groups/<%= $cn %>/delete" class="d-inline"
-                onsubmit="return confirm('Delete group <%= $cn %>?')">
+                data-confirm="Delete group <%= $cn %>?">
             <button class="btn btn-outline-danger btn-sm">Delete</button>
           </form>
         </td>
