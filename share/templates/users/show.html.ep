@@ -163,7 +163,23 @@
   </div>
 </div>
 
-% } # end inetOrgPerson check
+% } else {
+<!-- Convert to inetOrgPerson -->
+<div class="card mt-4">
+  <div class="card-header"><strong>Contact &amp; Profile</strong></div>
+  <div class="card-body">
+    <p class="mb-3 text-muted">
+      This account does not have the <code>inetOrgPerson</code> objectClass.
+      Converting it enables contact and profile fields such as email, phone,
+      display name, and postal address.
+    </p>
+    <form method="post" action="/users/<%= $username %>/inetorgperson"
+          onsubmit="return confirm('Convert <%= $username %> to inetOrgPerson?')">
+      <button class="btn btn-outline-primary">Convert to inetOrgPerson</button>
+    </form>
+  </div>
+</div>
+% } # end inetOrgPerson else
 
 <!-- Danger zone -->
 <div class="card border-danger mt-4">

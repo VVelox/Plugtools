@@ -180,6 +180,20 @@ sub delete {
 	$self->redirect_to('users_index');
 } ## end sub delete
 
+sub inetorgperson {
+	my $self = shift;
+	my $user = $self->param('user');
+
+	eval { $self->pt->userConvertToInetOrgPerson( { user => $user } ) };
+	if ($@) {
+		$self->flash( error => "Failed to convert '$user' to inetOrgPerson: $@" );
+		return $self->redirect_to( 'users_show', user => $user );
+	}
+
+	$self->flash( success => "User '$user' converted to inetOrgPerson." );
+	$self->redirect_to( 'users_show', user => $user );
+} ## end sub inetorgperson
+
 sub password {
 	my $self = shift;
 	my $user = $self->param('user');

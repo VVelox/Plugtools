@@ -47,6 +47,7 @@ sub startup {
 	$r->post('/users/:user')->to('users#update')->name('users_update');
 	$r->post('/users/:user/delete')->to('users#delete')->name('users_delete');
 	$r->post('/users/:user/password')->to('users#password')->name('users_password');
+	$r->post('/users/:user/inetorgperson')->to('users#inetorgperson')->name('users_inetorgperson');
 
 	# Groups — /groups/add and /groups/clean before /groups/:group
 	$r->get('/groups')->to('groups#index')->name('groups_index');

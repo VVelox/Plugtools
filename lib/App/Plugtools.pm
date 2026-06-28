@@ -7,6 +7,7 @@ use File::BaseDir qw/xdg_config_home/;
 use Sys::User::UIDhelper;
 use Sys::Group::GIDhelper;
 use Net::LDAP;
+use Net::LDAP::Entry;
 use Net::LDAP::posixAccount;
 use Net::LDAP::posixGroup;
 use String::ShellQuote;
@@ -134,6 +135,7 @@ sub new {
 				61 => 'noPostalAddress',
 				62 => 'noHomePostalAddress',
 				63 => 'noDisplayName',
+				64 => 'alreadyInetOrgPerson',
 			},
 			fatal_flags      => {},
 			perror_not_fatal => 0,
@@ -5445,6 +5447,172 @@ sub userPostalAddressRemove {
 	$entry->dump if $args{dump};
 	return 1;
 } ## end sub userPostalAddressRemove
+
+=head2 userConvertToInetOrgPerson
+
+Converts a user's LDAP entry to use the C<inetOrgPerson> objectClass,
+enabling contact and profile attributes.
+
+Because OpenLDAP does not permit changing the structural objectClass chain of
+an existing entry (C<account> and C<person>/C<inetOrgPerson> are independent
+structural chains), this method performs a B<delete-and-re-add>: the original
+entry is deleted and immediately re-added with the corrected objectClass list.
+
+Specifically it:
+
+=over 4
+
+=item * Removes C<account> from the objectClass list.
+
+=item * Adds C<person>, C<organizationalPerson>, and C<inetOrgPerson>.
+
+=item * Ensures C<sn> is populated (required by C<person>), falling back to
+the uid if unset.
+
+=back
+
+If the delete succeeds but the re-add fails, a full diagnostic dump is printed
+to STDERR and an error is set.  The original entry will need to be restored
+manually or from a backup.
+
+Returns 1 on success.  If the entry already has C<inetOrgPerson> the method
+returns 1 immediately without touching the entry.
+
+=head3 args hash
+
+=head4 user
+
+The user to convert.
+
+=head4 dump
+
+Call the dump method on the resulting entry afterwards.
+
+    $pt->userConvertToInetOrgPerson({ user => 'jsmith' });
+
+=cut
+
+sub userConvertToInetOrgPerson {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	# Already converted — nothing to do
+	my %oc_map = map { lc($_) => 1 } $entry->get_value('objectClass');
+	return 1 if $oc_map{inetorgperson};
+
+	# Snapshot original for diagnostics
+	my $before = _entryToString($entry);
+
+	# Build the new objectClass list: drop account, add inetOrgPerson chain
+	my @new_oc    = grep { lc($_) ne 'account' } $entry->get_value('objectClass');
+	my %new_oc_map = map { lc($_) => 1 } @new_oc;
+	my @oc_added;
+	for my $oc (qw(top person organizationalPerson inetOrgPerson)) {
+		unless ( $new_oc_map{ lc($oc) } ) {
+			push @new_oc,   $oc;
+			push @oc_added, $oc;
+		}
+	}
+	my $sn_to_add = $entry->get_value('sn') ? undef : $args{user};
+
+	# Build change description for diagnostics
+	my $changes = $oc_map{account} ? "  Remove objectClass: account\n" : '';
+	$changes .= "  Add objectClass: $_\n" for @oc_added;
+	$changes .= "  Add sn: $sn_to_add (fallback — not already set)\n" if defined $sn_to_add;
+
+	# Construct the replacement entry with the same DN and all attributes
+	my $new_entry = Net::LDAP::Entry->new;
+	$new_entry->dn( $entry->dn );
+	for my $attr ( $entry->attributes ) {
+		next if lc($attr) eq 'objectclass';
+		$new_entry->add( $attr => [ $entry->get_value($attr) ] );
+	}
+	$new_entry->add( objectClass => \@new_oc );
+	$new_entry->add( sn          => $sn_to_add ) if defined $sn_to_add;
+
+	my $after = _entryToString($new_entry);
+
+	# Delete the original entry
+	my $del_mesg = $ldap->delete( $entry->dn );
+	if ( $del_mesg->code ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Deleting "' . $entry->dn . '" prior to re-add failed: ' . $del_mesg->error;
+		warn "userConvertToInetOrgPerson diagnostic dump\n"
+			. "=== Original entry ===\n" . $before
+			. "=== Attempted changes ===\n" . $changes
+			. "=== Resulting entry (not written) ===\n" . $after;
+		$self->warn;
+		return undef;
+	}
+
+	# Re-add with the corrected objectClass chain
+	my $add_mesg = $ldap->add($new_entry);
+	if ( $add_mesg->code ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Re-adding "' . $entry->dn . '" as inetOrgPerson failed: ' . $add_mesg->error
+			. ' — original entry was deleted and must be restored manually';
+		warn "userConvertToInetOrgPerson diagnostic dump\n"
+			. "=== Original entry (now deleted) ===\n" . $before
+			. "=== Attempted changes ===\n" . $changes
+			. "=== Resulting entry (failed to write) ===\n" . $after;
+		$self->warn;
+		return undef;
+	}
+
+	$new_entry->dump if $args{dump};
+	return 1;
+} ## end sub userConvertToInetOrgPerson
+
+# Format a Net::LDAP::Entry as a human-readable string for diagnostic output.
+sub _entryToString {
+	my ($entry) = @_;
+	my $out = 'dn: ' . $entry->dn . "\n";
+	for my $attr ( sort $entry->attributes ) {
+		for my $val ( $entry->get_value($attr) ) {
+			$out .= "  $attr: $val\n";
+		}
+	}
+	return $out;
+}
 
 	1;
 
