@@ -64,6 +64,8 @@ sub _install_stubs {
 	my ( $app, %overrides ) = @_;
 
 	my %defaults = (
+		error                     => sub { 0 },
+		errorString               => sub { '' },
 		netgroupbaseConfigured    => sub { 1 },
 		getNetgroups              => sub { [ $ng_alpha, $ng_beta ] },
 		getNetgroupEntry          => sub { $ng_alpha },

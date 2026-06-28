@@ -2,6 +2,19 @@ package App::Plugtools::Web::Controller::Users;
 
 use Mojo::Base 'Mojolicious::Controller';
 
+# Invoke a coderef that calls a pt method.  Returns an error string if the
+# call died OR if the pt helper recorded an Error::Helper error, empty string
+# on success.  This covers both die-based and return-undef-based failures.
+sub _pt_call {
+	my ( $self, $code ) = @_;
+	eval { $code->() };
+	return $@ if $@;
+	if ( $self->pt->error ) {
+		return $self->pt->errorString || ( 'Error code ' . $self->pt->error );
+	}
+	return '';
+} ## end sub _pt_call
+
 sub index {
 	my $self = shift;
 
@@ -29,9 +42,9 @@ sub create {
 	# Remove empty strings so App::Plugtools uses its defaults
 	delete $params{$_} for grep { !defined $params{$_} || $params{$_} eq '' } keys %params;
 
-	eval { $self->pt->addUser( \%params ) };
-	if ($@) {
-		$self->flash( error => "Failed to add user: $@" );
+	my $error = $self->_pt_call( sub { $self->pt->addUser( \%params ) } );
+	if ($error) {
+		$self->flash( error => "Failed to add user: $error" );
 		return $self->redirect_to('users_add');
 	}
 
@@ -45,8 +58,9 @@ sub show {
 
 	my $entry;
 	eval { $entry = $self->pt->getUserEntry( { user => $user } ) };
-	if ($@) {
-		$self->flash( error => "Failed to fetch user '$user': $@" );
+	if ( $@ || $self->pt->error ) {
+		my $msg = $@ || $self->pt->errorString || 'Unknown error';
+		$self->flash( error => "Failed to fetch user '$user': $msg" );
 		return $self->redirect_to('users_index');
 	}
 
@@ -106,100 +120,69 @@ sub update {
 
 	my $error;
 	if ( $action eq 'gecos' ) {
-		eval { $self->pt->userGECOSchange( { user => $user, gecos => $self->param('gecos') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userGECOSchange( { user => $user, gecos => $self->param('gecos') } ) } );
 	} elsif ( $action eq 'shell' ) {
-		eval { $self->pt->userShellChange( { user => $user, shell => $self->param('shell') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userShellChange( { user => $user, shell => $self->param('shell') } ) } );
 	} elsif ( $action eq 'uid' ) {
-		eval { $self->pt->userUIDchange( { user => $user, uid => $self->param('uid') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userUIDchange( { user => $user, uid => $self->param('uid') } ) } );
 	} elsif ( $action eq 'gid' ) {
-		eval { $self->pt->userGIDchange( { user => $user, gid => $self->param('gid') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userGIDchange( { user => $user, gid => $self->param('gid') } ) } );
 	} elsif ( $action eq 'home' ) {
-		eval { $self->pt->userHomeChange( { user => $user, home => $self->param('home') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userHomeChange( { user => $user, home => $self->param('home') } ) } );
 	} elsif ( $action eq 'title' ) {
-		eval { $self->pt->userTitleChange( { user => $user, title => $self->param('title') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userTitleChange( { user => $user, title => $self->param('title') } ) } );
 	} elsif ( $action eq 'roomNumber' ) {
-		eval { $self->pt->userRoomNumberChange( { user => $user, roomNumber => $self->param('roomNumber') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userRoomNumberChange( { user => $user, roomNumber => $self->param('roomNumber') } ) } );
 	} elsif ( $action eq 'employeeNumber' ) {
-		eval { $self->pt->userEmployeeNumberChange( { user => $user, employeeNumber => $self->param('employeeNumber') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userEmployeeNumberChange( { user => $user, employeeNumber => $self->param('employeeNumber') } ) } );
 	} elsif ( $action eq 'employeeType' ) {
-		eval { $self->pt->userEmployeeTypeChange( { user => $user, employeeType => $self->param('employeeType') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userEmployeeTypeChange( { user => $user, employeeType => $self->param('employeeType') } ) } );
 	} elsif ( $action eq 'mail_add' ) {
-		eval { $self->pt->userMailAdd( { user => $user, mail => $self->param('mail') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userMailAdd( { user => $user, mail => $self->param('mail') } ) } );
 	} elsif ( $action eq 'mail_remove' ) {
-		eval { $self->pt->userMailRemove( { user => $user, mail => $self->param('mail') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userMailRemove( { user => $user, mail => $self->param('mail') } ) } );
 	} elsif ( $action eq 'telephoneNumber_add' ) {
-		eval { $self->pt->userTelephoneNumberAdd( { user => $user, telephoneNumber => $self->param('telephoneNumber') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userTelephoneNumberAdd( { user => $user, telephoneNumber => $self->param('telephoneNumber') } ) } );
 	} elsif ( $action eq 'telephoneNumber_remove' ) {
-		eval { $self->pt->userTelephoneNumberRemove( { user => $user, telephoneNumber => $self->param('telephoneNumber') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userTelephoneNumberRemove( { user => $user, telephoneNumber => $self->param('telephoneNumber') } ) } );
 	} elsif ( $action eq 'mobile_add' ) {
-		eval { $self->pt->userMobileAdd( { user => $user, mobile => $self->param('mobile') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userMobileAdd( { user => $user, mobile => $self->param('mobile') } ) } );
 	} elsif ( $action eq 'mobile_remove' ) {
-		eval { $self->pt->userMobileRemove( { user => $user, mobile => $self->param('mobile') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userMobileRemove( { user => $user, mobile => $self->param('mobile') } ) } );
 	} elsif ( $action eq 'preferredLanguage_add' ) {
-		eval { $self->pt->userPreferredLanguageAdd( { user => $user, preferredLanguage => $self->param('preferredLanguage') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userPreferredLanguageAdd( { user => $user, preferredLanguage => $self->param('preferredLanguage') } ) } );
 	} elsif ( $action eq 'preferredLanguage_remove' ) {
-		eval { $self->pt->userPreferredLanguageRemove( { user => $user, preferredLanguage => $self->param('preferredLanguage') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userPreferredLanguageRemove( { user => $user, preferredLanguage => $self->param('preferredLanguage') } ) } );
 	} elsif ( $action eq 'labeledURI_add' ) {
-		eval { $self->pt->userLabeledURIAdd( { user => $user, labeledURI => $self->param('labeledURI') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userLabeledURIAdd( { user => $user, labeledURI => $self->param('labeledURI') } ) } );
 	} elsif ( $action eq 'labeledURI_remove' ) {
-		eval { $self->pt->userLabeledURIRemove( { user => $user, labeledURI => $self->param('labeledURI') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userLabeledURIRemove( { user => $user, labeledURI => $self->param('labeledURI') } ) } );
 	} elsif ( $action eq 'sn' ) {
-		eval { $self->pt->userSNchange( { user => $user, sn => $self->param('sn') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userSNchange( { user => $user, sn => $self->param('sn') } ) } );
 	} elsif ( $action eq 'givenName' ) {
-		eval { $self->pt->userGivenNameChange( { user => $user, givenName => $self->param('givenName') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userGivenNameChange( { user => $user, givenName => $self->param('givenName') } ) } );
 	} elsif ( $action eq 'displayName' ) {
-		eval { $self->pt->userDisplayNameChange( { user => $user, displayName => $self->param('displayName') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userDisplayNameChange( { user => $user, displayName => $self->param('displayName') } ) } );
 	} elsif ( $action eq 'homePostalAddress' ) {
-		eval { $self->pt->userHomePostalAddressChange( { user => $user, homePostalAddress => $self->param('homePostalAddress') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userHomePostalAddressChange( { user => $user, homePostalAddress => $self->param('homePostalAddress') } ) } );
 	} elsif ( $action eq 'description_add' ) {
-		eval { $self->pt->userDescriptionAdd( { user => $user, description => $self->param('description') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userDescriptionAdd( { user => $user, description => $self->param('description') } ) } );
 	} elsif ( $action eq 'description_remove' ) {
-		eval { $self->pt->userDescriptionRemove( { user => $user, description => $self->param('description') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userDescriptionRemove( { user => $user, description => $self->param('description') } ) } );
 	} elsif ( $action eq 'postalAddress_add' ) {
-		eval { $self->pt->userPostalAddressAdd( { user => $user, postalAddress => $self->param('postalAddress') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userPostalAddressAdd( { user => $user, postalAddress => $self->param('postalAddress') } ) } );
 	} elsif ( $action eq 'postalAddress_remove' ) {
-		eval { $self->pt->userPostalAddressRemove( { user => $user, postalAddress => $self->param('postalAddress') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userPostalAddressRemove( { user => $user, postalAddress => $self->param('postalAddress') } ) } );
 	} elsif ( $action eq 'cn_add' ) {
-		eval { $self->pt->userCNadd( { user => $user, cn => $self->param('cn') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userCNadd( { user => $user, cn => $self->param('cn') } ) } );
 	} elsif ( $action eq 'cn_remove' ) {
-		eval { $self->pt->userCNremove( { user => $user, cn => $self->param('cn') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userCNremove( { user => $user, cn => $self->param('cn') } ) } );
 	} elsif ( $action eq 'sshkey_add' ) {
 		my $key = $self->param('key') // '';
 		$key =~ s/[\r\n]+$//;    # strip trailing newline that textareas append
-		eval { $self->pt->userSSHPublicKeyAdd( { user => $user, key => $key } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userSSHPublicKeyAdd( { user => $user, key => $key } ) } );
 	} elsif ( $action eq 'sshkey_remove' ) {
-		eval { $self->pt->userSSHPublicKeyRemove( { user => $user, key => $self->param('key') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->userSSHPublicKeyRemove( { user => $user, key => $self->param('key') } ) } );
 	} else {
 		$self->flash( error => "Unknown action: $action" );
 		return $self->redirect_to( 'users_show', user => $user );
@@ -220,9 +203,9 @@ sub delete {
 	my $removeHome  = $self->param('removeHome')  // 0;
 	my $removeGroup = $self->param('removeGroup') // 1;
 
-	eval { $self->pt->deleteUser( { user => $user, removeHome => $removeHome, removeGroup => $removeGroup } ); };
-	if ($@) {
-		$self->flash( error => "Failed to delete user '$user': $@" );
+	my $error = $self->_pt_call( sub { $self->pt->deleteUser( { user => $user, removeHome => $removeHome, removeGroup => $removeGroup } ) } );
+	if ($error) {
+		$self->flash( error => "Failed to delete user '$user': $error" );
 		return $self->redirect_to( 'users_show', user => $user );
 	}
 
@@ -234,9 +217,9 @@ sub inetorgperson {
 	my $self = shift;
 	my $user = $self->param('user');
 
-	eval { $self->pt->userConvertToInetOrgPerson( { user => $user } ) };
-	if ($@) {
-		$self->flash( error => "Failed to convert '$user' to inetOrgPerson: $@" );
+	my $error = $self->_pt_call( sub { $self->pt->userConvertToInetOrgPerson( { user => $user } ) } );
+	if ($error) {
+		$self->flash( error => "Failed to convert '$user' to inetOrgPerson: $error" );
 		return $self->redirect_to( 'users_show', user => $user );
 	}
 
@@ -248,9 +231,9 @@ sub lpk {
 	my $self = shift;
 	my $user = $self->param('user');
 
-	eval { $self->pt->userConvertToLdapPublicKey( { user => $user } ) };
-	if ($@) {
-		$self->flash( error => "Failed to add ldapPublicKey objectClass to '$user': $@" );
+	my $error = $self->_pt_call( sub { $self->pt->userConvertToLdapPublicKey( { user => $user } ) } );
+	if ($error) {
+		$self->flash( error => "Failed to add ldapPublicKey objectClass to '$user': $error" );
 		return $self->redirect_to( 'users_show', user => $user );
 	}
 
@@ -261,11 +244,10 @@ sub lpk {
 sub password {
 	my $self = shift;
 	my $user = $self->param('user');
-	my $pass = $self->param('pass');
 
-	eval { $self->pt->userSetPass( { user => $user, pass => $pass } ) };
-	if ($@) {
-		$self->flash( error => "Failed to set password for '$user': $@" );
+	my $error = $self->_pt_call( sub { $self->pt->userSetPass( { user => $user, pass => $self->param('pass') } ) } );
+	if ($error) {
+		$self->flash( error => "Failed to set password for '$user': $error" );
 		return $self->redirect_to( 'users_show', user => $user );
 	}
 
@@ -277,9 +259,9 @@ sub remove_password {
 	my $self = shift;
 	my $user = $self->param('user');
 
-	eval { $self->pt->userRemovePassword( { user => $user } ) };
-	if ($@) {
-		$self->flash( error => "Failed to remove password for '$user': $@" );
+	my $error = $self->_pt_call( sub { $self->pt->userRemovePassword( { user => $user } ) } );
+	if ($error) {
+		$self->flash( error => "Failed to remove password for '$user': $error" );
 		return $self->redirect_to( 'users_show', user => $user );
 	}
 
@@ -294,8 +276,8 @@ sub add_to_group {
 
 	my ( @added, @failed );
 	for my $group (@groups) {
-		eval { $self->pt->groupAddUser( { user => $user, group => $group } ) };
-		if ($@) {
+		my $err = $self->_pt_call( sub { $self->pt->groupAddUser( { user => $user, group => $group } ) } );
+		if ($err) {
 			push @failed, $group;
 		} else {
 			push @added, $group;
@@ -316,9 +298,9 @@ sub remove_from_group {
 	my $user  = $self->param('user');
 	my $group = $self->param('group');
 
-	eval { $self->pt->groupRemoveUser( { user => $user, group => $group } ) };
-	if ($@) {
-		$self->flash( error => "Failed to remove '$user' from group '$group': $@" );
+	my $error = $self->_pt_call( sub { $self->pt->groupRemoveUser( { user => $user, group => $group } ) } );
+	if ($error) {
+		$self->flash( error => "Failed to remove '$user' from group '$group': $error" );
 		return $self->redirect_to( 'users_show', user => $user );
 	}
 

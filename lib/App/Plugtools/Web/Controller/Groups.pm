@@ -2,6 +2,16 @@ package App::Plugtools::Web::Controller::Groups;
 
 use Mojo::Base 'Mojolicious::Controller';
 
+sub _pt_call {
+	my ( $self, $code ) = @_;
+	eval { $code->() };
+	return $@ if $@;
+	if ( $self->pt->error ) {
+		return $self->pt->errorString || ( 'Error code ' . $self->pt->error );
+	}
+	return '';
+} ## end sub _pt_call
+
 sub index {
 	my $self = shift;
 
@@ -26,9 +36,9 @@ sub create {
 	my %params = map { $_ => $self->param($_) } qw(group gid);
 	delete $params{$_} for grep { !defined $params{$_} || $params{$_} eq '' } keys %params;
 
-	eval { $self->pt->addGroup( \%params ) };
-	if ($@) {
-		$self->flash( error => "Failed to add group: $@" );
+	my $error = $self->_pt_call( sub { $self->pt->addGroup( \%params ) } );
+	if ($error) {
+		$self->flash( error => "Failed to add group: $error" );
 		return $self->redirect_to('groups_add');
 	}
 
@@ -39,9 +49,9 @@ sub create {
 sub clean {
 	my $self = shift;
 
-	eval { $self->pt->groupClean };
-	if ($@) {
-		$self->flash( error => "Group clean failed: $@" );
+	my $error = $self->_pt_call( sub { $self->pt->groupClean } );
+	if ($error) {
+		$self->flash( error => "Group clean failed: $error" );
 		return $self->redirect_to('groups_index');
 	}
 
@@ -56,8 +66,9 @@ sub show {
 	# Fetch the LDAP entry for this group
 	my $groups;
 	eval { $groups = $self->pt->getGroups };
-	if ($@) {
-		$self->flash( error => "Failed to fetch group '$group': $@" );
+	if ( $@ || $self->pt->error ) {
+		my $msg = $@ || $self->pt->errorString || 'Unknown error';
+		$self->flash( error => "Failed to fetch group '$group': $msg" );
 		return $self->redirect_to('groups_index');
 	}
 
@@ -90,11 +101,9 @@ sub update {
 
 	my $error;
 	if ( $action eq 'gid' ) {
-		eval { $self->pt->groupGIDchange( { group => $group, gid => $self->param('gid') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->groupGIDchange( { group => $group, gid => $self->param('gid') } ) } );
 	} elsif ( $action eq 'description' ) {
-		eval { $self->pt->groupDescriptionChange( { group => $group, description => $self->param('description') } ) };
-		$error = $@;
+		$error = $self->_pt_call( sub { $self->pt->groupDescriptionChange( { group => $group, description => $self->param('description') } ) } );
 	} else {
 		$self->flash( error => "Unknown action: $action" );
 		return $self->redirect_to( 'groups_show', group => $group );
@@ -113,9 +122,9 @@ sub delete {
 	my $self  = shift;
 	my $group = $self->param('group');
 
-	eval { $self->pt->deleteGroup($group) };
-	if ($@) {
-		$self->flash( error => "Failed to delete group '$group': $@" );
+	my $error = $self->_pt_call( sub { $self->pt->deleteGroup($group) } );
+	if ($error) {
+		$self->flash( error => "Failed to delete group '$group': $error" );
 		return $self->redirect_to( 'groups_show', group => $group );
 	}
 
@@ -128,9 +137,9 @@ sub add_member {
 	my $group = $self->param('group');
 	my $user  = $self->param('user');
 
-	eval { $self->pt->groupAddUser( { group => $group, user => $user } ) };
-	if ($@) {
-		$self->flash( error => "Failed to add '$user' to '$group': $@" );
+	my $error = $self->_pt_call( sub { $self->pt->groupAddUser( { group => $group, user => $user } ) } );
+	if ($error) {
+		$self->flash( error => "Failed to add '$user' to '$group': $error" );
 		return $self->redirect_to( 'groups_show', group => $group );
 	}
 
@@ -143,9 +152,9 @@ sub remove_member {
 	my $group = $self->param('group');
 	my $user  = $self->param('user');
 
-	eval { $self->pt->groupRemoveUser( { group => $group, user => $user } ) };
-	if ($@) {
-		$self->flash( error => "Failed to remove '$user' from '$group': $@" );
+	my $error = $self->_pt_call( sub { $self->pt->groupRemoveUser( { group => $group, user => $user } ) } );
+	if ($error) {
+		$self->flash( error => "Failed to remove '$user' from '$group': $error" );
 		return $self->redirect_to( 'groups_show', group => $group );
 	}
 
