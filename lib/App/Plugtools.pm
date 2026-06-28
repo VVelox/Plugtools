@@ -2651,6 +2651,74 @@ sub userHomeChange {
 	return 1;
 } ## end sub userHomeChange
 
+=head2 userHasPassword
+
+Returns true (1) if the user's LDAP entry has a C<userPassword> attribute set,
+false (0) if it does not, or C<undef> on error.
+
+=head3 args hash
+
+=head4 user
+
+The user to check.
+
+    if ($pt->userHasPassword({ user => 'someUser' })) {
+        print "password is set\n";
+    }
+
+=cut
+
+sub userHasPassword {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error} = 32;
+		$self->{errorString}
+			= 'Fetching the entry for the user under "'
+			. $self->{ini}->{''}->{userbase} . '": '
+			. $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	return defined( $entry->get_value('userPassword') ) ? 1 : 0;
+} ## end sub userHasPassword
+
 =head2 userSetPass
 
 This changes the password for a user.

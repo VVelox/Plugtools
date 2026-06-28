@@ -67,8 +67,15 @@
     </table>
   </div>
   <div class="card-footer d-flex justify-content-end gap-2">
+    % if ($has_password) {
     <button class="btn btn-outline-danger btn-sm"
             data-bs-toggle="modal" data-bs-target="#modal-password-remove">Remove Password</button>
+    % } else {
+    <span data-bs-toggle="tooltip" data-bs-placement="top"
+          title="This user has no userPassword attribute">
+      <button class="btn btn-outline-danger btn-sm" disabled>Remove Password</button>
+    </span>
+    % }
     <button class="btn btn-warning btn-sm"
             data-bs-toggle="modal" data-bs-target="#modal-password">Set Password</button>
   </div>
@@ -249,6 +256,13 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
+        % unless ($has_password) {
+        <div class="alert alert-warning py-2 mb-3">
+          <strong>No password set.</strong>
+          This account currently has no <code>userPassword</code> attribute.
+          Setting one will enable password-based authentication.
+        </div>
+        % }
         <div class="mb-3">
           <label class="form-label">New Password</label>
           <input type="password" name="pass" id="pw-new" class="form-control" required autocomplete="new-password">

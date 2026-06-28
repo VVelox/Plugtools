@@ -74,13 +74,17 @@ sub show {
 		}
 	}
 
+	my $has_password = 0;
+	eval { $has_password = $self->pt->userHasPassword( { user => $user } ) // 0 };
+
 	$self->render(
-		template       => 'users/show',
-		entry          => $entry,
-		username       => $user,
-		shells         => \@shells,
-		member_groups  => \@member_groups,
+		template         => 'users/show',
+		entry            => $entry,
+		username         => $user,
+		shells           => \@shells,
+		member_groups    => \@member_groups,
 		nonmember_groups => \@nonmember_groups,
+		has_password     => $has_password,
 	);
 } ## end sub show
 
