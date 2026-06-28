@@ -9,11 +9,11 @@ GetOptions( 'pt-config=s' => \( my $pt_config ) );
 $ENV{PLUGTOOLS_CONFIG} = $pt_config if defined $pt_config;
 
 use Mojolicious::Commands;
-Mojolicious::Commands->start_app('App::Plugtools::Web');
+Mojolicious::Commands->start_app('App::Nisaba::Web');
 
 =head1 NAME
 
-mojo_plugtools - Mojolicious web frontend for App::Plugtools
+mojo_plugtools - Mojolicious web frontend for App::Nisaba
 
 =head1 SYNOPSIS
 
@@ -31,7 +31,7 @@ mojo_plugtools - Mojolicious web frontend for App::Plugtools
 
 =head1 DESCRIPTION
 
-Starts the App::Plugtools web interface. All standard Mojolicious server
+Starts the App::Nisaba web interface. All standard Mojolicious server
 commands (daemon, prefork, etc.) are supported after any C<--pt-config>
 argument.
 
@@ -47,6 +47,6 @@ Session secret. Set this to a long random string in production.
 
 =head1 SEE ALSO
 
-L<App::Plugtools>, L<App::Plugtools::Web>
+L<App::Nisaba>, L<App::Nisaba::Web>
 
 =cut

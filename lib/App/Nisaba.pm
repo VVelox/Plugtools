@@ -1,4 +1,4 @@
-package App::Plugtools;
+package App::Nisaba;
 
 use warnings;
 use strict;
@@ -17,7 +17,7 @@ use base 'Error::Helper';
 
 =head1 NAME
 
-App::Plugtools - LDAP and Posix
+App::Nisaba - LDAP and Posix
 
 =head1 VERSION
 
@@ -29,16 +29,16 @@ our $VERSION = '1.3.0';
 
 =head1 SYNOPSIS
 
-    use App::Plugtools;
+    use App::Nisaba;
 
-    my $pt = App::Plugtools->new();
+    my $pt = App::Nisaba->new();
     ...
 
 =head1 METHODS
 
 =head2 new
 
-Initiate App::Plugtools.
+Initiate App::Nisaba.
 
 Only one arguement is accepted and that is a hash.
 
@@ -51,10 +51,10 @@ At this time, none of these values are required.
 This specifies a config file to read other than the default.
 
     #initilize it and read the default config
-    my $pt=App::Plugtools->new();
+    my $pt=App::Nisaba->new();
 
     #initilize it and read '/some/config'
-    my $pt=App::Plugtools->new({ config=>'/some/config' });
+    my $pt=App::Nisaba->new({ config=>'/some/config' });
 
 =cut
 
@@ -4309,12 +4309,12 @@ A comma seperated list of plugins to run when deleteGroup is called.
 Plugins are supported by the functions specified in the config section.
 
 A plugin may be specified for any of those by setting that value to a comma seperated
-list of plugins. For example if you wanted to call 'App::Plugtools::Plugins::Dump' and then
+list of plugins. For example if you wanted to call 'App::Nisaba::Plugins::Dump' and then
 'Foo::Bar' for a userSetPass, you would set the value 'pluginsUserSetPass' equal to
-'App::Plugtools::Plugins::Dump,Foo::Bar'.
+'App::Nisaba::Plugins::Dump,Foo::Bar'.
 
 Both hashes specified in the section covering the plugin function. The key 'self' is added
-to %opts before it is passed to the plugin. That key contains a copy of the App::Plugtools object.
+to %opts before it is passed to the plugin. That key contains a copy of the App::Nisaba object.
 
 A plugin is a Perl module that is used via eval and then the function 'plugin' is called on
 it. The expected return is
@@ -4324,10 +4324,10 @@ the function 'userSetPass'. It is called after the password is updated.
 
 =head2 example
 
-What is shown below is copied from App::Plugtools::Plugins::Dump. This is a simple plugin
+What is shown below is copied from App::Nisaba::Plugins::Dump. This is a simple plugin
 that calls Data::Dumper->Dumper on what is passed to it.
 
-    package App::Plugtools::Plugins::Dump;
+    package App::Nisaba::Plugins::Dump;
     use warnings;
     use strict;
     use Data::Dumper;
@@ -6980,7 +6980,7 @@ Zane C. Bowers, C<< <vvelox at vvelox.net> >>
 =head1 BUGS
 
 Please report any bugs or feature requests to C<bug-plugtools at rt.cpan.org>, or through
-the web interface at L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=App::Plugtools>.  I will be notified, and then you'll
+the web interface at L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=App::Nisaba>.  I will be notified, and then you'll
 automatically be notified of progress on your bug as I make changes.
 
 
@@ -6990,7 +6990,7 @@ automatically be notified of progress on your bug as I make changes.
 
 You can find documentation for this module with the perldoc command.
 
-    perldoc App::Plugtools
+    perldoc App::Nisaba
 
 
 You can also look for information at:
@@ -6999,19 +6999,19 @@ You can also look for information at:
 
 =item * RT: CPAN's request tracker
 
-L<http://rt.cpan.org/NoAuth/Bugs.html?Dist=App::Plugtools>
+L<http://rt.cpan.org/NoAuth/Bugs.html?Dist=App::Nisaba>
 
 =item * AnnoCPAN: Annotated CPAN documentation
 
-L<http://annocpan.org/dist/App::Plugtools>
+L<http://annocpan.org/dist/App::Nisaba>
 
 =item * CPAN Ratings
 
-L<http://cpanratings.perl.org/d/App::Plugtools>
+L<http://cpanratings.perl.org/d/App::Nisaba>
 
 =item * Search CPAN
 
-L<http://search.cpan.org/dist/App::Plugtools/>
+L<http://search.cpan.org/dist/App::Nisaba/>
 
 =back
 

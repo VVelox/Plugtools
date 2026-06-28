@@ -3,7 +3,7 @@ use strict;
 use warnings;
 
 # Stub File::ShareDir::dist_dir so the web app can start without the dist
-# being installed. Must happen before App::Plugtools::Web is loaded.
+# being installed. Must happen before App::Nisaba::Web is loaded.
 use File::Basename ();
 use File::Spec;
 BEGIN {
@@ -18,14 +18,14 @@ use Test::More;
 use Test::Mojo;
 
 # Skip if the web module itself won't load (e.g. missing Mojolicious)
-eval { require App::Plugtools::Web };
+eval { require App::Nisaba::Web };
 if ($@) {
-	plan skip_all => "App::Plugtools::Web failed to load: $@";
+	plan skip_all => "App::Nisaba::Web failed to load: $@";
 }
 
 plan tests => 6;
 
-my $t = Test::Mojo->new('App::Plugtools::Web');
+my $t = Test::Mojo->new('App::Nisaba::Web');
 
 # ── GET requests are never blocked ────────────────────────────────────────────
 

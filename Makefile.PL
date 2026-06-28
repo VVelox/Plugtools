@@ -6,10 +6,10 @@ use File::ShareDir::Install;
 install_share 'share';
 
 my %WriteMakefileArgs = (
-	NAME          => 'App::Plugtools',
+	NAME          => 'App::Nisaba',
 	AUTHOR        => 'Zane C. Bowers <vvelox@vvelox.net>',
-	VERSION_FROM  => 'lib/App/Plugtools.pm',
-	ABSTRACT_FROM => 'lib/App/Plugtools.pm',
+	VERSION_FROM  => 'lib/App/Nisaba.pm',
+	ABSTRACT_FROM => 'lib/App/Nisaba.pm',
 	( $ExtUtils::MakeMaker::VERSION >= 6.3002
 		? ( 'LICENSE' => 'perl' )
 		: () ),
@@ -18,7 +18,7 @@ my %WriteMakefileArgs = (
 	EXE_FILES   => [
 		'src_bin/plgadd', 'src_bin/plgclean', 'src_bin/plgmod',  'src_bin/plgrm',
 		'src_bin/pluadd', 'src_bin/plumod',   'src_bin/plupass', 'src_bin/plurm',
-		'src_bin/mojo_plugtools',
+		'src_bin/mojo_nisaba',
 	],
 	CONFIGURE_REQUIRES => {
 		'ExtUtils::MakeMaker'     => '0',
@@ -46,7 +46,7 @@ my %WriteMakefileArgs = (
 		'File::ShareDir::Install'           => '0.13',
 	},
 	dist  => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
-	clean => { FILES    => 'App-Plugtools-*' },
+	clean => { FILES    => 'App-Nisaba-*' },
 );
 
 # Compatibility with old versions of ExtUtils::MakeMaker

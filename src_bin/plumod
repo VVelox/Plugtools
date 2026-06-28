@@ -3,7 +3,7 @@
 use strict;
 use warnings;
 use Getopt::Std;
-use App::Plugtools;
+use App::Nisaba;
 
 $Getopt::Std::STANDARD_HELP_VERSION = 1;
 
@@ -28,9 +28,9 @@ sub main::HELP_MESSAGE {
 		. "home - Change the home directory for a user.\n"
 		. "uid - Change the UID for a user.\n"
 		. "shell - Change the shell for a user.\n" . "\n"
-		. "For more info, see the the perldocs for App::Plugtools and plurm...\n"
+		. "For more info, see the the perldocs for App::Nisaba and plurm...\n"
 		. "perldoc plurm\n"
-		. "perldoc App::Plugtools\n";
+		. "perldoc App::Nisaba\n";
 } ## end sub main::HELP_MESSAGE
 
 #gets the options
@@ -47,9 +47,9 @@ if ( !defined( $opts{a} ) ) {
 	exit 253;
 }
 
-my $pt = App::Plugtools->new;
+my $pt = App::Nisaba->new;
 if ( $pt->error ) {
-	warn('plumod: Failed to initialize the App::Plugtools object');
+	warn('plumod: Failed to initialize the App::Nisaba object');
 	exit $pt->error;
 }
 
@@ -191,7 +191,7 @@ The new UID for a user.
 
 =head1 EXIT CODES
 
-If the exit code is not listed below, it is what was the error code returned by App::Plugtools.
+If the exit code is not listed below, it is what was the error code returned by App::Nisaba.
 
 =head2 254
 

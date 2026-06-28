@@ -25,7 +25,7 @@
 use strict;
 use warnings;
 use Getopt::Std;
-use App::Plugtools;
+use App::Nisaba;
 
 $Getopt::Std::STANDARD_HELP_VERSION = 1;
 
@@ -41,9 +41,9 @@ sub main::HELP_MESSAGE {
 			  "-G <GID>  - The GID to use for the group.\n".
 			  "-l  - If \$entry->dump should be called for a newly created entry.\n".
 			  "\n".
-			  "For more info, see the the perldocs for App::Plugtools and plgadd...\n".
+			  "For more info, see the the perldocs for App::Nisaba and plgadd...\n".
 			  "perldoc plgadd\n".
-			  "perldoc App::Plugtools\n";
+			  "perldoc App::Nisaba\n";
 }
 
 #gets the options
@@ -55,9 +55,9 @@ if (!defined($opts{g})) {
 	exit 254;
 }
 
-my $pt=App::Plugtools->new;
+my $pt=App::Nisaba->new;
 if ($pt->error) {
-	warn('plgadd: Failed to initialize the App::Plugtools object');
+	warn('plgadd: Failed to initialize the App::Nisaba object');
 	exit $pt->error;
 }
 
@@ -96,7 +96,7 @@ The GID for the group.
 
 =head1 EXIT CODES
 
-If the exit code is not listed below, it is what was the error code returned by App::Plugtools.
+If the exit code is not listed below, it is what was the error code returned by App::Nisaba.
 
 =head2 254
 
@@ -138,7 +138,7 @@ any
 
 =head2 SEE ALSO
 
-App::Plugtools
+App::Nisaba
 
 =head1 README
 

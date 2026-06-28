@@ -1,4 +1,4 @@
-package App::Plugtools::Plugins::Dump;
+package App::Nisaba::Plugins::Dump;
 
 use warnings;
 use strict;
@@ -6,7 +6,7 @@ use Data::Dumper;
 
 =head1 NAME
 
-App::Plugtools::Plugins::Dump - A App::Plugtools plugin that calls Data::Dumper->Dumper on %opts and %args that are passed to the plugin.
+App::Nisaba::Plugins::Dump - A App::Nisaba plugin that calls Data::Dumper->Dumper on %opts and %args that are passed to the plugin.
 
 =head1 VERSION
 
@@ -18,7 +18,7 @@ our $VERSION = '0.0.0';
 
 =head1 SYNOPSIS
 
-This is a App::Plugtools plugin that calls Data::Dumper->Dumper on %opts and %args
+This is a App::Nisaba plugin that calls Data::Dumper->Dumper on %opts and %args
 that are passed to the plugin.
 
 =cut
@@ -27,10 +27,10 @@ that are passed to the plugin.
 
 =head2 plugin
 
-The function that will be called by App::Plugtools.
+The function that will be called by App::Nisaba.
 
-    use App::Plugtools::Plugins::Dump;
-    %returned=App::Plugtools::Plugins::Dump->plugin(\%opts, \%args);
+    use App::Nisaba::Plugins::Dump;
+    %returned=App::Nisaba::Plugins::Dump->plugin(\%opts, \%args);
     
     if($returned{error}){
         print "Error!\n";
@@ -68,7 +68,7 @@ Zane C. Bowers, C<< <vvelox at vvelox.net> >>
 =head1 BUGS
 
 Please report any bugs or feature requests to C<bug-plugtools at rt.cpan.org>, or through
-the web interface at L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=App::Plugtools>.  I will be notified, and then you'll
+the web interface at L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=App::Nisaba>.  I will be notified, and then you'll
 automatically be notified of progress on your bug as I make changes.
 
 
@@ -78,7 +78,7 @@ automatically be notified of progress on your bug as I make changes.
 
 You can find documentation for this module with the perldoc command.
 
-    perldoc App::Plugtools
+    perldoc App::Nisaba
 
 
 You can also look for information at:
@@ -87,19 +87,19 @@ You can also look for information at:
 
 =item * RT: CPAN's request tracker
 
-L<http://rt.cpan.org/NoAuth/Bugs.html?Dist=App::Plugtools>
+L<http://rt.cpan.org/NoAuth/Bugs.html?Dist=App::Nisaba>
 
 =item * AnnoCPAN: Annotated CPAN documentation
 
-L<http://annocpan.org/dist/App::Plugtools>
+L<http://annocpan.org/dist/App::Nisaba>
 
 =item * CPAN Ratings
 
-L<http://cpanratings.perl.org/d/App::Plugtools>
+L<http://cpanratings.perl.org/d/App::Nisaba>
 
 =item * Search CPAN
 
-L<http://search.cpan.org/dist/App::Plugtools/>
+L<http://search.cpan.org/dist/App::Nisaba/>
 
 =back
 
@@ -117,4 +117,4 @@ under the same terms as Perl itself.
 
 =cut
 
-1;    # End of App::Plugtools
+1;    # End of App::Nisaba

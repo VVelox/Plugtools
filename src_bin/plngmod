@@ -3,7 +3,7 @@
 use strict;
 use warnings;
 use Getopt::Std;
-use App::Plugtools;
+use App::Nisaba;
 
 $Getopt::Std::STANDARD_HELP_VERSION = 1;
 
@@ -42,7 +42,7 @@ sub main::HELP_MESSAGE {
 		. "\n"
 		. "For more info, see the perldocs:\n"
 		. "perldoc plngmod\n"
-		. "perldoc App::Plugtools\n";
+		. "perldoc App::Nisaba\n";
 }
 
 #gets the options
@@ -59,9 +59,9 @@ if ( !defined( $opts{a} ) ) {
 	exit 253;
 }
 
-my $pt = App::Plugtools->new;
+my $pt = App::Nisaba->new;
 if ( $pt->error ) {
-	warn('plngmod: Failed to initialize the App::Plugtools object');
+	warn('plngmod: Failed to initialize the App::Nisaba object');
 	exit $pt->error;
 }
 
@@ -222,7 +222,7 @@ The name of the netgroup to add or remove as a member (memberNisNetgroup).
 =head1 EXIT CODES
 
 If the exit code is not listed below, it is the error code returned by
-App::Plugtools.
+App::Nisaba.
 
 =head2 254
 

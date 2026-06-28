@@ -3,7 +3,7 @@
 use Test::More tests => 1;
 
 BEGIN {
-	use_ok( 'App::Plugtools' );
+	use_ok( 'App::Nisaba' );
 }
 
-diag( "Testing App::Plugtools $App::Plugtools::VERSION, Perl $], $^X" );
+diag( "Testing App::Nisaba $App::Nisaba::VERSION, Perl $], $^X" );

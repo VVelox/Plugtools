@@ -3,7 +3,7 @@
 use strict;
 use warnings;
 use Getopt::Std;
-use App::Plugtools;
+use App::Nisaba;
 
 $Getopt::Std::STANDARD_HELP_VERSION = 1;
 
@@ -22,9 +22,9 @@ sub main::HELP_MESSAGE {
 		. "The default value for this is false, '0'.\n" . "\n"
 		. "removeGroup:\n"
 		. "The default value for this is truem, '1'.\n" . "\n"
-		. "For more info, see the the perldocs for App::Plugtools and plurm...\n"
+		. "For more info, see the the perldocs for App::Nisaba and plurm...\n"
 		. "perldoc plurm\n"
-		. "perldoc App::Plugtools\n";
+		. "perldoc App::Nisaba\n";
 } ## end sub main::HELP_MESSAGE
 
 #gets the options
@@ -36,9 +36,9 @@ if ( !defined( $opts{u} ) ) {
 	exit 254;
 }
 
-my $pt = App::Plugtools->new;
+my $pt = App::Nisaba->new;
 if ( $pt->error ) {
-	warn('plurm: Failed to initialize the App::Plugtools object');
+	warn('plurm: Failed to initialize the App::Nisaba object');
 	exit $pt->error;
 }
 
@@ -82,7 +82,7 @@ group should be remove or not if it is empty.
 
 =head1 EXIT CODES
 
-If the exit code is not listed below, it is what was the error code returned by App::Plugtools.
+If the exit code is not listed below, it is what was the error code returned by App::Nisaba.
 
 =head2 254
 

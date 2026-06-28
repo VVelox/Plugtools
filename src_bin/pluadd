@@ -3,7 +3,7 @@
 use strict;
 use warnings;
 use Getopt::Std;
-use App::Plugtools;
+use App::Nisaba;
 
 $Getopt::Std::STANDARD_HELP_VERSION = 1;
 
@@ -36,9 +36,9 @@ sub main::HELP_MESSAGE {
 		. "This overrides the default value. If nothing is specified, '1' is used.\n" . "\n"
 		. "chownValue:\n"
 		. "This overrides te default value. If nothing is specified, '640' is used.\n" . "\n"
-		. "For more info, see the the perldocs for App::Plugtools and pluadd...\n"
+		. "For more info, see the the perldocs for App::Nisaba and pluadd...\n"
 		. "perldoc pluadd\n"
-		. "perldoc App::Plugtools\n";
+		. "perldoc App::Nisaba\n";
 } ## end sub main::HELP_MESSAGE
 
 #gets the options
@@ -50,9 +50,9 @@ if ( !defined( $opts{u} ) ) {
 	exit 254;
 }
 
-my $pt = App::Plugtools->new;
+my $pt = App::Nisaba->new;
 if ( $pt->error ) {
-	warn('pluadd: Failed to initialize the App::Plugtools object');
+	warn('pluadd: Failed to initialize the App::Nisaba object');
 	exit $pt->error;
 }
 
@@ -142,7 +142,7 @@ Print any newly created or modified entries.
 
 =head1 EXIT CODES
 
-If the exit code is not listed below, it is what was the error code returned by App::Plugtools.
+If the exit code is not listed below, it is what was the error code returned by App::Nisaba.
 
 =head 254
 

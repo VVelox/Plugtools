@@ -1,4 +1,4 @@
-package App::Plugtools::Web::Controller::Groups;
+package App::Nisaba::Web::Controller::Groups;
 
 use Mojo::Base 'Mojolicious::Controller';
 

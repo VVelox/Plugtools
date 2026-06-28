@@ -1,8 +1,8 @@
-package App::Plugtools::Web;
+package App::Nisaba::Web;
 
 use Mojo::Base 'Mojolicious';
 use File::ShareDir qw(dist_dir);
-use App::Plugtools;
+use App::Nisaba;
 use Mojo::URL;
 
 our $VERSION = '0.0.1';
@@ -10,20 +10,20 @@ our $VERSION = '0.0.1';
 sub startup {
 	my $self = shift;
 
-	my $share = dist_dir('App-Plugtools');
+	my $share = dist_dir('App-Nisaba');
 	push @{ $self->renderer->paths }, "$share/templates";
 	push @{ $self->static->paths },   "$share/public";
 
 	$self->secrets( [ $ENV{PLUGTOOLS_SECRET} // 'plugtools_change_me_in_production' ] );
 
-	# Shared App::Plugtools instance. Config path via $ENV{PLUGTOOLS_CONFIG} or default.
+	# Shared App::Nisaba instance. Config path via $ENV{PLUGTOOLS_CONFIG} or default.
 	$self->helper(
 		pt => sub {
 			state $pt;
 			unless ( defined $pt ) {
 				my %args;
 				$args{config} = $ENV{PLUGTOOLS_CONFIG} if $ENV{PLUGTOOLS_CONFIG};
-				$pt = App::Plugtools->new( \%args );
+				$pt = App::Nisaba->new( \%args );
 			}
 			return $pt;
 		}

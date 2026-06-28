@@ -1,4 +1,4 @@
-package App::Plugtools::Web::Controller::Users;
+package App::Nisaba::Web::Controller::Users;
 
 use Mojo::Base 'Mojolicious::Controller';
 
@@ -39,7 +39,7 @@ sub create {
 	my %params = map { $_ => $self->param($_) }
 		qw(user uid group gid gecos shell home createHome chownHome chmodHome chmodValue);
 
-	# Remove empty strings so App::Plugtools uses its defaults
+	# Remove empty strings so App::Nisaba uses its defaults
 	delete $params{$_} for grep { !defined $params{$_} || $params{$_} eq '' } keys %params;
 
 	my $error = $self->_pt_call( sub { $self->pt->addUser( \%params ) } );
