@@ -31,6 +31,12 @@
           <a class="nav-link<%= $self->req->url->path =~ m{^/groups} ? ' active' : '' %>"
              href="/groups">Groups</a>
         </li>
+        % if (pt->netgroupbaseConfigured) {
+        <li class="nav-item">
+          <a class="nav-link<%= $self->req->url->path =~ m{^/netgroups} ? ' active' : '' %>"
+             href="/netgroups">Netgroups</a>
+        </li>
+        % }
       </ul>
     </div>
   </div>

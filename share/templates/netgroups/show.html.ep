@@ -1,0 +1,221 @@
+% layout 'default';
+% title $groupname;
+
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="/netgroups">Netgroups</a></li>
+    <li class="breadcrumb-item active"><%= $groupname %></li>
+  </ol>
+</nav>
+
+<div class="row g-4">
+
+  <!-- Netgroup Attributes -->
+  <div class="col-md-5">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Netgroup: <%= $groupname %></strong>
+        <button class="btn btn-sm btn-outline-secondary py-0"
+                data-bs-toggle="modal" data-bs-target="#modal-ldap-entry">View LDAP</button>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <tbody>
+            <tr>
+              <th class="ps-3" style="width:35%">Name</th>
+              <td colspan="2"><%= $entry->get_value('cn') %></td>
+            </tr>
+            <tr>
+              <th class="ps-3">Description</th>
+              <td><%= $entry->get_value('description') // '' %></td>
+              <td class="text-end pe-3">
+                <button class="btn btn-sm btn-outline-secondary py-0"
+                        data-bs-toggle="modal" data-bs-target="#modal-desc">&#9998;</button>
+              </td>
+            </tr>
+            <tr>
+              <th class="ps-3">DN</th>
+              <td colspan="2"><small class="text-muted"><%= $entry->dn %></small></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Triples -->
+  <div class="col-md-7">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Triples</strong>
+        <button class="btn btn-sm btn-primary py-0"
+                data-bs-toggle="modal" data-bs-target="#modal-triple-add">+ Add Triple</button>
+      </div>
+      <div class="card-body">
+        % my @triples = sort $entry->get_value('nisNetgroupTriple');
+        % if (@triples) {
+        <ul class="list-group list-group-flush mb-0">
+          % for my $triple (@triples) {
+          <li class="list-group-item d-flex justify-content-between align-items-center px-0">
+            <code><%= $triple %></code>
+            <form method="post" action="/netgroups/<%= $groupname %>"
+                  data-confirm="Remove triple <%= $triple %> from <%= $groupname %>?">
+              <input type="hidden" name="action" value="triple_remove">
+              <input type="hidden" name="triple" value="<%= $triple %>">
+              <button class="btn btn-outline-danger btn-sm">&#10005;</button>
+            </form>
+          </li>
+          % }
+        </ul>
+        % } else {
+        <p class="text-muted mb-0">No triples defined.</p>
+        % }
+      </div>
+    </div>
+  </div>
+
+  <!-- Member Netgroups -->
+  <div class="col-md-7 offset-md-5">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Member Netgroups</strong>
+        % if (@{$all_netgroups}) {
+        <button class="btn btn-sm btn-primary py-0"
+                data-bs-toggle="modal" data-bs-target="#modal-member-add">+ Add Member</button>
+        % }
+      </div>
+      <div class="card-body">
+        % my @members = sort $entry->get_value('memberNisNetgroup');
+        % if (@members) {
+        <ul class="list-group list-group-flush mb-0">
+          % for my $member (@members) {
+          <li class="list-group-item d-flex justify-content-between align-items-center px-0">
+            <a href="/netgroups/<%= $member %>"><%= $member %></a>
+            <form method="post" action="/netgroups/<%= $groupname %>"
+                  data-confirm="Remove member <%= $member %> from <%= $groupname %>?">
+              <input type="hidden" name="action" value="member_remove">
+              <input type="hidden" name="member" value="<%= $member %>">
+              <button class="btn btn-outline-danger btn-sm">&#10005;</button>
+            </form>
+          </li>
+          % }
+        </ul>
+        % } else {
+        <p class="text-muted mb-0">No member netgroups.</p>
+        % }
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Danger zone -->
+<div class="card border-danger mt-4" style="max-width:400px">
+  <div class="card-header text-danger"><strong>Danger Zone</strong></div>
+  <div class="card-body">
+    <form method="post" action="/netgroups/<%= $groupname %>/delete"
+          data-confirm="Permanently delete netgroup <%= $groupname %>?">
+      <button class="btn btn-danger">Delete Netgroup</button>
+    </form>
+  </div>
+</div>
+
+<!-- LDAP entry viewer modal -->
+% my %sensitive = map { lc($_) => 1 } qw(userPassword sambaNTPassword sambaLMPassword);
+<div class="modal fade" id="modal-ldap-entry" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
+    <div class="modal-header">
+      <h5 class="modal-title">LDAP Entry: <%= $groupname %></h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+    </div>
+    <div class="modal-body">
+<pre class="mb-0" style="font-size:0.78rem">dn: <%= $entry->dn %>
+% for my $attr ($entry->attributes) {
+% for my $val ($entry->get_value($attr)) {
+% if ($sensitive{lc($attr)}) {
+<%= $attr %>: <span class="text-warning fst-italic">&lt;&lt;NOT DISPLAYED&gt;&gt;</span>
+% } else {
+<%= $attr %>: <%= $val %>
+% }
+% }
+% }
+</pre>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+    </div>
+  </div></div>
+</div>
+
+<!-- Edit description modal -->
+<div class="modal fade" id="modal-desc" tabindex="-1">
+  <div class="modal-dialog"><div class="modal-content">
+    <form method="post" action="/netgroups/<%= $groupname %>">
+      <input type="hidden" name="action" value="description">
+      <div class="modal-header">
+        <h5 class="modal-title">Edit Description</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label">Description</label>
+        <input type="text" name="description" class="form-control"
+               value="<%= $entry->get_value('description') // '' %>">
+        <div class="form-text">Leave blank to clear.</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </div></div>
+</div>
+
+<!-- Add triple modal -->
+<div class="modal fade" id="modal-triple-add" tabindex="-1">
+  <div class="modal-dialog"><div class="modal-content">
+    <form method="post" action="/netgroups/<%= $groupname %>">
+      <input type="hidden" name="action" value="triple_add">
+      <div class="modal-header">
+        <h5 class="modal-title">Add Triple</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label">Triple</label>
+        <input type="text" name="triple" class="form-control" required
+               placeholder="(host,user,domain)">
+        <div class="form-text">Format: <code>(host,user,domain)</code> — leave fields blank to wildcard, e.g. <code>(,,example.com)</code>.</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">Add Triple</button>
+      </div>
+    </form>
+  </div></div>
+</div>
+
+<!-- Add member modal -->
+% if (@{$all_netgroups}) {
+<div class="modal fade" id="modal-member-add" tabindex="-1">
+  <div class="modal-dialog"><div class="modal-content">
+    <form method="post" action="/netgroups/<%= $groupname %>">
+      <input type="hidden" name="action" value="member_add">
+      <div class="modal-header">
+        <h5 class="modal-title">Add Member Netgroup</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label">Netgroup</label>
+        <select name="member" class="form-select" required>
+          % for my $ng (@{$all_netgroups}) {
+          <option value="<%= $ng->get_value('cn') %>"><%= $ng->get_value('cn') %></option>
+          % }
+        </select>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">Add Member</button>
+      </div>
+    </form>
+  </div></div>
+</div>
+% }

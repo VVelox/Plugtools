@@ -77,6 +77,14 @@ sub startup {
 	$r->post('/groups/:group/delete')->to('groups#delete')->name('groups_delete');
 	$r->post('/groups/:group/members')->to('groups#add_member')->name('groups_add_member');
 	$r->post('/groups/:group/members/:user/delete')->to('groups#remove_member')->name('groups_remove_member');
+
+	# Netgroups — /netgroups/add before /netgroups/:group to avoid collision
+	$r->get('/netgroups')->to('netgroups#index')->name('netgroups_index');
+	$r->get('/netgroups/add')->to('netgroups#add')->name('netgroups_add');
+	$r->post('/netgroups')->to('netgroups#create')->name('netgroups_create');
+	$r->get('/netgroups/:group')->to('netgroups#show')->name('netgroups_show');
+	$r->post('/netgroups/:group')->to('netgroups#update')->name('netgroups_update');
+	$r->post('/netgroups/:group/delete')->to('netgroups#delete')->name('netgroups_delete');
 } ## end sub startup
 
 1;

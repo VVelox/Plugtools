@@ -1,0 +1,39 @@
+% layout 'default';
+% title 'Add Netgroup';
+
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="/netgroups">Netgroups</a></li>
+    <li class="breadcrumb-item active">Add</li>
+  </ol>
+</nav>
+
+<div class="card" style="max-width:520px">
+  <div class="card-header"><strong>Add Netgroup</strong></div>
+  <div class="card-body">
+    <form method="post" action="/netgroups">
+      <div class="mb-3">
+        <label class="form-label">Group Name <span class="text-danger">*</span></label>
+        <input type="text" name="group" class="form-control" required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Description</label>
+        <input type="text" name="description" class="form-control" placeholder="Optional">
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Triples</label>
+        <textarea name="triple" class="form-control" rows="4"
+                  placeholder="One per line, e.g. (host,user,domain)&#10;Leave fields empty to match any, e.g. (,,example.com)"></textarea>
+        <div class="form-text">Format: <code>(host,user,domain)</code> — leave fields blank to wildcard.</div>
+      </div>
+      <div class="mb-4">
+        <label class="form-label">Member Netgroups</label>
+        <textarea name="member" class="form-control" rows="3"
+                  placeholder="One netgroup name per line"></textarea>
+        <div class="form-text">Names of other netgroups to include as members.</div>
+      </div>
+      <button class="btn btn-primary">Add Netgroup</button>
+      <a href="/netgroups" class="btn btn-outline-secondary ms-2">Cancel</a>
+    </form>
+  </div>
+</div>

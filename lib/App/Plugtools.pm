@@ -10,6 +10,7 @@ use Net::LDAP;
 use Net::LDAP::Entry;
 use Net::LDAP::posixAccount;
 use Net::LDAP::posixGroup;
+use Net::LDAP::nisNetgroup;
 use String::ShellQuote;
 use Net::LDAP::Extension::SetPassword;
 use base 'Error::Helper';
@@ -136,6 +137,10 @@ sub new {
 				62 => 'noHomePostalAddress',
 				63 => 'noDisplayName',
 				64 => 'alreadyInetOrgPerson',
+				66 => 'netgroupbaseNotConfigured',
+				67 => 'noNetgroupName',
+				68 => 'noTripleSpecified',
+				69 => 'noMemberSpecified',
 			},
 			fatal_flags      => {},
 			perror_not_fatal => 0,
@@ -2222,6 +2227,632 @@ sub removeUserFromGroups {
 	return 1;
 } ## end sub removeUserFromGroups
 
+=head2 netgroupbaseConfigured
+
+Returns true if a non-empty C<netgroupbase> is set in the configuration,
+false otherwise.  Use this to guard UI elements before calling any netgroup
+method.
+
+    if ( $pt->netgroupbaseConfigured ) { ... }
+
+=cut
+
+sub netgroupbaseConfigured {
+	my $self = $_[0];
+	return ( defined( $self->{ini}->{''}->{netgroupbase} )
+			&& $self->{ini}->{''}->{netgroupbase} ne '' ) ? 1 : 0;
+} ## end sub netgroupbaseConfigured
+
+=head2 addNetgroup
+
+Creates a new nisNetgroup entry in LDAP.
+
+=head3 args hash
+
+=head4 group
+
+The netgroup name to create. Required.
+
+=head4 triples
+
+An optional arrayref of nisNetgroupTriple strings, e.g. C<["(host,user,domain)"]>.
+
+=head4 members
+
+An optional arrayref of memberNisNetgroup names.
+
+=head4 description
+
+An optional description string.
+
+    $pt->addNetgroup({ group => 'someNetgroup', triples => ['(,,example.com)'] });
+
+=cut
+
+sub addNetgroup {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{group} ) ) {
+		$self->{error}       = 67;
+		$self->{errorString} = 'No netgroup name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( $self->{ini}->{''}->{netgroupbase} eq '' ) {
+		$self->{error}       = 66;
+		$self->{errorString} = 'netgroupbase not configured';
+		$self->warn;
+		return undef;
+	}
+
+	my $creator = Net::LDAP::nisNetgroup->new( baseDN => $self->{ini}->{''}->{netgroupbase} );
+	if ( !defined($creator) ) {
+		$self->{error}       = 12;
+		$self->{errorString} = 'Net::LDAP::nisNetgroup->new returned undef: ' . ( Net::LDAP::nisNetgroup->error // '' );
+		$self->warn;
+		return undef;
+	}
+
+	my %create_args = (
+		name    => $args{group},
+		triples => $args{triples} // [],
+		members => $args{members} // [],
+	);
+	if ( defined( $args{description} ) && $args{description} ne '' ) {
+		$create_args{description} = $args{description};
+	}
+
+	my $entry = $creator->create(%create_args);
+	if ( !defined($entry) ) {
+		$self->{error}       = 12;
+		$self->{errorString} = 'Net::LDAP::nisNetgroup->create returned undef: ' . ( $creator->errorString // '' );
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap     = $self->connect();
+	my $add_mesg = $ldap->add($entry);
+	if ( $add_mesg->code ) {
+		$self->{error}       = 19;
+		$self->{errorString} = 'Adding netgroup entry failed: ' . $add_mesg->error;
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub addNetgroup
+
+=head2 deleteNetgroup
+
+Deletes a nisNetgroup entry from LDAP.
+
+=head3 args hash
+
+=head4 group
+
+The netgroup name to delete. Required.
+
+    $pt->deleteNetgroup({ group => 'someNetgroup' });
+
+=cut
+
+sub deleteNetgroup {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{group} ) ) {
+		$self->{error}       = 67;
+		$self->{errorString} = 'No netgroup name specified';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{netgroupbase},
+		filter => '(&(objectClass=nisNetgroup)(cn=' . $args{group} . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 27;
+		$self->{errorString} = 'Searching for netgroup "' . $args{group} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 15;
+		$self->{errorString} = 'Netgroup not found: ' . $args{group};
+		$self->warn;
+		return undef;
+	}
+
+	my $del_mesg = $ldap->delete( $entry->dn );
+	if ( $del_mesg->code ) {
+		$self->{error}       = 16;
+		$self->{errorString} = 'Deleting netgroup "' . $args{group} . '" failed: ' . $del_mesg->error;
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub deleteNetgroup
+
+=head2 getNetgroups
+
+Returns an arrayref of all nisNetgroup Net::LDAP::Entry objects found under
+the configured netgroupbase.
+
+Returns an empty arrayref if none exist.
+
+    my $netgroups = $pt->getNetgroups;
+
+=cut
+
+sub getNetgroups {
+	my $self = $_[0];
+
+	$self->errorblank;
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{netgroupbase},
+		filter => '(objectClass=nisNetgroup)'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 27;
+		$self->{errorString} = 'Fetching nisNetgroup objects under "'
+			. $self->{ini}->{''}->{netgroupbase}
+			. '" failed: '
+			. $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	my @entries;
+	my $entry = $mesg->pop_entry;
+	while ( defined($entry) ) {
+		push @entries, $entry;
+		$entry = $mesg->pop_entry;
+	}
+
+	return \@entries;
+} ## end sub getNetgroups
+
+=head2 getNetgroupEntry
+
+Returns a single Net::LDAP::Entry for the named nisNetgroup.
+
+=head3 args hash
+
+=head4 group
+
+The netgroup name to look up. Required.
+
+    my $entry = $pt->getNetgroupEntry({ group => 'someNetgroup' });
+
+=cut
+
+sub getNetgroupEntry {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{group} ) ) {
+		$self->{error}       = 67;
+		$self->{errorString} = 'No netgroup name specified';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{netgroupbase},
+		filter => '(&(objectClass=nisNetgroup)(cn=' . $args{group} . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 27;
+		$self->{errorString} = 'Searching for netgroup "' . $args{group} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 15;
+		$self->{errorString} = 'Netgroup not found: ' . $args{group};
+		$self->warn;
+		return undef;
+	}
+
+	return $entry;
+} ## end sub getNetgroupEntry
+
+=head2 netgroupDescriptionChange
+
+Sets or clears the description attribute on a nisNetgroup entry.
+Pass an empty string or omit description to clear.
+
+=head3 args hash
+
+=head4 group
+
+The netgroup name to act on. Required.
+
+=head4 description
+
+The new description. Pass an empty string to clear.
+
+    $pt->netgroupDescriptionChange({ group => 'someNetgroup', description => 'A description' });
+
+=cut
+
+sub netgroupDescriptionChange {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{group} ) ) {
+		$self->{error}       = 67;
+		$self->{errorString} = 'No netgroup name specified';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{netgroupbase},
+		filter => '(&(objectClass=nisNetgroup)(cn=' . $args{group} . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 27;
+		$self->{errorString} = 'Searching for netgroup "' . $args{group} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 15;
+		$self->{errorString} = 'Netgroup not found: ' . $args{group};
+		$self->warn;
+		return undef;
+	}
+
+	my $new_desc = $args{description} // '';
+	if ( $new_desc eq '' ) {
+		$entry->delete('description');
+	} else {
+		$entry->replace( description => $new_desc );
+	}
+
+	my $update = $entry->update($ldap);
+	if ( $update->code ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Updating description on "' . $entry->dn . '" failed: ' . $update->error;
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub netgroupDescriptionChange
+
+=head2 netgroupTripleAdd
+
+Adds a nisNetgroupTriple value to a nisNetgroup entry.
+
+=head3 args hash
+
+=head4 group
+
+The netgroup name to act on. Required.
+
+=head4 triple
+
+The triple string to add, e.g. C<"(host,user,domain)">. Required.
+
+    $pt->netgroupTripleAdd({ group => 'someNetgroup', triple => '(,,example.com)' });
+
+=cut
+
+sub netgroupTripleAdd {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{group} ) ) {
+		$self->{error}       = 67;
+		$self->{errorString} = 'No netgroup name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{triple} ) ) {
+		$self->{error}       = 68;
+		$self->{errorString} = 'No triple specified';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{netgroupbase},
+		filter => '(&(objectClass=nisNetgroup)(cn=' . $args{group} . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 27;
+		$self->{errorString} = 'Searching for netgroup "' . $args{group} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 15;
+		$self->{errorString} = 'Netgroup not found: ' . $args{group};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->add( nisNetgroupTriple => $args{triple} );
+
+	my $update = $entry->update($ldap);
+	if ( $update->code ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Adding triple to "' . $entry->dn . '" failed: ' . $update->error;
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub netgroupTripleAdd
+
+=head2 netgroupTripleRemove
+
+Removes a nisNetgroupTriple value from a nisNetgroup entry.
+
+=head3 args hash
+
+=head4 group
+
+The netgroup name to act on. Required.
+
+=head4 triple
+
+The triple string to remove. Required.
+
+    $pt->netgroupTripleRemove({ group => 'someNetgroup', triple => '(,,example.com)' });
+
+=cut
+
+sub netgroupTripleRemove {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{group} ) ) {
+		$self->{error}       = 67;
+		$self->{errorString} = 'No netgroup name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{triple} ) ) {
+		$self->{error}       = 68;
+		$self->{errorString} = 'No triple specified';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{netgroupbase},
+		filter => '(&(objectClass=nisNetgroup)(cn=' . $args{group} . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 27;
+		$self->{errorString} = 'Searching for netgroup "' . $args{group} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 15;
+		$self->{errorString} = 'Netgroup not found: ' . $args{group};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->delete( nisNetgroupTriple => [ $args{triple} ] );
+
+	my $update = $entry->update($ldap);
+	if ( $update->code ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Removing triple from "' . $entry->dn . '" failed: ' . $update->error;
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub netgroupTripleRemove
+
+=head2 netgroupMemberAdd
+
+Adds a memberNisNetgroup value to a nisNetgroup entry.
+
+=head3 args hash
+
+=head4 group
+
+The netgroup name to act on. Required.
+
+=head4 member
+
+The netgroup name to add as a member. Required.
+
+    $pt->netgroupMemberAdd({ group => 'someNetgroup', member => 'otherNetgroup' });
+
+=cut
+
+sub netgroupMemberAdd {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{group} ) ) {
+		$self->{error}       = 67;
+		$self->{errorString} = 'No netgroup name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{member} ) ) {
+		$self->{error}       = 69;
+		$self->{errorString} = 'No member specified';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{netgroupbase},
+		filter => '(&(objectClass=nisNetgroup)(cn=' . $args{group} . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 27;
+		$self->{errorString} = 'Searching for netgroup "' . $args{group} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 15;
+		$self->{errorString} = 'Netgroup not found: ' . $args{group};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->add( memberNisNetgroup => $args{member} );
+
+	my $update = $entry->update($ldap);
+	if ( $update->code ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Adding member to "' . $entry->dn . '" failed: ' . $update->error;
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub netgroupMemberAdd
+
+=head2 netgroupMemberRemove
+
+Removes a memberNisNetgroup value from a nisNetgroup entry.
+
+=head3 args hash
+
+=head4 group
+
+The netgroup name to act on. Required.
+
+=head4 member
+
+The netgroup name to remove. Required.
+
+    $pt->netgroupMemberRemove({ group => 'someNetgroup', member => 'otherNetgroup' });
+
+=cut
+
+sub netgroupMemberRemove {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{group} ) ) {
+		$self->{error}       = 67;
+		$self->{errorString} = 'No netgroup name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{member} ) ) {
+		$self->{error}       = 69;
+		$self->{errorString} = 'No member specified';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{netgroupbase},
+		filter => '(&(objectClass=nisNetgroup)(cn=' . $args{group} . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 27;
+		$self->{errorString} = 'Searching for netgroup "' . $args{group} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 15;
+		$self->{errorString} = 'Netgroup not found: ' . $args{group};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->delete( memberNisNetgroup => [ $args{member} ] );
+
+	my $update = $entry->update($ldap);
+	if ( $update->code ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Removing member from "' . $entry->dn . '" failed: ' . $update->error;
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub netgroupMemberRemove
+
 =head2 readConfig
 
 This reads the specified config.
@@ -2335,6 +2966,9 @@ sub readConfig {
 	}
 	if ( !defined( $ini->{''}->{userUpdate} ) ) {
 		$ini->{''}->{userUpdate} = '1';
+	}
+	if ( !defined( $ini->{''}->{netgroupbase} ) ) {
+		$ini->{''}->{netgroupbase} = '';
 	}
 
 	#if we get here, the ini is good... so we save it

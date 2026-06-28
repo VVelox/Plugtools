@@ -1,0 +1,97 @@
+% layout 'default';
+% title 'Netgroups';
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2>Netgroups</h2>
+  <a href="/netgroups/add" class="btn btn-primary">+ Add Netgroup</a>
+</div>
+
+% if (!@{$netgroups}) {
+<div class="alert alert-info">No netgroups found in LDAP.</div>
+% } else {
+<div class="table-responsive">
+  <table id="netgroups-table" class="table table-striped table-hover table-sm align-middle">
+    <thead class="table-dark">
+      <tr>
+        <th data-col="0" data-type="text"   class="sortable">Name <span class="sort-icon"></span></th>
+        <th data-col="1" data-type="text"   class="sortable">Description <span class="sort-icon"></span></th>
+        <th data-col="2" data-type="number" class="sortable">Triples <span class="sort-icon"></span></th>
+        <th data-col="3" data-type="number" class="sortable">Members <span class="sort-icon"></span></th>
+      </tr>
+    </thead>
+    <tbody>
+      % for my $entry (@{$netgroups}) {
+      % my $cn      = $entry->get_value('cn');
+      % my @triples = $entry->get_value('nisNetgroupTriple');
+      % my @members = $entry->get_value('memberNisNetgroup');
+      <tr>
+        <td><a href="/netgroups/<%= $cn %>"><%= $cn %></a></td>
+        <td><%= $entry->get_value('description') // '' %></td>
+        <td data-sort="<%= scalar @triples %>">
+          % if (@triples) {
+            <span class="badge bg-secondary"><%= scalar @triples %></span>
+          % } else {
+            <span class="text-muted">—</span>
+          % }
+        </td>
+        <td data-sort="<%= scalar @members %>">
+          % if (@members) {
+            <span class="badge bg-secondary"><%= scalar @members %></span>
+            <small class="text-muted ms-1"><%= join(', ', sort @members) %></small>
+          % } else {
+            <span class="text-muted">—</span>
+          % }
+        </td>
+      </tr>
+      % }
+    </tbody>
+  </table>
+</div>
+% }
+
+<style>
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { background-color: rgba(255,255,255,.05); }
+  .sort-icon::after { content: ' \2195'; opacity: .35; font-size: .75em; }
+  th.sort-asc  .sort-icon::after { content: ' \2191'; opacity: 1; }
+  th.sort-desc .sort-icon::after { content: ' \2193'; opacity: 1; }
+</style>
+
+<script>
+(function () {
+  var table   = document.getElementById('netgroups-table');
+  var tbody   = table.querySelector('tbody');
+  var headers = table.querySelectorAll('th.sortable');
+  var sortCol = 0, sortAsc = true;
+
+  function cellValue(row, col, type) {
+    var cell = row.cells[col];
+    if (cell.dataset.sort !== undefined) return cell.dataset.sort;
+    return cell.textContent.trim();
+  }
+
+  function sortTable(col, type, asc) {
+    var rows = Array.from(tbody.querySelectorAll('tr'));
+    rows.sort(function (a, b) {
+      var av = cellValue(a, col, type);
+      var bv = cellValue(b, col, type);
+      var cmp = (type === 'number')
+        ? (parseFloat(av) || 0) - (parseFloat(bv) || 0)
+        : av.localeCompare(bv);
+      return asc ? cmp : -cmp;
+    });
+    rows.forEach(function (r) { tbody.appendChild(r); });
+  }
+
+  headers.forEach(function (th) {
+    th.addEventListener('click', function () {
+      var col  = parseInt(th.dataset.col);
+      var type = th.dataset.type;
+      if (sortCol === col) { sortAsc = !sortAsc; } else { sortCol = col; sortAsc = true; }
+      headers.forEach(function (h) { h.classList.remove('sort-asc', 'sort-desc'); });
+      th.classList.add(sortAsc ? 'sort-asc' : 'sort-desc');
+      sortTable(col, type, sortAsc);
+    });
+  });
+})();
+</script>

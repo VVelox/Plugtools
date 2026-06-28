@@ -1,0 +1,257 @@
+#!perl
+
+use strict;
+use warnings;
+use Getopt::Std;
+use App::Plugtools;
+
+$Getopt::Std::STANDARD_HELP_VERSION = 1;
+
+#version function
+sub main::VERSION_MESSAGE {
+	print "plngmod 0.0.0\n";
+}
+
+#print help
+sub main::HELP_MESSAGE {
+	print "\n"
+		. "-g <netgroup>  - The netgroup to act on.\n"
+		. "-a <action>    - The action to perform.\n"
+		. "-c <description>  - The description to set (use '' to clear). Used with: description\n"
+		. "-t <triple>    - The triple to add/remove (format: host,user,domain or (host,user,domain)).\n"
+		. "                 Parentheses are added automatically if missing.\n"
+		. "-m <member>    - The member netgroup name. Used with: member_add, member_remove\n"
+		. "\n"
+		. "Both -g and -a are required. Additional options depend on the action.\n"
+		. "\n"
+		. "actions:\n"
+		. "description    - Set or clear the description of a netgroup (-c).\n"
+		. "triple_add     - Add a nisNetgroupTriple to a netgroup (-t).\n"
+		. "triple_remove  - Remove a nisNetgroupTriple from a netgroup (-t).\n"
+		. "member_add     - Add a memberNisNetgroup to a netgroup (-m).\n"
+		. "member_remove  - Remove a memberNisNetgroup from a netgroup (-m).\n"
+		. "delete         - Delete the netgroup entirely.\n"
+		. "\n"
+		. "requirements:\n"
+		. "description   - -g, -c\n"
+		. "triple_add    - -g, -t\n"
+		. "triple_remove - -g, -t\n"
+		. "member_add    - -g, -m\n"
+		. "member_remove - -g, -m\n"
+		. "delete        - -g\n"
+		. "\n"
+		. "For more info, see the perldocs:\n"
+		. "perldoc plngmod\n"
+		. "perldoc App::Plugtools\n";
+}
+
+#gets the options
+my %opts = ();
+getopts( 'g:a:c:t:m:', \%opts );
+
+if ( !defined( $opts{g} ) ) {
+	warn('plngmod:254: No netgroup name specified');
+	exit 254;
+}
+
+if ( !defined( $opts{a} ) ) {
+	warn('plngmod:253: No action specified');
+	exit 253;
+}
+
+my $pt = App::Plugtools->new;
+if ( $pt->error ) {
+	warn('plngmod: Failed to initialize the App::Plugtools object');
+	exit $pt->error;
+}
+
+#process description change
+if ( $opts{a} eq 'description' ) {
+	if ( !defined( $opts{c} ) ) {
+		warn('plngmod:252: No description specified (-c); use empty string to clear');
+		exit 252;
+	}
+	$pt->netgroupDescriptionChange( { group => $opts{g}, description => $opts{c} } );
+	if ( $pt->error ) {
+		warn('plngmod: netgroupDescriptionChange errored');
+		exit $pt->error;
+	}
+}
+
+#process triple_add
+if ( $opts{a} eq 'triple_add' ) {
+	if ( !defined( $opts{t} ) ) {
+		warn('plngmod:251: No triple specified (-t)');
+		exit 251;
+	}
+	my $triple = $opts{t};
+	# wrap in parens if not already
+	unless ( $triple =~ /^\(/ ) {
+		$triple = '(' . $triple . ')';
+	}
+	$pt->netgroupTripleAdd( { group => $opts{g}, triple => $triple } );
+	if ( $pt->error ) {
+		warn('plngmod: netgroupTripleAdd errored');
+		exit $pt->error;
+	}
+}
+
+#process triple_remove
+if ( $opts{a} eq 'triple_remove' ) {
+	if ( !defined( $opts{t} ) ) {
+		warn('plngmod:251: No triple specified (-t)');
+		exit 251;
+	}
+	my $triple = $opts{t};
+	# wrap in parens if not already
+	unless ( $triple =~ /^\(/ ) {
+		$triple = '(' . $triple . ')';
+	}
+	$pt->netgroupTripleRemove( { group => $opts{g}, triple => $triple } );
+	if ( $pt->error ) {
+		warn('plngmod: netgroupTripleRemove errored');
+		exit $pt->error;
+	}
+}
+
+#process member_add
+if ( $opts{a} eq 'member_add' ) {
+	if ( !defined( $opts{m} ) ) {
+		warn('plngmod:250: No member specified (-m)');
+		exit 250;
+	}
+	$pt->netgroupMemberAdd( { group => $opts{g}, member => $opts{m} } );
+	if ( $pt->error ) {
+		warn('plngmod: netgroupMemberAdd errored');
+		exit $pt->error;
+	}
+}
+
+#process member_remove
+if ( $opts{a} eq 'member_remove' ) {
+	if ( !defined( $opts{m} ) ) {
+		warn('plngmod:250: No member specified (-m)');
+		exit 250;
+	}
+	$pt->netgroupMemberRemove( { group => $opts{g}, member => $opts{m} } );
+	if ( $pt->error ) {
+		warn('plngmod: netgroupMemberRemove errored');
+		exit $pt->error;
+	}
+}
+
+#process delete
+if ( $opts{a} eq 'delete' ) {
+	$pt->deleteNetgroup( { group => $opts{g} } );
+	if ( $pt->error ) {
+		warn('plngmod: deleteNetgroup errored');
+		exit $pt->error;
+	}
+}
+
+exit 0;
+
+=head1 NAME
+
+plngmod - Modify a nisNetgroup entry in LDAP.
+
+=head1 SYNOPSIS
+
+plngmod B<-g> <netgroup> B<-a> description B<-c> <description>
+
+plngmod B<-g> <netgroup> B<-a> triple_add B<-t> <triple>
+
+plngmod B<-g> <netgroup> B<-a> triple_remove B<-t> <triple>
+
+plngmod B<-g> <netgroup> B<-a> member_add B<-m> <member>
+
+plngmod B<-g> <netgroup> B<-a> member_remove B<-m> <member>
+
+plngmod B<-g> <netgroup> B<-a> delete
+
+=head1 SWITCHES
+
+=head2 -g <netgroup>
+
+The netgroup to act on. Required.
+
+=head2 -a <action>
+
+The action to perform. Required.
+
+=head3 description
+
+Set or clear the description of a netgroup. Requires B<-c>.
+
+=head3 triple_add
+
+Add a nisNetgroupTriple to a netgroup. Requires B<-t>.
+
+=head3 triple_remove
+
+Remove a nisNetgroupTriple from a netgroup. Requires B<-t>.
+
+=head3 member_add
+
+Add a memberNisNetgroup to a netgroup. Requires B<-m>.
+
+=head3 member_remove
+
+Remove a memberNisNetgroup from a netgroup. Requires B<-m>.
+
+=head3 delete
+
+Delete the netgroup entry entirely.
+
+=head2 -c <description>
+
+The new description to set. Use an empty string (C<''>) to clear the existing
+description.
+
+=head2 -t <triple>
+
+The nisNetgroupTriple to add or remove. Format is C<host,user,domain> or
+C<(host,user,domain)>. Parentheses are added automatically if not present.
+Leave individual fields empty to match any value, e.g. C<,,example.com>
+matches all users and hosts in example.com.
+
+=head2 -m <member>
+
+The name of the netgroup to add or remove as a member (memberNisNetgroup).
+
+=head1 EXIT CODES
+
+If the exit code is not listed below, it is the error code returned by
+App::Plugtools.
+
+=head2 254
+
+No netgroup name specified (-g missing).
+
+=head2 253
+
+No action specified (-a missing).
+
+=head2 252
+
+No description specified for the description action (-c missing).
+
+=head2 251
+
+No triple specified for triple_add or triple_remove (-t missing).
+
+=head2 250
+
+No member specified for member_add or member_remove (-m missing).
+
+=head1 ACKNOWLEDGEMENTS
+
+=head1 LICENSE AND COPYRIGHT
+
+This software is Copyright (c) 2023 by Zane C. Bowers-Hadley.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+=cut
