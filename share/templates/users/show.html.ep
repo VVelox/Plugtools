@@ -218,8 +218,13 @@
       </div>
       <div class="modal-body">
         <label class="form-label">Login Shell</label>
-        <input type="text" name="shell" class="form-control"
+        <input type="text" name="shell" class="form-control" list="shell-list"
                value="<%= $entry->get_value('loginShell') // '' %>">
+        <datalist id="shell-list">
+          % for my $sh (@{$shells}) {
+          <option value="<%= $sh %>">
+          % }
+        </datalist>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>

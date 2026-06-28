@@ -50,7 +50,17 @@ sub show {
 		return $self->redirect_to('users_index');
 	}
 
-	$self->render( template => 'users/show', entry => $entry, username => $user );
+	my @shells;
+	if ( open my $fh, '<', '/etc/shells' ) {
+		while (<$fh>) {
+			chomp;
+			next if /^\s*#/ || /^\s*$/;
+			push @shells, $_;
+		}
+		close $fh;
+	}
+
+	$self->render( template => 'users/show', entry => $entry, username => $user, shells => \@shells );
 } ## end sub show
 
 sub update {
