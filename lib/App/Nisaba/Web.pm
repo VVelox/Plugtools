@@ -14,15 +14,15 @@ sub startup {
 	push @{ $self->renderer->paths }, "$share/templates";
 	push @{ $self->static->paths },   "$share/public";
 
-	$self->secrets( [ $ENV{PLUGTOOLS_SECRET} // 'plugtools_change_me_in_production' ] );
+	$self->secrets( [ $ENV{NISABA_SECRET} // 'nisaba_change_me_in_production' ] );
 
-	# Shared App::Nisaba instance. Config path via $ENV{PLUGTOOLS_CONFIG} or default.
+	# Shared App::Nisaba instance. Config path via $ENV{NISABA_CONFIG} or default.
 	$self->helper(
 		pt => sub {
 			state $pt;
 			unless ( defined $pt ) {
 				my %args;
-				$args{config} = $ENV{PLUGTOOLS_CONFIG} if $ENV{PLUGTOOLS_CONFIG};
+				$args{config} = $ENV{NISABA_CONFIG} if $ENV{NISABA_CONFIG};
 				$pt = App::Nisaba->new( \%args );
 			}
 			return $pt;

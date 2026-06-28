@@ -154,7 +154,7 @@ sub new {
 	bless $self;
 
 	if ( !defined( $args{config} ) ) {
-		$args{config} = xdg_config_home() . '/plugtoolsrc';
+		$args{config} = xdg_config_home() . '/nisabarc';
 	}
 
 	$self->readConfig( $args{config} );
@@ -2878,7 +2878,7 @@ sub readConfig {
 
 	#if it is not defined, use the default one
 	if ( !defined($config) ) {
-		$config = xdg_config_home() . '/plugtoolsrc';
+		$config = xdg_config_home() . '/nisabarc';
 	}
 
 	#reads the config
@@ -4116,8 +4116,8 @@ No shell specified.
 
 =head1 CONFIG FILE
 
-The default is xdg_config_home().'/plugtoolsrc', which wraps
-around to "~/.config/plugtoolsrc". The file format is ini.
+The default is xdg_config_home().'/nisabarc', which wraps
+around to "~/.config/nisabarc". The file format is ini.
 
 The only required ones are 'bind', 'pass', 'groupbase', and
 'userbase'.
@@ -6979,7 +6979,7 @@ Zane C. Bowers, C<< <vvelox at vvelox.net> >>
 
 =head1 BUGS
 
-Please report any bugs or feature requests to C<bug-plugtools at rt.cpan.org>, or through
+Please report any bugs or feature requests to C<bug-nisaba at rt.cpan.org>, or through
 the web interface at L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=App::Nisaba>.  I will be notified, and then you'll
 automatically be notified of progress on your bug as I make changes.
 

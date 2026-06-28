@@ -6,28 +6,28 @@ use warnings;
 # Grab --pt-config before Mojolicious sees the argv, then pass the rest through.
 use Getopt::Long qw(:config pass_through);
 GetOptions( 'pt-config=s' => \( my $pt_config ) );
-$ENV{PLUGTOOLS_CONFIG} = $pt_config if defined $pt_config;
+$ENV{NISABA_CONFIG} = $pt_config if defined $pt_config;
 
 use Mojolicious::Commands;
 Mojolicious::Commands->start_app('App::Nisaba::Web');
 
 =head1 NAME
 
-mojo_plugtools - Mojolicious web frontend for App::Nisaba
+mojo_nisaba - Mojolicious web frontend for App::Nisaba
 
 =head1 SYNOPSIS
 
   # Development server (port 3000)
-  mojo_plugtools daemon
+  mojo_nisaba daemon
 
   # Custom port
-  mojo_plugtools daemon -l http://*:8080
+  mojo_nisaba daemon -l http://*:8080
 
   # Production (prefork)
-  mojo_plugtools prefork -l http://*:8080
+  mojo_nisaba prefork -l http://*:8080
 
-  # With a custom plugtools config
-  mojo_plugtools daemon --pt-config /etc/plugtoolsrc
+  # With a custom nisaba config
+  mojo_nisaba daemon --pt-config /etc/nisabarc
 
 =head1 DESCRIPTION
 
@@ -37,11 +37,11 @@ argument.
 
 =head1 ENVIRONMENT
 
-=head2 PLUGTOOLS_CONFIG
+=head2 NISABA_CONFIG
 
-Path to the plugtoolsrc config file. Overridden by C<--pt-config>.
+Path to the nisabarc config file. Overridden by C<--pt-config>.
 
-=head2 PLUGTOOLS_SECRET
+=head2 NISABA_SECRET
 
 Session secret. Set this to a long random string in production.
 
