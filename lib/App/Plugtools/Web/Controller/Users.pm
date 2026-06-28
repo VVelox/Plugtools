@@ -230,6 +230,20 @@ sub password {
 	$self->redirect_to( 'users_show', user => $user );
 } ## end sub password
 
+sub remove_password {
+	my $self = shift;
+	my $user = $self->param('user');
+
+	eval { $self->pt->userRemovePassword( { user => $user } ) };
+	if ($@) {
+		$self->flash( error => "Failed to remove password for '$user': $@" );
+		return $self->redirect_to( 'users_show', user => $user );
+	}
+
+	$self->flash( success => "Password removed for '$user'." );
+	$self->redirect_to( 'users_show', user => $user );
+} ## end sub remove_password
+
 sub add_to_group {
 	my $self   = shift;
 	my $user   = $self->param('user');
