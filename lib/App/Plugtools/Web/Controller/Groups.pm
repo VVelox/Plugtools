@@ -84,17 +84,28 @@ sub show {
 } ## end sub show
 
 sub update {
-	my $self  = shift;
-	my $group = $self->param('group');
-	my $gid   = $self->param('gid');
+	my $self   = shift;
+	my $group  = $self->param('group');
+	my $action = $self->param('action') // 'gid';
 
-	eval { $self->pt->groupGIDchange( { group => $group, gid => $gid } ) };
-	if ($@) {
-		$self->flash( error => "Failed to update group '$group': $@" );
-		return $self->redirect_to( 'groups_edit', group => $group );
+	my $error;
+	if ( $action eq 'gid' ) {
+		eval { $self->pt->groupGIDchange( { group => $group, gid => $self->param('gid') } ) };
+		$error = $@;
+	} elsif ( $action eq 'description' ) {
+		eval { $self->pt->groupDescriptionChange( { group => $group, description => $self->param('description') } ) };
+		$error = $@;
+	} else {
+		$self->flash( error => "Unknown action: $action" );
+		return $self->redirect_to( 'groups_show', group => $group );
 	}
 
-	$self->flash( success => "Group '$group' GID updated successfully." );
+	if ($error) {
+		$self->flash( error => "Failed to update group '$group': $error" );
+		return $self->redirect_to( 'groups_show', group => $group );
+	}
+
+	$self->flash( success => "Group '$group' updated successfully." );
 	$self->redirect_to( 'groups_show', group => $group );
 } ## end sub update
 

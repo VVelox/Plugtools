@@ -19,6 +19,7 @@ sub main::HELP_MESSAGE {
 			  "-a <action>  - The action to perform.\n".
 			  "-u <user>  - The user to use.\n".
 			  "-G <gid>  - The GID to use.\n".
+			  "-c <description>  - The description to set (use '' to clear).\n".
 			  "-l  - This dumps change changed LDAP entry.\n".
 			  "-U <userUpdate>  - When doing the gid action, correct any user with it as their primary GID.\n".
 			  "\n".
@@ -28,11 +29,13 @@ sub main::HELP_MESSAGE {
 			  "add - This adds a user to a group.\n".
 			  "remove -  This removes a user from a group.\n".
 			  "gid - Change the GID of a group to the specified GID.\n".
+			  "description - Set or clear the description of a group.\n".
 			  "\n".
 			  "requirements:\n".
 			  "add - -g, -u\n".
 			  "remove - -g, -u\n".
 			  "gid - -g, -G\n".
+			  "description - -g, -c\n".
 			  "\n".
 			  "For more info, see the the perldocs for App::Plugtools and plgmod...\n".
 			  "perldoc plgmod\n".
@@ -41,7 +44,7 @@ sub main::HELP_MESSAGE {
 
 #gets the options
 my %opts=();
-getopts('g:u:a:G:l', \%opts);
+getopts('g:u:a:G:c:l', \%opts);
 
 if (!defined($opts{g})) {
 	warn('plgadd:254: No group name specified');
@@ -98,6 +101,22 @@ if ($opts{a} eq 'gid') {
 	}
 }
 
+#process description change requests
+if ($opts{a} eq 'description') {
+	if (!defined($opts{c})) {
+		warn('plgmod:252: No description specified (-c)');
+		exit 252;
+	}
+	$pt->groupDescriptionChange({
+					   group=>$opts{g},
+					   description=>$opts{c},
+					   });
+	if ($pt->error) {
+		warn('plgmod: groupDescriptionChange errored');
+		exit $pt->error;
+	}
+}
+
 exit 0;
 
 =head1 NAME
@@ -106,9 +125,10 @@ plgmod - Modify a group setup in LDAP.
 
 =head1 SYNOPSIS
 
-plgmod B<-g> <group> B<-a> add [B<-u> <user>] [B<-l>]
-plgmod B<-g> <group> B<-a> remove [B<-u> <user>] [B<-l>]
-plgmod B<-g> <group> B<-a> gid [B<-G> <gid>] [B<-l>] [B<-U> (0|1)]
+plgmod B<-g> <group> B<-a> add B<-u> <user> [B<-l>]
+plgmod B<-g> <group> B<-a> remove B<-u> <user> [B<-l>]
+plgmod B<-g> <group> B<-a> gid B<-G> <gid> [B<-l>] [B<-U> (0|1)]
+plgmod B<-g> <group> B<-a> description B<-c> <description>
 
 =head1 SWITCHES
 
@@ -128,9 +148,18 @@ Add a user to a group.
 
 Change the GID of a group.
 
+=head3 description
+
+Set or clear the description of a group. Pass an empty string to clear.
+
 =head3 remove
 
 Remove a user from a group.
+
+=head2 -c <description>
+
+The new description for the group. Use an empty string (C<''>) to clear the
+existing description.
 
 =head2 -l
 
@@ -160,6 +189,10 @@ No group specified.
 =head2 253
 
 No action specified.
+
+=head2 252
+
+No description specified for the description action.
 
 =head1 ACKNOWLEDGEMENTS
 

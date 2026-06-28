@@ -1404,6 +1404,88 @@ sub groupGIDchange {
 	return 1;
 } ## end sub groupGIDchange
 
+=head2 groupDescriptionChange
+
+Sets the C<description> attribute of a posixGroup entry to a single value,
+replacing any existing value. Pass an empty string or omit C<description> to
+clear the attribute entirely.
+
+=head3 args hash
+
+=head4 group
+
+The group to act on.
+
+=head4 description
+
+The new description. Pass an empty string to clear.
+
+    $pt->groupDescriptionChange({ group => 'someGroup', description => 'A description' });
+
+=cut
+
+sub groupDescriptionChange {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{group} ) ) {
+		$self->{error}       = 6;
+		$self->{errorString} = 'No group name specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $gname, $gpasswd, $gid ) = getgrnam( $args{group} );
+	if ( !defined($gname) ) {
+		$self->{error}       = 14;
+		$self->{errorString} = 'The group "' . $args{group} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{groupbase},
+		filter => '(&(cn=' . $args{group} . ')(gidNumber=' . $gid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 27;
+		$self->{errorString} = 'Fetching group "' . $args{group} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 15;
+		$self->{errorString} = 'Group "' . $args{group} . '" not found under "' . $self->{ini}->{''}->{groupbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	my $new_desc = $args{description} // '';
+	if ( $new_desc eq '' ) {
+		$entry->delete('description');
+	} else {
+		$entry->replace( description => $new_desc );
+	}
+
+	my $update = $entry->update($ldap);
+	if ( $update->code ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Updating description on "' . $entry->dn . '" failed: ' . $update->error;
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub groupDescriptionChange
+
 =head2 groupRemoveUser
 
 This removes a user from a group.
