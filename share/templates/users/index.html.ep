@@ -9,6 +9,18 @@
 % if (!@{$users}) {
 <div class="alert alert-info">No users found in LDAP.</div>
 % } else {
+
+% # Determine which optional columns have at least one value across all users
+% my @opt_cols = (
+%   [ 'displayName',    'Display Name' ],
+%   [ 'sn',             'Surname'      ],
+%   [ 'givenName',      'Given Name'   ],
+%   [ 'title',          'Title'        ],
+%   [ 'employeeNumber', 'Employee #'   ],
+%   [ 'employeeType',   'Type'         ],
+% );
+% my @active_cols = grep { my $attr = $_->[0]; grep { $_->get_value($attr) } @{$users} } @opt_cols;
+
 <div class="table-responsive">
   <table id="users-table" class="table table-striped table-hover table-sm align-middle">
     <thead class="table-dark">
@@ -19,7 +31,10 @@
         <th data-col="3" data-type="text"   class="sortable">GECOS <span class="sort-icon"></span></th>
         <th data-col="4" data-type="text"   class="sortable">Home <span class="sort-icon"></span></th>
         <th data-col="5" data-type="text"   class="sortable">Shell <span class="sort-icon"></span></th>
-        <th></th>
+        % my $col_idx = 6;
+        % for my $oc (@active_cols) {
+        <th data-col="<%= $col_idx++ %>" data-type="text" class="sortable"><%= $oc->[1] %> <span class="sort-icon"></span></th>
+        % }
       </tr>
     </thead>
     <tbody>
@@ -32,13 +47,9 @@
         <td><%= $entry->get_value('gecos') // '' %></td>
         <td><code><%= $entry->get_value('homeDirectory') %></code></td>
         <td><code><%= $entry->get_value('loginShell') %></code></td>
-        <td class="text-end">
-          <a href="/users/<%= $uid %>/edit" class="btn btn-outline-secondary btn-sm">Edit</a>
-          <form method="post" action="/users/<%= $uid %>/delete" class="d-inline"
-                data-confirm="Delete user <%= $uid %>?">
-            <button class="btn btn-outline-danger btn-sm">Delete</button>
-          </form>
-        </td>
+        % for my $oc (@active_cols) {
+        <td><%= $entry->get_value($oc->[0]) // '' %></td>
+        % }
       </tr>
       % }
     </tbody>

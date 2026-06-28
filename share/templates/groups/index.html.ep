@@ -22,7 +22,6 @@
         <th data-col="0" data-type="text"   class="sortable">Group Name <span class="sort-icon"></span></th>
         <th data-col="1" data-type="number" class="sortable">GID <span class="sort-icon"></span></th>
         <th data-col="2" data-type="number" class="sortable">Members <span class="sort-icon"></span></th>
-        <th></th>
       </tr>
     </thead>
     <tbody>
@@ -39,13 +38,6 @@
           % } else {
             <span class="text-muted">—</span>
           % }
-        </td>
-        <td class="text-end">
-          <a href="/groups/<%= $cn %>/edit" class="btn btn-outline-secondary btn-sm">Edit</a>
-          <form method="post" action="/groups/<%= $cn %>/delete" class="d-inline"
-                data-confirm="Delete group <%= $cn %>?">
-            <button class="btn btn-outline-danger btn-sm">Delete</button>
-          </form>
         </td>
       </tr>
       % }
