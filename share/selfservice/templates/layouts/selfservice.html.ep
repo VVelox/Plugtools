@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><%= title %> — Nisaba Self-Service</title>
+  <link rel="stylesheet" href="/bootstrap/css/bootstrap.min.css">
+  <style>
+    body { padding-top: 56px; font-size: 0.9rem; }
+    .navbar-brand { color: #dc3545 !important; font-weight: 700; letter-spacing: 2px; font-size: 1.1rem; }
+    .form-label { font-size: 0.78rem; color: #adb5bd; margin-bottom: 2px; }
+  </style>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark fixed-top border-bottom border-danger border-opacity-25">
+  <div class="container-fluid">
+    <a class="navbar-brand" href="/">&#128296; Nisaba Self-Service</a>
+    <div class="collapse navbar-collapse">
+      <ul class="navbar-nav ms-auto">
+        % if (session('user')) {
+        <li class="nav-item">
+          <span class="nav-link text-secondary"><%= session('user') %></span>
+        </li>
+        <li class="nav-item">
+          <form method="post" action="<%= url_for('logout') %>" class="d-inline">
+            <button type="submit" class="btn btn-sm btn-outline-secondary my-1">Log out</button>
+          </form>
+        </li>
+        % }
+      </ul>
+    </div>
+  </div>
+</nav>
+
+<div class="container mt-4" style="max-width: 720px;">
+
+  % if (my $err = flash('error')) {
+  <div class="alert alert-danger alert-dismissible fade show" role="alert">
+    <strong>Error:</strong> <%= $err %>
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  % }
+  % if (my $ok = flash('success')) {
+  <div class="alert alert-success alert-dismissible fade show" role="alert">
+    <%= $ok %>
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  % }
+
+  <%= content %>
+
+</div>
+
+<script src="/bootstrap/js/bootstrap.bundle.min.js"></script>
+<script>
+  document.addEventListener('submit', function (e) {
+    var msg = e.target.dataset.confirm;
+    if (msg && !confirm(msg)) e.preventDefault();
+  });
+</script>
+</body>
+</html>

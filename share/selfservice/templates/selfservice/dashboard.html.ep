@@ -1,0 +1,102 @@
+% layout 'selfservice';
+% title 'My Account';
+
+% my $display = $info->{displayName} // ($info->{cn}[0] // $user);
+% my $has_lpk = $info->{objectClasses}{ldappublickey} ? 1 : 0;
+
+<h4 class="mb-4">Welcome, <%= $display %></h4>
+
+<!-- Change Password -->
+<div class="card border-secondary mb-4">
+  <div class="card-header text-danger fw-bold">Change Password</div>
+  <div class="card-body">
+    <form method="post" action="<%= url_for('change_password') %>">
+      <div class="mb-2">
+        <label class="form-label" for="current">Current Password</label>
+        <input type="password" class="form-control" id="current" name="current"
+               autocomplete="current-password" required>
+      </div>
+      <div class="mb-2">
+        <label class="form-label" for="new_pass">New Password</label>
+        <input type="password" class="form-control" id="new_pass" name="new_pass"
+               autocomplete="new-password" required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label" for="confirm">Confirm New Password</label>
+        <input type="password" class="form-control" id="confirm" name="confirm"
+               autocomplete="new-password" required>
+      </div>
+      <button type="submit" class="btn btn-danger btn-sm">Change Password</button>
+    </form>
+  </div>
+</div>
+
+% if ($lpk_schema) {
+<!-- SSH Public Keys -->
+<div class="card border-secondary mb-4">
+  <div class="card-header text-danger fw-bold">SSH Public Keys</div>
+  <div class="card-body">
+  % if ($has_lpk) {
+    % my @keys = @{ $info->{sshPublicKey} };
+    % if (@keys) {
+    <ul class="list-group list-group-flush mb-3">
+      % for my $k (sort @keys) {
+      <li class="list-group-item bg-transparent border-secondary d-flex justify-content-between align-items-start gap-2">
+        <code class="flex-grow-1 text-break small"><%= $k %></code>
+        <form method="post" action="<%= url_for('sshkey_remove') %>"
+              data-confirm="Remove this SSH key?"
+              class="flex-shrink-0">
+          <input type="hidden" name="key" value="<%= $k %>">
+          <button type="submit" class="btn btn-outline-danger btn-sm">Remove</button>
+        </form>
+      </li>
+      % }
+    </ul>
+    % } else {
+    <p class="text-secondary small">No SSH keys on file.</p>
+    % }
+    <button type="button" class="btn btn-outline-secondary btn-sm"
+            data-bs-toggle="modal" data-bs-target="#modal-sshkey-add">
+      + Add Key
+    </button>
+  % } else {
+    <p class="text-secondary small mb-3">
+      SSH key storage is not yet enabled for your account.
+      Enable it to store SSH public keys in your LDAP entry.
+    </p>
+    <form method="post" action="<%= url_for('sshkey_enable') %>">
+      <button type="submit" class="btn btn-outline-secondary btn-sm">
+        Enable SSH Key Storage
+      </button>
+    </form>
+  % }
+  </div>
+</div>
+
+% if ($has_lpk) {
+<!-- SSH key add modal -->
+<div class="modal fade" id="modal-sshkey-add" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title">Add SSH Public Key</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="post" action="<%= url_for('sshkey_add') %>">
+        <div class="modal-body">
+          <label class="form-label" for="key">Public Key</label>
+          <textarea class="form-control font-monospace" id="key" name="key"
+                    rows="4" required placeholder="ssh-rsa AAAA..."></textarea>
+          <div class="form-text text-secondary">Paste your public key (e.g. from ~/.ssh/id_rsa.pub).</div>
+        </div>
+        <div class="modal-footer border-secondary">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-danger btn-sm">Add Key</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+% }
+
+% } # end if $lpk_schema

@@ -13,6 +13,7 @@ use Net::LDAP::posixGroup;
 use Net::LDAP::nisNetgroup;
 use String::ShellQuote;
 use Net::LDAP::Extension::SetPassword;
+use Net::SMTP;
 use base 'Error::Helper';
 
 =head1 NAME
@@ -146,6 +147,10 @@ sub new {
 				72 => 'noLdapPublicKeySchema',
 				73 => 'noSSHPublicKey',
 				74 => 'alreadyLdapPublicKey',
+				75 => 'authFailed',
+				76 => 'smtpNotConfigured',
+				77 => 'smtpConnectionFailed',
+				78 => 'smtpSendFailed',
 			},
 			fatal_flags      => {},
 			perror_not_fatal => 0,
@@ -2974,6 +2979,27 @@ sub readConfig {
 	}
 	if ( !defined( $ini->{''}->{netgroupbase} ) ) {
 		$ini->{''}->{netgroupbase} = '';
+	}
+	if ( !defined( $ini->{''}->{websecret} ) ) {
+		$ini->{''}->{websecret} = 'nisaba_change_me';
+	}
+	if ( !defined( $ini->{''}->{smtpserver} ) ) {
+		$ini->{''}->{smtpserver} = '';
+	}
+	if ( !defined( $ini->{''}->{smtpfrom} ) ) {
+		$ini->{''}->{smtpfrom} = '';
+	}
+	if ( !defined( $ini->{''}->{smtpport} ) ) {
+		$ini->{''}->{smtpport} = '25';
+	}
+	if ( !defined( $ini->{''}->{smtpuser} ) ) {
+		$ini->{''}->{smtpuser} = '';
+	}
+	if ( !defined( $ini->{''}->{smtppass} ) ) {
+		$ini->{''}->{smtppass} = '';
+	}
+	if ( !defined( $ini->{''}->{smtptls} ) ) {
+		$ini->{''}->{smtptls} = '';
 	}
 
 	#if we get here, the ini is good... so we save it
@@ -6969,6 +6995,644 @@ sub _entryToString {
 	}
 	return $out;
 }
+
+=head2 userVerifyPassword
+
+Verify a user's password by attempting to bind to LDAP as that user.
+Unlike L</userSetPass>, this method does not require NSS and searches
+by C<uid> only, making it suitable for self-service portals.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid) to verify.
+
+=head4 password
+
+The password to verify.
+
+    my $ok = $pt->userVerifyPassword({ user => 'jdoe', password => 'secret' });
+    if ( !$ok ) {
+        # $pt->error == 75 means invalid credentials
+    }
+
+=cut
+
+sub userVerifyPassword {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{password} ) ) {
+		$self->{error}       = 35;
+		$self->{errorString} = 'No password specified';
+		$self->warn;
+		return undef;
+	}
+
+	# Search for the user entry by uid only (no getpwnam)
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(uid=' . $args{user} . ')',
+		attrs  => ['dn'],
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	# Attempt a bind as the user to verify credentials
+	my $user_ldap = Net::LDAP->new( $self->{ini}->{''}->{server}, port => $self->{ini}->{''}->{port} );
+	if ( !defined($user_ldap) ) {
+		$self->{error}       = 11;
+		$self->{errorString} = 'Failed to connect to LDAP server for credential verification';
+		$self->warn;
+		return undef;
+	}
+
+	my $bind = $user_ldap->bind( $entry->dn, password => $args{password} );
+	if ( $bind->code == 49 ) {
+		$self->{error}       = 75;
+		$self->{errorString} = 'Authentication failed for "' . $args{user} . '"';
+		$self->warn;
+		return undef;
+	}
+	if ( $bind->code != 0 ) {
+		$self->{error}       = 13;
+		$self->{errorString} = 'LDAP bind failed: ' . $bind->error;
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userVerifyPassword
+
+=head2 userSetPassSelf
+
+Set a user's password without requiring NSS (C<getpwnam>). Searches
+by C<uid> only. Intended for self-service and password-reset flows.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid) of the user whose password should be changed.
+
+=head4 pass
+
+The new password.
+
+    $pt->userSetPassSelf({ user => 'jdoe', pass => 'newpass' });
+
+=cut
+
+sub userSetPassSelf {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{pass} ) ) {
+		$self->{error}       = 35;
+		$self->{errorString} = 'No password specified.';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(uid=' . $args{user} . ')',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	my $mesg2 = $ldap->set_password( user => $entry->dn, newpasswd => $args{pass} );
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 36;
+		$self->{errorString} = 'Setting password for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userSetPassSelf
+
+=head2 userSelfInfo
+
+Return a hashref of user attributes useful for a self-service portal.
+Searches by C<uid> only (no NSS dependency).
+
+Returned keys:
+
+=over 4
+
+=item cn
+
+Arrayref of CN values.
+
+=item mail
+
+The C<mail> attribute (may be undef).
+
+=item displayName
+
+The C<displayName> attribute (may be undef).
+
+=item sshPublicKey
+
+Arrayref of C<sshPublicKey> values.
+
+=item objectClasses
+
+Hashref mapping lowercase objectClass names to 1.
+
+=back
+
+    my $info = $pt->userSelfInfo({ user => 'jdoe' });
+
+=cut
+
+sub userSelfInfo {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(uid=' . $args{user} . ')',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	my %info;
+	$info{cn}            = [ $entry->get_value('cn') ];
+	$info{mail}          = $entry->get_value('mail');
+	$info{displayName}   = $entry->get_value('displayName');
+	$info{sshPublicKey}  = [ $entry->get_value('sshPublicKey') ];
+	$info{objectClasses} = { map { lc($_) => 1 } $entry->get_value('objectClass') };
+
+	return \%info;
+} ## end sub userSelfInfo
+
+=head2 userSSHPublicKeyAddSelf
+
+Add an SSH public key to a user's LDAP entry without requiring NSS.
+Searches by C<uid> only.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid).
+
+=head4 key
+
+The SSH public key string to add. Must not contain newlines.
+
+    $pt->userSSHPublicKeyAddSelf({ user => 'jdoe', key => 'ssh-rsa AAA...' });
+
+=cut
+
+sub userSSHPublicKeyAddSelf {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{key} ) || $args{key} eq '' ) {
+		$self->{error}       = 73;
+		$self->{errorString} = 'No SSH public key specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( $args{key} =~ /[\n\r]/ ) {
+		$self->{error}       = 73;
+		$self->{errorString} = 'SSH public key must not contain newlines';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(uid=' . $args{user} . ')',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	my @ocs = map { lc($_) } $entry->get_value('objectClass');
+	if ( !grep { $_ eq 'ldappublickey' } @ocs ) {
+		$self->{error}       = 72;
+		$self->{errorString} = 'User "' . $args{user} . '" does not have the ldapPublicKey objectClass';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->add( sshPublicKey => $args{key} );
+
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Adding sshPublicKey for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userSSHPublicKeyAddSelf
+
+=head2 userSSHPublicKeyRemoveSelf
+
+Remove a specific SSH public key from a user's LDAP entry without
+requiring NSS. Searches by C<uid> only.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid).
+
+=head4 key
+
+The exact SSH public key string to remove.
+
+    $pt->userSSHPublicKeyRemoveSelf({ user => 'jdoe', key => 'ssh-rsa AAA...' });
+
+=cut
+
+sub userSSHPublicKeyRemoveSelf {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{key} ) || $args{key} eq '' ) {
+		$self->{error}       = 73;
+		$self->{errorString} = 'No SSH public key specified';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(uid=' . $args{user} . ')',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->delete( sshPublicKey => [ $args{key} ] );
+
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Removing sshPublicKey for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userSSHPublicKeyRemoveSelf
+
+=head2 userConvertToLdapPublicKeySelf
+
+Add the C<ldapPublicKey> auxiliary objectClass to a user without
+requiring NSS. Searches by C<uid> only.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid).
+
+    $pt->userConvertToLdapPublicKeySelf({ user => 'jdoe' });
+
+=cut
+
+sub userConvertToLdapPublicKeySelf {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !$self->ldapPublicKeyAvailable ) {
+		$self->{error}       = 72;
+		$self->{errorString} = 'The ldapPublicKey schema is not available on this LDAP server';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(uid=' . $args{user} . ')',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	my @ocs = map { lc($_) } $entry->get_value('objectClass');
+	if ( grep { $_ eq 'ldappublickey' } @ocs ) {
+		$self->{error}       = 74;
+		$self->{errorString} = 'User "' . $args{user} . '" already has the ldapPublicKey objectClass';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->add( objectClass => 'ldapPublicKey' );
+
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Adding ldapPublicKey objectClass for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userConvertToLdapPublicKeySelf
+
+=head2 smtpAvailable
+
+Returns 1 if SMTP is configured (both C<smtpserver> and C<smtpfrom>
+are non-empty), undef otherwise.
+
+    if ( $pt->smtpAvailable ) {
+        # can send email
+    }
+
+=cut
+
+sub smtpAvailable {
+	my $self = $_[0];
+
+	$self->errorblank;
+
+	return ( $self->{ini}->{''}->{smtpserver} ne '' && $self->{ini}->{''}->{smtpfrom} ne '' ) ? 1 : undef;
+} ## end sub smtpAvailable
+
+=head2 sendEmail
+
+Send an email via SMTP. Returns 1 on success, undef on failure.
+
+=head3 args hash
+
+=head4 to
+
+Recipient email address.
+
+=head4 subject
+
+Email subject line.
+
+=head4 body
+
+Plain-text email body.
+
+    $pt->sendEmail({
+        to      => 'user@example.com',
+        subject => 'Password Reset',
+        body    => "Click here: https://...\n",
+    });
+
+=cut
+
+sub sendEmail {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !$self->smtpAvailable ) {
+		$self->{error}       = 76;
+		$self->{errorString} = 'SMTP is not configured (smtpserver and smtpfrom must be set)';
+		$self->warn;
+		return undef;
+	}
+
+	my $tls_mode = lc( $self->{ini}->{''}->{smtptls} // '' );
+	my $smtp = Net::SMTP->new(
+		$self->{ini}->{''}->{smtpserver},
+		Port    => $self->{ini}->{''}->{smtpport},
+		Timeout => 30,
+		( $tls_mode eq 'ssl' ? ( SSL => 1 ) : () ),
+	);
+	if ( !defined($smtp) ) {
+		$self->{error}       = 77;
+		$self->{errorString} = 'Failed to connect to SMTP server "' . $self->{ini}->{''}->{smtpserver} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	if ( $tls_mode eq 'starttls' ) {
+		if ( !$smtp->starttls ) {
+			$self->{error}       = 77;
+			$self->{errorString} = 'STARTTLS negotiation failed with "' . $self->{ini}->{''}->{smtpserver} . '"';
+			$smtp->quit;
+			$self->warn;
+			return undef;
+		}
+	}
+
+	if ( $self->{ini}->{''}->{smtpuser} ne '' && $self->{ini}->{''}->{smtppass} ne '' ) {
+		if ( !$smtp->auth( $self->{ini}->{''}->{smtpuser}, $self->{ini}->{''}->{smtppass} ) ) {
+			$self->{error}       = 77;
+			$self->{errorString} = 'SMTP authentication failed for user "' . $self->{ini}->{''}->{smtpuser} . '"';
+			$smtp->quit;
+			$self->warn;
+			return undef;
+		}
+	}
+
+	my $from    = $self->{ini}->{''}->{smtpfrom};
+	my $to      = $args{to}      // '';
+	my $subject = $args{subject} // '(no subject)';
+	my $body    = $args{body}    // '';
+
+	if ( !$smtp->mail($from) ) {
+		$self->{error}       = 78;
+		$self->{errorString} = 'SMTP MAIL FROM failed';
+		$smtp->quit;
+		$self->warn;
+		return undef;
+	}
+	if ( !$smtp->to($to) ) {
+		$self->{error}       = 78;
+		$self->{errorString} = 'SMTP RCPT TO failed for "' . $to . '"';
+		$smtp->quit;
+		$self->warn;
+		return undef;
+	}
+	if ( !$smtp->data ) {
+		$self->{error}       = 78;
+		$self->{errorString} = 'SMTP DATA command failed';
+		$smtp->quit;
+		$self->warn;
+		return undef;
+	}
+	$smtp->datasend( "From: $from\r\n" );
+	$smtp->datasend( "To: $to\r\n" );
+	$smtp->datasend( "Subject: $subject\r\n" );
+	$smtp->datasend( "MIME-Version: 1.0\r\n" );
+	$smtp->datasend( "Content-Type: text/plain; charset=UTF-8\r\n" );
+	$smtp->datasend( "\r\n" );
+	$smtp->datasend($body);
+	if ( !$smtp->dataend ) {
+		$self->{error}       = 78;
+		$self->{errorString} = 'SMTP dataend failed';
+		$smtp->quit;
+		$self->warn;
+		return undef;
+	}
+	$smtp->quit;
+
+	return 1;
+} ## end sub sendEmail
 
 	1;
 

@@ -1,0 +1,30 @@
+% layout 'selfservice';
+% title 'Log In';
+<div class="row justify-content-center mt-5">
+  <div class="col-sm-10 col-md-6">
+    <div class="card border-secondary">
+      <div class="card-header text-danger fw-bold">Log In</div>
+      <div class="card-body">
+        <form method="post" action="<%= url_for('login_post') %>">
+          <div class="mb-3">
+            <label class="form-label" for="user">Username</label>
+            <input type="text" class="form-control" id="user" name="user"
+                   autocomplete="username" autofocus required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="pass">Password</label>
+            <input type="password" class="form-control" id="pass" name="pass"
+                   autocomplete="current-password" required>
+          </div>
+          <button type="submit" class="btn btn-danger w-100">Log In</button>
+        </form>
+        % if (reset_available) {
+        <hr class="border-secondary">
+        <div class="text-center">
+          <a href="<%= url_for('forgot') %>" class="text-secondary small">Forgot your password?</a>
+        </div>
+        % }
+      </div>
+    </div>
+  </div>
+</div>
