@@ -8,204 +8,215 @@
   </ol>
 </nav>
 
-<!-- POSIX Attributes -->
-<div class="card">
-  <div class="card-header"><strong>Account: <%= $username %></strong></div>
-  <div class="card-body p-0">
-    <table class="table table-sm mb-0">
-      <tbody>
-        <tr>
-          <th class="ps-3" style="width:20%">Username</th>
-          <td><%= $entry->get_value('uid') %></td>
-          <td></td>
-        </tr>
-        <tr>
-          <th class="ps-3">UID</th>
-          <td><%= $entry->get_value('uidNumber') %></td>
-          <td class="text-end pe-3">
-            <button class="btn btn-sm btn-outline-secondary py-0"
-                    data-bs-toggle="modal" data-bs-target="#modal-uid">&#9998;</button>
-          </td>
-        </tr>
-        <tr>
-          <th class="ps-3">GID</th>
-          <td><%= $entry->get_value('gidNumber') %></td>
-          <td class="text-end pe-3">
-            <button class="btn btn-sm btn-outline-secondary py-0"
-                    data-bs-toggle="modal" data-bs-target="#modal-gid">&#9998;</button>
-          </td>
-        </tr>
-        <tr>
-          <th class="ps-3">GECOS</th>
-          <td><%= $entry->get_value('gecos') // '' %></td>
-          <td class="text-end pe-3">
-            <button class="btn btn-sm btn-outline-secondary py-0"
-                    data-bs-toggle="modal" data-bs-target="#modal-gecos">&#9998;</button>
-          </td>
-        </tr>
-        <tr>
-          <th class="ps-3">Home</th>
-          <td><code><%= $entry->get_value('homeDirectory') %></code></td>
-          <td class="text-end pe-3">
-            <button class="btn btn-sm btn-outline-secondary py-0"
-                    data-bs-toggle="modal" data-bs-target="#modal-home">&#9998;</button>
-          </td>
-        </tr>
-        <tr>
-          <th class="ps-3">Shell</th>
-          <td><code><%= $entry->get_value('loginShell') %></code></td>
-          <td class="text-end pe-3">
-            <button class="btn btn-sm btn-outline-secondary py-0"
-                    data-bs-toggle="modal" data-bs-target="#modal-shell">&#9998;</button>
-          </td>
-        </tr>
-        <tr>
-          <th class="ps-3">DN</th>
-          <td colspan="2"><small class="text-muted"><%= $entry->dn %></small></td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="card-footer d-flex justify-content-end gap-2">
-    % if ($has_password) {
-    <button class="btn btn-outline-danger btn-sm"
-            data-bs-toggle="modal" data-bs-target="#modal-password-remove">Remove Password</button>
-    % } else {
-    <span data-bs-toggle="tooltip" data-bs-placement="top"
-          title="This user has no userPassword attribute">
-      <button class="btn btn-outline-danger btn-sm" disabled>Remove Password</button>
-    </span>
-    % }
-    <button class="btn btn-warning btn-sm"
-            data-bs-toggle="modal" data-bs-target="#modal-password">Set Password</button>
-  </div>
-</div>
+<div class="row g-4">
 
-% if (grep { lc($_) eq 'inetorgperson' } $entry->get_value('objectClass')) {
-<!-- Contact & Profile -->
-<div class="card mt-4">
-  <div class="card-header"><strong>Contact &amp; Profile</strong></div>
-  <div class="card-body p-0">
-    <table class="table table-sm mb-0">
-      <tbody>
+  <!-- Left column: POSIX Attributes + Contact & Profile -->
+  <div class="col-lg-6 d-flex flex-column gap-4">
 
-        <!-- Single-value fields -->
-        % for my $sf (
-        %   [ 'displayName',        'Display Name',   'modal-displayName'        ],
-        %   [ 'sn',                 'Surname',        'modal-sn'                 ],
-        %   [ 'givenName',          'Given Name',     'modal-givenName'          ],
-        %   [ 'title',              'Title',          'modal-title'              ],
-        %   [ 'employeeNumber',     'Employee #',     'modal-employeeNumber'     ],
-        %   [ 'employeeType',       'Employee Type',  'modal-employeeType'       ],
-        %   [ 'roomNumber',         'Room',           'modal-roomNumber'         ],
-        %   [ 'homePostalAddress',  'Home Address',   'modal-homePostalAddress'  ],
-        % ) {
-        % my ($sattr, $slabel, $smodal) = @{$sf};
-        <tr>
-          <th class="ps-3" style="width:20%"><%= $slabel %></th>
-          <td><%= $entry->get_value($sattr) // '' %></td>
-          <td class="text-end pe-3" style="width:1%">
-            <button class="btn btn-sm btn-outline-secondary py-0"
-                    data-bs-toggle="modal" data-bs-target="#<%= $smodal %>">&#9998;</button>
-          </td>
-        </tr>
+    <!-- POSIX Attributes -->
+    <div class="card">
+      <div class="card-header"><strong>Account: <%= $username %></strong></div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <tbody>
+            <tr>
+              <th class="ps-3" style="width:20%">Username</th>
+              <td><%= $entry->get_value('uid') %></td>
+              <td></td>
+            </tr>
+            <tr>
+              <th class="ps-3">UID</th>
+              <td><%= $entry->get_value('uidNumber') %></td>
+              <td class="text-end pe-3">
+                <button class="btn btn-sm btn-outline-secondary py-0"
+                        data-bs-toggle="modal" data-bs-target="#modal-uid">&#9998;</button>
+              </td>
+            </tr>
+            <tr>
+              <th class="ps-3">GID</th>
+              <td><%= $entry->get_value('gidNumber') %></td>
+              <td class="text-end pe-3">
+                <button class="btn btn-sm btn-outline-secondary py-0"
+                        data-bs-toggle="modal" data-bs-target="#modal-gid">&#9998;</button>
+              </td>
+            </tr>
+            <tr>
+              <th class="ps-3">GECOS</th>
+              <td><%= $entry->get_value('gecos') // '' %></td>
+              <td class="text-end pe-3">
+                <button class="btn btn-sm btn-outline-secondary py-0"
+                        data-bs-toggle="modal" data-bs-target="#modal-gecos">&#9998;</button>
+              </td>
+            </tr>
+            <tr>
+              <th class="ps-3">Home</th>
+              <td><code><%= $entry->get_value('homeDirectory') %></code></td>
+              <td class="text-end pe-3">
+                <button class="btn btn-sm btn-outline-secondary py-0"
+                        data-bs-toggle="modal" data-bs-target="#modal-home">&#9998;</button>
+              </td>
+            </tr>
+            <tr>
+              <th class="ps-3">Shell</th>
+              <td><code><%= $entry->get_value('loginShell') %></code></td>
+              <td class="text-end pe-3">
+                <button class="btn btn-sm btn-outline-secondary py-0"
+                        data-bs-toggle="modal" data-bs-target="#modal-shell">&#9998;</button>
+              </td>
+            </tr>
+            <tr>
+              <th class="ps-3">DN</th>
+              <td colspan="2"><small class="text-muted"><%= $entry->dn %></small></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card-footer d-flex justify-content-end gap-2">
+        % if ($has_password) {
+        <button class="btn btn-outline-danger btn-sm"
+                data-bs-toggle="modal" data-bs-target="#modal-password-remove">Remove Password</button>
+        % } else {
+        <span data-bs-toggle="tooltip" data-bs-placement="top"
+              title="This user has no userPassword attribute">
+          <button class="btn btn-outline-danger btn-sm" disabled>Remove Password</button>
+        </span>
         % }
+        <button class="btn btn-warning btn-sm"
+                data-bs-toggle="modal" data-bs-target="#modal-password">Set Password</button>
+      </div>
+    </div>
 
-        <!-- Multi-value fields -->
-        % for my $field (
-        %   [ 'mail',              'Mail',        'modal-mail-add'   ],
-        %   [ 'telephoneNumber',   'Telephone',   'modal-tel-add'    ],
-        %   [ 'mobile',            'Mobile',      'modal-mobile-add' ],
-        %   [ 'preferredLanguage', 'Language',    'modal-lang-add'   ],
-        %   [ 'description',       'Description', 'modal-desc-add'   ],
-        %   [ 'postalAddress',     'Address',     'modal-addr-add'   ],
-        %   [ 'labeledURI',        'URI',         'modal-uri-add'    ],
-        % ) {
-        % my ($attr, $label, $modal) = @{$field};
-        % my @vals = $entry->get_value($attr);
-        <tr>
-          <th class="ps-3 align-top"><%= $label %></th>
-          <td colspan="2" class="pe-3">
-            % if (@vals) {
-            % for my $val (sort @vals) {
-            <div class="d-flex justify-content-between align-items-center mb-1">
-              <span class="text-break"><%= $val %></span>
-              <form method="post" action="/users/<%= $username %>" class="d-inline ms-2 flex-shrink-0">
-                <input type="hidden" name="action" value="<%= $attr %>_remove">
-                <input type="hidden" name="<%= $attr %>" value="<%= $val %>">
-                <button class="btn btn-outline-danger btn-sm py-0" title="Remove"
-                        onclick="return confirm('Remove this value?')">&#10005;</button>
-              </form>
-            </div>
+    <!-- Contact & Profile -->
+    % if (grep { lc($_) eq 'inetorgperson' } $entry->get_value('objectClass')) {
+    <div class="card">
+      <div class="card-header"><strong>Contact &amp; Profile</strong></div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <tbody>
+
+            <!-- Single-value fields -->
+            % for my $sf (
+            %   [ 'displayName',        'Display Name',   'modal-displayName'        ],
+            %   [ 'sn',                 'Surname',        'modal-sn'                 ],
+            %   [ 'givenName',          'Given Name',     'modal-givenName'          ],
+            %   [ 'title',              'Title',          'modal-title'              ],
+            %   [ 'employeeNumber',     'Employee #',     'modal-employeeNumber'     ],
+            %   [ 'employeeType',       'Employee Type',  'modal-employeeType'       ],
+            %   [ 'roomNumber',         'Room',           'modal-roomNumber'         ],
+            %   [ 'homePostalAddress',  'Home Address',   'modal-homePostalAddress'  ],
+            % ) {
+            % my ($sattr, $slabel, $smodal) = @{$sf};
+            <tr>
+              <th class="ps-3" style="width:20%"><%= $slabel %></th>
+              <td><%= $entry->get_value($sattr) // '' %></td>
+              <td class="text-end pe-3" style="width:1%">
+                <button class="btn btn-sm btn-outline-secondary py-0"
+                        data-bs-toggle="modal" data-bs-target="#<%= $smodal %>">&#9998;</button>
+              </td>
+            </tr>
             % }
-            % } else {
-            <span class="text-muted">—</span>
+
+            <!-- Multi-value fields -->
+            % for my $field (
+            %   [ 'mail',              'Mail',        'modal-mail-add'   ],
+            %   [ 'telephoneNumber',   'Telephone',   'modal-tel-add'    ],
+            %   [ 'mobile',            'Mobile',      'modal-mobile-add' ],
+            %   [ 'preferredLanguage', 'Language',    'modal-lang-add'   ],
+            %   [ 'description',       'Description', 'modal-desc-add'   ],
+            %   [ 'postalAddress',     'Address',     'modal-addr-add'   ],
+            %   [ 'labeledURI',        'URI',         'modal-uri-add'    ],
+            % ) {
+            % my ($attr, $label, $modal) = @{$field};
+            % my @vals = $entry->get_value($attr);
+            <tr>
+              <th class="ps-3 align-top"><%= $label %></th>
+              <td colspan="2" class="pe-3">
+                % if (@vals) {
+                % for my $val (sort @vals) {
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                  <span class="text-break"><%= $val %></span>
+                  <form method="post" action="/users/<%= $username %>" class="d-inline ms-2 flex-shrink-0">
+                    <input type="hidden" name="action" value="<%= $attr %>_remove">
+                    <input type="hidden" name="<%= $attr %>" value="<%= $val %>">
+                    <button class="btn btn-outline-danger btn-sm py-0" title="Remove"
+                            onclick="return confirm('Remove this value?')">&#10005;</button>
+                  </form>
+                </div>
+                % }
+                % } else {
+                <span class="text-muted">—</span>
+                % }
+                <div class="mt-2">
+                  <button class="btn btn-sm btn-outline-primary py-0"
+                          data-bs-toggle="modal" data-bs-target="#<%= $modal %>">+ Add</button>
+                </div>
+              </td>
+            </tr>
             % }
-            <div class="mt-2">
-              <button class="btn btn-sm btn-outline-primary py-0"
-                      data-bs-toggle="modal" data-bs-target="#<%= $modal %>">+ Add</button>
-            </div>
-          </td>
-        </tr>
-        % }
 
-      </tbody>
-    </table>
-  </div>
-</div>
-
-% } else {
-<!-- Convert to inetOrgPerson -->
-<div class="card mt-4">
-  <div class="card-header"><strong>Contact &amp; Profile</strong></div>
-  <div class="card-body">
-    <p class="mb-3 text-muted">
-      This account does not have the <code>inetOrgPerson</code> objectClass.
-      Converting it enables contact and profile fields such as email, phone,
-      display name, and postal address.
-    </p>
-    <form method="post" action="/users/<%= $username %>/inetorgperson"
-          data-confirm="Convert <%= $username %> to inetOrgPerson?">
-      <button class="btn btn-outline-primary">Convert to inetOrgPerson</button>
-    </form>
-  </div>
-</div>
-% } # end inetOrgPerson else
-
-<!-- Group Memberships -->
-<div class="card mt-4">
-  <div class="card-header d-flex justify-content-between align-items-center">
-    <strong>Group Memberships</strong>
-    % if (@{$nonmember_groups}) {
-    <button class="btn btn-sm btn-outline-primary py-0"
-            data-bs-toggle="modal" data-bs-target="#modal-group-add">+ Add to Group</button>
-    % }
-  </div>
-  <div class="card-body p-0">
-    % if (@{$member_groups}) {
-    <table class="table table-sm mb-0">
-      <tbody>
-        % for my $g (@{$member_groups}) {
-        % my $gname = $g->get_value('cn');
-        <tr>
-          <td class="ps-3"><a href="/groups/<%= $gname %>"><%= $gname %></a></td>
-          <td class="text-muted"><small>GID <%= $g->get_value('gidNumber') %></small></td>
-          <td class="text-end pe-3">
-            <form method="post" action="/users/<%= $username %>/groups/<%= $gname %>/remove"
-                  data-confirm="Remove <%= $username %> from group <%= $gname %>?"
-                  class="d-inline">
-              <button class="btn btn-outline-danger btn-sm py-0" title="Remove from group">&#10005;</button>
-            </form>
-          </td>
-        </tr>
-        % }
-      </tbody>
-    </table>
+          </tbody>
+        </table>
+      </div>
+    </div>
     % } else {
-    <p class="text-muted p-3 mb-0">Not a member of any supplementary groups.</p>
-    % }
+    <!-- Convert to inetOrgPerson -->
+    <div class="card">
+      <div class="card-header"><strong>Contact &amp; Profile</strong></div>
+      <div class="card-body">
+        <p class="mb-3 text-muted">
+          This account does not have the <code>inetOrgPerson</code> objectClass.
+          Converting it enables contact and profile fields such as email, phone,
+          display name, and postal address.
+        </p>
+        <form method="post" action="/users/<%= $username %>/inetorgperson"
+              data-confirm="Convert <%= $username %> to inetOrgPerson?">
+          <button class="btn btn-outline-primary">Convert to inetOrgPerson</button>
+        </form>
+      </div>
+    </div>
+    % } # end inetOrgPerson else
+
   </div>
+
+  <!-- Right column: Group Memberships -->
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Group Memberships</strong>
+        % if (@{$nonmember_groups}) {
+        <button class="btn btn-sm btn-outline-primary py-0"
+                data-bs-toggle="modal" data-bs-target="#modal-group-add">+ Add to Group</button>
+        % }
+      </div>
+      <div class="card-body p-0">
+        % if (@{$member_groups}) {
+        <table class="table table-sm mb-0">
+          <tbody>
+            % for my $g (@{$member_groups}) {
+            % my $gname = $g->get_value('cn');
+            <tr>
+              <td class="ps-3"><a href="/groups/<%= $gname %>"><%= $gname %></a></td>
+              <td class="text-muted"><small>GID <%= $g->get_value('gidNumber') %></small></td>
+              <td class="text-end pe-3">
+                <form method="post" action="/users/<%= $username %>/groups/<%= $gname %>/remove"
+                      data-confirm="Remove <%= $username %> from group <%= $gname %>?"
+                      class="d-inline">
+                  <button class="btn btn-outline-danger btn-sm py-0" title="Remove from group">&#10005;</button>
+                </form>
+              </td>
+            </tr>
+            % }
+          </tbody>
+        </table>
+        % } else {
+        <p class="text-muted p-3 mb-0">Not a member of any supplementary groups.</p>
+        % }
+      </div>
+    </div>
+  </div>
+
 </div>
+
 
 <!-- Danger zone -->
 <div class="card border-danger mt-4">
