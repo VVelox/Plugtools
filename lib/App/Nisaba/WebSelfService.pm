@@ -39,7 +39,7 @@ routes.
 sub startup ($self) {
 	my $share = dist_dir('App-Nisaba');
 
-	$self->renderer->paths( ["$share/selfservice/templates"] );
+	$self->renderer->paths( ["$share/templates"] );
 	$self->static->paths( ["$share/public"] );
 
 	# Instantiate App::Nisaba
