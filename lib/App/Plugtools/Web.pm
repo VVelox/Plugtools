@@ -3,6 +3,7 @@ package App::Plugtools::Web;
 use Mojo::Base 'Mojolicious';
 use File::ShareDir qw(dist_dir);
 use App::Plugtools;
+use Mojo::URL;
 
 our $VERSION = '0.0.1';
 
@@ -32,6 +33,27 @@ sub startup {
 				$pt = App::Plugtools->new( \%args );
 			}
 			return $pt;
+		}
+	);
+
+	# Referer check: every POST must originate from the same host.
+	$self->hook(
+		before_dispatch => sub {
+			my $c = shift;
+			return unless $c->req->method eq 'POST';
+
+			my $referer = $c->req->headers->referrer;
+			unless ($referer) {
+				$c->render( text => 'Forbidden: missing Referer header', status => 403 );
+				return;
+			}
+
+			my $ref_host = Mojo::URL->new($referer)->host // '';
+			my $req_host = $c->req->url->to_abs->host     // '';
+			unless ( $ref_host eq $req_host ) {
+				$c->render( text => 'Forbidden: Referer host mismatch', status => 403 );
+				return;
+			}
 		}
 	);
 
