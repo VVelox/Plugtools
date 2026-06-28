@@ -119,6 +119,21 @@ sub new {
 				46 => 'updateAfterPassFailed',
 				47 => 'noShell',
 				48 => 'noHome',
+				49 => 'noMail',
+				50 => 'noTelephoneNumber',
+				51 => 'noMobile',
+				52 => 'noTitle',
+				53 => 'noRoomNumber',
+				54 => 'noEmployeeNumber',
+				55 => 'noEmployeeType',
+				56 => 'noPreferredLanguage',
+				57 => 'noLabeledURI',
+				58 => 'noSN',
+				59 => 'noGivenName',
+				60 => 'noDescription',
+				61 => 'noPostalAddress',
+				62 => 'noHomePostalAddress',
+				63 => 'noDisplayName',
 			},
 			fatal_flags      => {},
 			perror_not_fatal => 0,
@@ -3460,6 +3475,1977 @@ that calls Data::Dumper->Dumper on what is passed to it.
         $returned{error}=undef;
         return %returned;
     }
+
+=head2 ensureInetOrgPerson
+
+Ensures that a L<Net::LDAP::Entry> has C<inetOrgPerson> (and its required
+ancestor objectClasses C<person> and C<organizationalPerson>) present in its
+C<objectClass> attribute.  If any are missing they are added to the in-memory
+entry.  If C<person> is being added and the entry has no C<sn> value, C<sn>
+is set to C<$user> as a fallback, since C<sn> is a mandatory attribute of the
+C<person> schema.
+
+The entry is B<not> written back to LDAP by this method - call
+C<< $entry->update($ldap) >> afterwards as usual.
+
+=head3 args
+
+=head4 entry
+
+A L<Net::LDAP::Entry> object for the user, as returned by an LDAP search.
+
+=head4 user
+
+The uid string for the user.  Used as the fallback C<sn> value if one needs
+to be added.
+
+    my $entry = $mesg->pop_entry;
+    $pt->ensureInetOrgPerson( $entry, 'jsmith' );
+    $entry->add( title => 'Engineer' );
+    $entry->update($ldap);
+
+=cut
+
+sub ensureInetOrgPerson {
+	my ( $self, $entry, $user ) = @_;
+	my @oc     = $entry->get_value('objectClass');
+	my %oc_map = map { lc($_) => 1 } @oc;
+	my @to_add;
+	push @to_add, 'person'               unless $oc_map{person};
+	push @to_add, 'organizationalPerson' unless $oc_map{organizationalperson};
+	push @to_add, 'inetOrgPerson'        unless $oc_map{inetorgperson};
+	if (@to_add) {
+		$entry->add( objectClass => \@to_add );
+		unless ( $entry->get_value('sn') ) {
+			$entry->add( sn => $user );
+		}
+	}
+} ## end sub ensureInetOrgPerson
+
+=head2 userTitleChange
+
+Change the title (job title) for a user.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 title
+
+The new title value.
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userTitleChange({ user => 'someUser', title => 'Senior Engineer' });
+
+=cut
+
+sub userTitleChange {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{title} ) ) {
+		$self->{error}       = 52;
+		$self->{errorString} = 'No title specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$self->ensureInetOrgPerson( $entry, $args{user} );
+	my $old = $entry->get_value('title');
+	$entry->delete( title => [$old] ) if defined $old;
+	$entry->add( title => $args{title} );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Changing title to "' . $args{title} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userTitleChange
+
+=head2 userRoomNumberChange
+
+Change the roomNumber for a user.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 roomNumber
+
+The new room number value.
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userRoomNumberChange({ user => 'someUser', roomNumber => '4B-12' });
+
+=cut
+
+sub userRoomNumberChange {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{roomNumber} ) ) {
+		$self->{error}       = 53;
+		$self->{errorString} = 'No roomNumber specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$self->ensureInetOrgPerson( $entry, $args{user} );
+	my $old = $entry->get_value('roomNumber');
+	$entry->delete( roomNumber => [$old] ) if defined $old;
+	$entry->add( roomNumber => $args{roomNumber} );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Changing roomNumber to "' . $args{roomNumber} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userRoomNumberChange
+
+=head2 userEmployeeNumberChange
+
+Change the employeeNumber for a user.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 employeeNumber
+
+The new employee number value.
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userEmployeeNumberChange({ user => 'someUser', employeeNumber => 'E-1042' });
+
+=cut
+
+sub userEmployeeNumberChange {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{employeeNumber} ) ) {
+		$self->{error}       = 54;
+		$self->{errorString} = 'No employeeNumber specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$self->ensureInetOrgPerson( $entry, $args{user} );
+	my $old = $entry->get_value('employeeNumber');
+	$entry->delete( employeeNumber => [$old] ) if defined $old;
+	$entry->add( employeeNumber => $args{employeeNumber} );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Changing employeeNumber to "' . $args{employeeNumber} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userEmployeeNumberChange
+
+=head2 userEmployeeTypeChange
+
+Change the employeeType for a user.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 employeeType
+
+The new employee type value (e.g. 'staff', 'contractor').
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userEmployeeTypeChange({ user => 'someUser', employeeType => 'contractor' });
+
+=cut
+
+sub userEmployeeTypeChange {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{employeeType} ) ) {
+		$self->{error}       = 55;
+		$self->{errorString} = 'No employeeType specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$self->ensureInetOrgPerson( $entry, $args{user} );
+	my $old = $entry->get_value('employeeType');
+	$entry->delete( employeeType => [$old] ) if defined $old;
+	$entry->add( employeeType => $args{employeeType} );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Changing employeeType to "' . $args{employeeType} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userEmployeeTypeChange
+
+=head2 userMailAdd
+
+Add an email address to a user. Multiple values are supported.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 mail
+
+The email address to add.
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userMailAdd({ user => 'someUser', mail => 'user@example.com' });
+
+=cut
+
+sub userMailAdd {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{mail} ) ) {
+		$self->{error}       = 49;
+		$self->{errorString} = 'No mail address specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$self->ensureInetOrgPerson( $entry, $args{user} );
+	$entry->add( mail => $args{mail} );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Adding mail "' . $args{mail} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userMailAdd
+
+=head2 userMailRemove
+
+Remove an email address from a user.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 mail
+
+The email address to remove.
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userMailRemove({ user => 'someUser', mail => 'user@example.com' });
+
+=cut
+
+sub userMailRemove {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{mail} ) ) {
+		$self->{error}       = 49;
+		$self->{errorString} = 'No mail address specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->delete( mail => [ $args{mail} ] );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Removing mail "' . $args{mail} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userMailRemove
+
+=head2 userTelephoneNumberAdd
+
+Add a telephone number to a user. Multiple values are supported.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 telephoneNumber
+
+The telephone number to add.
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userTelephoneNumberAdd({ user => 'someUser', telephoneNumber => '+1 555 000 1234' });
+
+=cut
+
+sub userTelephoneNumberAdd {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{telephoneNumber} ) ) {
+		$self->{error}       = 50;
+		$self->{errorString} = 'No telephoneNumber specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$self->ensureInetOrgPerson( $entry, $args{user} );
+	$entry->add( telephoneNumber => $args{telephoneNumber} );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Adding telephoneNumber "' . $args{telephoneNumber} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userTelephoneNumberAdd
+
+=head2 userTelephoneNumberRemove
+
+Remove a telephone number from a user.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 telephoneNumber
+
+The telephone number to remove.
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userTelephoneNumberRemove({ user => 'someUser', telephoneNumber => '+1 555 000 1234' });
+
+=cut
+
+sub userTelephoneNumberRemove {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{telephoneNumber} ) ) {
+		$self->{error}       = 50;
+		$self->{errorString} = 'No telephoneNumber specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->delete( telephoneNumber => [ $args{telephoneNumber} ] );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Removing telephoneNumber "' . $args{telephoneNumber} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userTelephoneNumberRemove
+
+=head2 userMobileAdd
+
+Add a mobile number to a user. Multiple values are supported.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 mobile
+
+The mobile number to add.
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userMobileAdd({ user => 'someUser', mobile => '+1 555 000 5678' });
+
+=cut
+
+sub userMobileAdd {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{mobile} ) ) {
+		$self->{error}       = 51;
+		$self->{errorString} = 'No mobile number specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$self->ensureInetOrgPerson( $entry, $args{user} );
+	$entry->add( mobile => $args{mobile} );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Adding mobile "' . $args{mobile} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userMobileAdd
+
+=head2 userMobileRemove
+
+Remove a mobile number from a user.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 mobile
+
+The mobile number to remove.
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userMobileRemove({ user => 'someUser', mobile => '+1 555 000 5678' });
+
+=cut
+
+sub userMobileRemove {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{mobile} ) ) {
+		$self->{error}       = 51;
+		$self->{errorString} = 'No mobile number specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->delete( mobile => [ $args{mobile} ] );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Removing mobile "' . $args{mobile} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userMobileRemove
+
+=head2 userPreferredLanguageAdd
+
+Add a preferred language to a user. Multiple values are supported.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 preferredLanguage
+
+The language tag to add (e.g. 'en', 'fr', 'de').
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userPreferredLanguageAdd({ user => 'someUser', preferredLanguage => 'en' });
+
+=cut
+
+sub userPreferredLanguageAdd {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{preferredLanguage} ) ) {
+		$self->{error}       = 56;
+		$self->{errorString} = 'No preferredLanguage specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$self->ensureInetOrgPerson( $entry, $args{user} );
+	$entry->add( preferredLanguage => $args{preferredLanguage} );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Adding preferredLanguage "' . $args{preferredLanguage} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userPreferredLanguageAdd
+
+=head2 userPreferredLanguageRemove
+
+Remove a preferred language from a user.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 preferredLanguage
+
+The language tag to remove.
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userPreferredLanguageRemove({ user => 'someUser', preferredLanguage => 'en' });
+
+=cut
+
+sub userPreferredLanguageRemove {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{preferredLanguage} ) ) {
+		$self->{error}       = 56;
+		$self->{errorString} = 'No preferredLanguage specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->delete( preferredLanguage => [ $args{preferredLanguage} ] );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Removing preferredLanguage "' . $args{preferredLanguage} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userPreferredLanguageRemove
+
+=head2 userLabeledURIAdd
+
+Add a labeled URI to a user. Multiple values are supported.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 labeledURI
+
+The URI to add (optionally with a label, e.g. 'https://example.com My Page').
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userLabeledURIAdd({ user => 'someUser', labeledURI => 'https://example.com My Page' });
+
+=cut
+
+sub userLabeledURIAdd {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{labeledURI} ) ) {
+		$self->{error}       = 57;
+		$self->{errorString} = 'No labeledURI specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$self->ensureInetOrgPerson( $entry, $args{user} );
+	$entry->add( labeledURI => $args{labeledURI} );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Adding labeledURI "' . $args{labeledURI} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userLabeledURIAdd
+
+=head2 userLabeledURIRemove
+
+Remove a labeled URI from a user.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 labeledURI
+
+The URI value to remove (must match exactly as stored).
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userLabeledURIRemove({ user => 'someUser', labeledURI => 'https://example.com My Page' });
+
+=cut
+
+sub userLabeledURIRemove {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{labeledURI} ) ) {
+		$self->{error}       = 57;
+		$self->{errorString} = 'No labeledURI specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->delete( labeledURI => [ $args{labeledURI} ] );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Removing labeledURI "' . $args{labeledURI} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userLabeledURIRemove
+
+=head2 userSNchange
+
+Change the surname (C<sn>) for a user.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 sn
+
+The new surname value.
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userSNchange({ user => 'jsmith', sn => 'Smith' });
+
+=cut
+
+sub userSNchange {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{sn} ) ) {
+		$self->{error}       = 58;
+		$self->{errorString} = 'No sn specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$self->ensureInetOrgPerson( $entry, $args{user} );
+	my $old = $entry->get_value('sn');
+	$entry->delete( sn => [$old] ) if defined $old;
+	$entry->add( sn => $args{sn} );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Changing sn to "' . $args{sn} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userSNchange
+
+=head2 userGivenNameChange
+
+Change the given name (C<givenName>) for a user.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 givenName
+
+The new given name value.
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userGivenNameChange({ user => 'jsmith', givenName => 'John' });
+
+=cut
+
+sub userGivenNameChange {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{givenName} ) ) {
+		$self->{error}       = 59;
+		$self->{errorString} = 'No givenName specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$self->ensureInetOrgPerson( $entry, $args{user} );
+	my $old = $entry->get_value('givenName');
+	$entry->delete( givenName => [$old] ) if defined $old;
+	$entry->add( givenName => $args{givenName} );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Changing givenName to "' . $args{givenName} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userGivenNameChange
+
+=head2 userDisplayNameChange
+
+Change the display name (C<displayName>) for a user.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 displayName
+
+The new display name value.
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userDisplayNameChange({ user => 'jsmith', displayName => 'John Smith' });
+
+=cut
+
+sub userDisplayNameChange {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{displayName} ) ) {
+		$self->{error}       = 63;
+		$self->{errorString} = 'No displayName specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$self->ensureInetOrgPerson( $entry, $args{user} );
+	my $old = $entry->get_value('displayName');
+	$entry->delete( displayName => [$old] ) if defined $old;
+	$entry->add( displayName => $args{displayName} );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Changing displayName to "' . $args{displayName} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userDisplayNameChange
+
+=head2 userHomePostalAddressChange
+
+Change the home postal address (C<homePostalAddress>) for a user.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 homePostalAddress
+
+The new home postal address value.
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userHomePostalAddressChange({ user => 'jsmith', homePostalAddress => '123 Main St$Springfield$IL 62701$USA' });
+
+=cut
+
+sub userHomePostalAddressChange {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{homePostalAddress} ) ) {
+		$self->{error}       = 62;
+		$self->{errorString} = 'No homePostalAddress specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$self->ensureInetOrgPerson( $entry, $args{user} );
+	my $old = $entry->get_value('homePostalAddress');
+	$entry->delete( homePostalAddress => [$old] ) if defined $old;
+	$entry->add( homePostalAddress => $args{homePostalAddress} );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Changing homePostalAddress for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userHomePostalAddressChange
+
+=head2 userDescriptionAdd
+
+Add a description value to a user. Multiple values are supported.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 description
+
+The description string to add.
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userDescriptionAdd({ user => 'jsmith', description => 'Linux sysadmin' });
+
+=cut
+
+sub userDescriptionAdd {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{description} ) ) {
+		$self->{error}       = 60;
+		$self->{errorString} = 'No description specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$self->ensureInetOrgPerson( $entry, $args{user} );
+	$entry->add( description => $args{description} );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Adding description for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userDescriptionAdd
+
+=head2 userDescriptionRemove
+
+Remove a description value from a user.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 description
+
+The description string to remove (must match exactly as stored).
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userDescriptionRemove({ user => 'jsmith', description => 'Linux sysadmin' });
+
+=cut
+
+sub userDescriptionRemove {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{description} ) ) {
+		$self->{error}       = 60;
+		$self->{errorString} = 'No description specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->delete( description => [ $args{description} ] );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Removing description for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userDescriptionRemove
+
+=head2 userPostalAddressAdd
+
+Add a postal address (C<postalAddress>) to a user. Multiple values are supported.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 postalAddress
+
+The postal address string to add.  Use C<$> as the line separator per RFC 4517
+(e.g. C<123 Main St$Springfield$IL 62701$USA>).
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userPostalAddressAdd({ user => 'jsmith', postalAddress => '123 Main St$Springfield$IL 62701$USA' });
+
+=cut
+
+sub userPostalAddressAdd {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{postalAddress} ) ) {
+		$self->{error}       = 61;
+		$self->{errorString} = 'No postalAddress specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$self->ensureInetOrgPerson( $entry, $args{user} );
+	$entry->add( postalAddress => $args{postalAddress} );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Adding postalAddress for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userPostalAddressAdd
+
+=head2 userPostalAddressRemove
+
+Remove a postal address from a user.
+
+=head3 args hash
+
+=head4 user
+
+The user to act on.
+
+=head4 postalAddress
+
+The postal address string to remove (must match exactly as stored).
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userPostalAddressRemove({ user => 'jsmith', postalAddress => '123 Main St$Springfield$IL 62701$USA' });
+
+=cut
+
+sub userPostalAddressRemove {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{postalAddress} ) ) {
+		$self->{error}       = 61;
+		$self->{errorString} = 'No postalAddress specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->delete( postalAddress => [ $args{postalAddress} ] );
+
+	my $mesg2 = $entry->update($ldap);
+	if ( $mesg2->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Removing postalAddress for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userPostalAddressRemove
+
 	1;
 
 

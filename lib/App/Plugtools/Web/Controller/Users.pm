@@ -74,6 +74,72 @@ sub update {
 	} elsif ( $action eq 'home' ) {
 		eval { $self->pt->userHomeChange( { user => $user, home => $self->param('home') } ) };
 		$error = $@;
+	} elsif ( $action eq 'title' ) {
+		eval { $self->pt->userTitleChange( { user => $user, title => $self->param('title') } ) };
+		$error = $@;
+	} elsif ( $action eq 'roomNumber' ) {
+		eval { $self->pt->userRoomNumberChange( { user => $user, roomNumber => $self->param('roomNumber') } ) };
+		$error = $@;
+	} elsif ( $action eq 'employeeNumber' ) {
+		eval { $self->pt->userEmployeeNumberChange( { user => $user, employeeNumber => $self->param('employeeNumber') } ) };
+		$error = $@;
+	} elsif ( $action eq 'employeeType' ) {
+		eval { $self->pt->userEmployeeTypeChange( { user => $user, employeeType => $self->param('employeeType') } ) };
+		$error = $@;
+	} elsif ( $action eq 'mail_add' ) {
+		eval { $self->pt->userMailAdd( { user => $user, mail => $self->param('mail') } ) };
+		$error = $@;
+	} elsif ( $action eq 'mail_remove' ) {
+		eval { $self->pt->userMailRemove( { user => $user, mail => $self->param('mail') } ) };
+		$error = $@;
+	} elsif ( $action eq 'telephoneNumber_add' ) {
+		eval { $self->pt->userTelephoneNumberAdd( { user => $user, telephoneNumber => $self->param('telephoneNumber') } ) };
+		$error = $@;
+	} elsif ( $action eq 'telephoneNumber_remove' ) {
+		eval { $self->pt->userTelephoneNumberRemove( { user => $user, telephoneNumber => $self->param('telephoneNumber') } ) };
+		$error = $@;
+	} elsif ( $action eq 'mobile_add' ) {
+		eval { $self->pt->userMobileAdd( { user => $user, mobile => $self->param('mobile') } ) };
+		$error = $@;
+	} elsif ( $action eq 'mobile_remove' ) {
+		eval { $self->pt->userMobileRemove( { user => $user, mobile => $self->param('mobile') } ) };
+		$error = $@;
+	} elsif ( $action eq 'preferredLanguage_add' ) {
+		eval { $self->pt->userPreferredLanguageAdd( { user => $user, preferredLanguage => $self->param('preferredLanguage') } ) };
+		$error = $@;
+	} elsif ( $action eq 'preferredLanguage_remove' ) {
+		eval { $self->pt->userPreferredLanguageRemove( { user => $user, preferredLanguage => $self->param('preferredLanguage') } ) };
+		$error = $@;
+	} elsif ( $action eq 'labeledURI_add' ) {
+		eval { $self->pt->userLabeledURIAdd( { user => $user, labeledURI => $self->param('labeledURI') } ) };
+		$error = $@;
+	} elsif ( $action eq 'labeledURI_remove' ) {
+		eval { $self->pt->userLabeledURIRemove( { user => $user, labeledURI => $self->param('labeledURI') } ) };
+		$error = $@;
+	} elsif ( $action eq 'sn' ) {
+		eval { $self->pt->userSNchange( { user => $user, sn => $self->param('sn') } ) };
+		$error = $@;
+	} elsif ( $action eq 'givenName' ) {
+		eval { $self->pt->userGivenNameChange( { user => $user, givenName => $self->param('givenName') } ) };
+		$error = $@;
+	} elsif ( $action eq 'displayName' ) {
+		eval { $self->pt->userDisplayNameChange( { user => $user, displayName => $self->param('displayName') } ) };
+		$error = $@;
+	} elsif ( $action eq 'homePostalAddress' ) {
+		eval { $self->pt->userHomePostalAddressChange( { user => $user, homePostalAddress => $self->param('homePostalAddress') } ) };
+		$error = $@;
+	} elsif ( $action eq 'description_add' ) {
+		eval { $self->pt->userDescriptionAdd( { user => $user, description => $self->param('description') } ) };
+		$error = $@;
+	} elsif ( $action eq 'description_remove' ) {
+		eval { $self->pt->userDescriptionRemove( { user => $user, description => $self->param('description') } ) };
+		$error = $@;
+	} elsif ( $action eq 'postalAddress_add' ) {
+		eval { $self->pt->userPostalAddressAdd( { user => $user, postalAddress => $self->param('postalAddress') } ) };
+		$error = $@;
+	} elsif ( $action eq 'postalAddress_remove' ) {
+		eval { $self->pt->userPostalAddressRemove( { user => $user, postalAddress => $self->param('postalAddress') } ) };
+		$error = $@;
 	} else {
 		$self->flash( error => "Unknown action: $action" );
 		return $self->redirect_to( 'users_show', user => $user );
