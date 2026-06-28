@@ -237,8 +237,16 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
-        <p>Remove the <code>userPassword</code> attribute from <strong><%= $username %></strong>?</p>
-        <p class="text-muted mb-0">This disables password-based authentication for this account.</p>
+        <div class="alert alert-danger py-2 mb-3">
+          <strong>This will disable password-based authentication</strong> for
+          <strong><%= $username %></strong>.
+        </div>
+        <p>
+          Removing the <code>userPassword</code> attribute means this account will no longer
+          be able to authenticate using a password. Any service that relies on LDAP password
+          binding for this user will stop working immediately.
+        </p>
+        <p class="mb-0">Are you sure you want to continue?</p>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
