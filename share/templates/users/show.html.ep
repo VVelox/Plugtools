@@ -15,7 +15,11 @@
 
     <!-- POSIX Attributes -->
     <div class="card">
-      <div class="card-header"><strong>Account: <%= $username %></strong></div>
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Account: <%= $username %></strong>
+        <button class="btn btn-sm btn-outline-secondary py-0"
+                data-bs-toggle="modal" data-bs-target="#modal-ldap-entry">View LDAP</button>
+      </div>
       <div class="card-body p-0">
         <table class="table table-sm mb-0">
           <tbody>
@@ -810,3 +814,30 @@ document.getElementById('group-add-all').addEventListener('change', function() {
 });
 </script>
 % }
+
+<!-- ===== LDAP entry viewer ===== -->
+% my %sensitive = map { lc($_) => 1 } qw(userPassword sambaNTPassword sambaLMPassword);
+<div class="modal fade" id="modal-ldap-entry" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
+    <div class="modal-header">
+      <h5 class="modal-title">LDAP Entry: <%= $username %></h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+    </div>
+    <div class="modal-body">
+<pre class="mb-0" style="font-size:0.78rem">dn: <%= $entry->dn %>
+% for my $attr ($entry->attributes) {
+% for my $val ($entry->get_value($attr)) {
+% if ($sensitive{lc($attr)}) {
+<%= $attr %>: <span class="text-warning fst-italic">&lt;&lt;NOT DISPLAYED&gt;&gt;</span>
+% } else {
+<%= $attr %>: <%= $val %>
+% }
+% }
+% }
+</pre>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+    </div>
+  </div></div>
+</div>
