@@ -206,6 +206,57 @@
     </div>
     % } # end inetOrgPerson else
 
+    <!-- SSH Public Keys -->
+    % if ($lpk_schema) {
+    % if ($has_lpk) {
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>SSH Public Keys</strong>
+        <button class="btn btn-sm btn-outline-primary py-0"
+                data-bs-toggle="modal" data-bs-target="#modal-sshkey-add">+ Add Key</button>
+      </div>
+      <div class="card-body p-0">
+        % my @ssh_keys = $entry->get_value('sshPublicKey');
+        % if (@ssh_keys) {
+        <ul class="list-group list-group-flush mb-0">
+          % for my $key (sort @ssh_keys) {
+          % my $key_display = length($key) > 60 ? substr($key, 0, 60) . '…' : $key;
+          <li class="list-group-item px-3 py-2">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <code class="text-break small" style="word-break:break-all"><%= $key %></code>
+              <form method="post" action="/users/<%= $username %>" class="flex-shrink-0"
+                    data-confirm="Remove this SSH public key?">
+                <input type="hidden" name="action" value="sshkey_remove">
+                <input type="hidden" name="key" value="<%= $key %>">
+                <button class="btn btn-outline-danger btn-sm py-0" title="Remove">&#10005;</button>
+              </form>
+            </div>
+          </li>
+          % }
+        </ul>
+        % } else {
+        <p class="text-muted p-3 mb-0">No SSH public keys stored.</p>
+        % }
+      </div>
+    </div>
+    % } else {
+    <div class="card">
+      <div class="card-header"><strong>SSH Public Keys</strong></div>
+      <div class="card-body">
+        <p class="mb-3 text-muted">
+          This account does not have the <code>ldapPublicKey</code> objectClass.
+          Enabling it allows SSH public keys to be stored in LDAP for use with
+          <code>AuthorizedKeysCommand</code>.
+        </p>
+        <form method="post" action="/users/<%= $username %>/lpk"
+              data-confirm="Add ldapPublicKey objectClass to <%= $username %>?">
+          <button class="btn btn-outline-primary">Enable SSH Key Storage</button>
+        </form>
+      </div>
+    </div>
+    % }
+    % } # end lpk_schema
+
   </div>
 
   <!-- Right column: Group Memberships -->
@@ -661,6 +712,32 @@
     </form>
   </div></div>
 </div>
+
+<!-- ===== SSH public key modal ===== -->
+
+% if ($lpk_schema && $has_lpk) {
+<div class="modal fade" id="modal-sshkey-add" tabindex="-1">
+  <div class="modal-dialog modal-lg"><div class="modal-content">
+    <form method="post" action="/users/<%= $username %>">
+      <input type="hidden" name="action" value="sshkey_add">
+      <div class="modal-header">
+        <h5 class="modal-title">Add SSH Public Key</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label">Public Key</label>
+        <textarea name="key" class="form-control font-monospace" rows="4" required
+                  placeholder="ssh-ed25519 AAAA... user@host"></textarea>
+        <div class="form-text">Paste the full public key (one key per submission).</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">Add Key</button>
+      </div>
+    </form>
+  </div></div>
+</div>
+% }
 
 <!-- ===== inetOrgPerson multi-value add modals ===== -->
 

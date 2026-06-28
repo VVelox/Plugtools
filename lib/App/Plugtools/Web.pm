@@ -64,6 +64,7 @@ sub startup {
 	$r->post('/users/:user/password')->to('users#password')->name('users_password');
 	$r->post('/users/:user/password/remove')->to('users#remove_password')->name('users_remove_password');
 	$r->post('/users/:user/inetorgperson')->to('users#inetorgperson')->name('users_inetorgperson');
+	$r->post('/users/:user/lpk')->to('users#lpk')->name('users_lpk');
 	$r->post('/users/:user/groups')->to('users#add_to_group')->name('users_add_to_group');
 	$r->post('/users/:user/groups/:group/remove')->to('users#remove_from_group')->name('users_remove_from_group');
 

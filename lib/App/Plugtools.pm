@@ -143,6 +143,9 @@ sub new {
 				69 => 'noMemberSpecified',
 				70 => 'noCN',
 				71 => 'lastCN',
+				72 => 'noLdapPublicKeySchema',
+				73 => 'noSSHPublicKey',
+				74 => 'alreadyLdapPublicKey',
 			},
 			fatal_flags      => {},
 			perror_not_fatal => 0,
@@ -6648,6 +6651,312 @@ sub userCNremove {
 	$entry->dump if $args{dump};
 	return 1;
 } ## end sub userCNremove
+
+=head2 ldapPublicKeyAvailable
+
+Returns true if the C<ldapPublicKey> objectClass is present in the LDAP
+server's schema, false if it is not loaded.  Returns C<undef> on error
+(e.g. the schema subentry could not be fetched).
+
+    if ( $pt->ldapPublicKeyAvailable ) { ... }
+
+=cut
+
+sub ldapPublicKeyAvailable {
+	my $self = $_[0];
+
+	$self->errorblank;
+
+	my $ldap   = $self->connect();
+	my $schema = $ldap->schema;
+	if ( !defined($schema) ) {
+		$self->{error}       = 72;
+		$self->{errorString} = 'Could not fetch LDAP schema';
+		$self->warn;
+		return undef;
+	}
+
+	my $oc = $schema->objectclass('ldapPublicKey');
+	return defined($oc) ? 1 : 0;
+} ## end sub ldapPublicKeyAvailable
+
+=head2 userConvertToLdapPublicKey
+
+Add the C<ldapPublicKey> auxiliary objectClass to a user entry, enabling
+storage of SSH public keys via the C<sshPublicKey> attribute.
+
+Returns 1 on success (or if the objectClass was already present),
+C<undef> on error.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid) to act on. Required.
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userConvertToLdapPublicKey({ user => 'jsmith' });
+
+=cut
+
+sub userConvertToLdapPublicKey {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	# Already has the objectClass — nothing to do
+	my %oc_map = map { lc($_) => 1 } $entry->get_value('objectClass');
+	if ( $oc_map{ldappublickey} ) {
+		$self->{error}       = 74;
+		$self->{errorString} = 'The user "' . $args{user} . '" already has the ldapPublicKey objectClass';
+		$self->warn;
+		return undef;
+	}
+
+	# ldapPublicKey is AUXILIARY — a simple modify is sufficient
+	$entry->add( objectClass => 'ldapPublicKey' );
+
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Adding ldapPublicKey objectClass to "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userConvertToLdapPublicKey
+
+=head2 userSSHPublicKeyAdd
+
+Add an SSH public key to a user.  The user must already have the
+C<ldapPublicKey> objectClass; call C<userConvertToLdapPublicKey> first
+if needed.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid) to act on. Required.
+
+=head4 key
+
+The SSH public key string to add. Required.
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userSSHPublicKeyAdd({ user => 'jsmith', key => 'ssh-ed25519 AAAA...' });
+
+=cut
+
+sub userSSHPublicKeyAdd {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{key} ) || $args{key} eq '' ) {
+		$self->{error}       = 73;
+		$self->{errorString} = 'No SSH public key specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( $args{key} =~ /[\n\r]/ ) {
+		$self->{error}       = 73;
+		$self->{errorString} = 'SSH public key must not contain newlines';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	my %oc_map = map { lc($_) => 1 } $entry->get_value('objectClass');
+	if ( !$oc_map{ldappublickey} ) {
+		$self->{error}       = 72;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not have the ldapPublicKey objectClass';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->add( sshPublicKey => $args{key} );
+
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Adding sshPublicKey for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userSSHPublicKeyAdd
+
+=head2 userSSHPublicKeyRemove
+
+Remove a specific SSH public key from a user.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid) to act on. Required.
+
+=head4 key
+
+The SSH public key string to remove. Required.
+
+=head4 dump
+
+Call the dump method on the entry afterwards.
+
+    $pt->userSSHPublicKeyRemove({ user => 'jsmith', key => 'ssh-ed25519 AAAA...' });
+
+=cut
+
+sub userSSHPublicKeyRemove {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) {
+		%args = %{ $_[1] };
+	}
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{key} ) || $args{key} eq '' ) {
+		$self->{error}       = 73;
+		$self->{errorString} = 'No SSH public key specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))'
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->delete( sshPublicKey => [ $args{key} ] );
+
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Removing sshPublicKey for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	$entry->dump if $args{dump};
+	return 1;
+} ## end sub userSSHPublicKeyRemove
 
 # Format a Net::LDAP::Entry as a human-readable string for diagnostic output.
 sub _entryToString {

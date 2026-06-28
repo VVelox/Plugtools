@@ -77,6 +77,15 @@ sub show {
 	my $has_password = 0;
 	eval { $has_password = $self->pt->userHasPassword( { user => $user } ) // 0 };
 
+	my $lpk_schema = 0;
+	eval { $lpk_schema = $self->pt->ldapPublicKeyAvailable // 0 };
+
+	my $has_lpk = 0;
+	if ($entry) {
+		my %oc = map { lc($_) => 1 } $entry->get_value('objectClass');
+		$has_lpk = $oc{ldappublickey} ? 1 : 0;
+	}
+
 	$self->render(
 		template         => 'users/show',
 		entry            => $entry,
@@ -85,6 +94,8 @@ sub show {
 		member_groups    => \@member_groups,
 		nonmember_groups => \@nonmember_groups,
 		has_password     => $has_password,
+		lpk_schema       => $lpk_schema,
+		has_lpk          => $has_lpk,
 	);
 } ## end sub show
 
@@ -181,6 +192,14 @@ sub update {
 	} elsif ( $action eq 'cn_remove' ) {
 		eval { $self->pt->userCNremove( { user => $user, cn => $self->param('cn') } ) };
 		$error = $@;
+	} elsif ( $action eq 'sshkey_add' ) {
+		my $key = $self->param('key') // '';
+		$key =~ s/[\r\n]+$//;    # strip trailing newline that textareas append
+		eval { $self->pt->userSSHPublicKeyAdd( { user => $user, key => $key } ) };
+		$error = $@;
+	} elsif ( $action eq 'sshkey_remove' ) {
+		eval { $self->pt->userSSHPublicKeyRemove( { user => $user, key => $self->param('key') } ) };
+		$error = $@;
 	} else {
 		$self->flash( error => "Unknown action: $action" );
 		return $self->redirect_to( 'users_show', user => $user );
@@ -224,6 +243,20 @@ sub inetorgperson {
 	$self->flash( success => "User '$user' converted to inetOrgPerson." );
 	$self->redirect_to( 'users_show', user => $user );
 } ## end sub inetorgperson
+
+sub lpk {
+	my $self = shift;
+	my $user = $self->param('user');
+
+	eval { $self->pt->userConvertToLdapPublicKey( { user => $user } ) };
+	if ($@) {
+		$self->flash( error => "Failed to add ldapPublicKey objectClass to '$user': $@" );
+		return $self->redirect_to( 'users_show', user => $user );
+	}
+
+	$self->flash( success => "SSH public key support enabled for '$user'." );
+	$self->redirect_to( 'users_show', user => $user );
+} ## end sub lpk
 
 sub password {
 	my $self = shift;
