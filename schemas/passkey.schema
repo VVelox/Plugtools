@@ -1,0 +1,67 @@
+# Passkey (WebAuthn / FIDO2) LDAP Schema
+#
+# Inspired by FreeIPA's ipapasskey attribute and SSSD's passkey provider.
+# Each registered passkey is stored as a single value of the multi-valued
+# passkeyCredential attribute, encoding all per-credential data in one
+# colon-delimited record.  This avoids the LDAP multi-value correlation
+# problem that would arise from separate parallel attribute lists.
+#
+# passkeyCredential record format (fields delimited by '|'):
+#
+#   credentialId | cosePublicKey | algorithm | signCount | aaguid |
+#   transports | backupEligible | backupState | nickname |
+#   createdDate | lastUsedDate
+#
+# Field descriptions:
+#   credentialId    base64url-encoded WebAuthn credential ID
+#   cosePublicKey   base64url-encoded COSE-encoded public key
+#   algorithm       COSE algorithm integer (e.g. -7=ES256, -8=EdDSA,
+#                   -257=RS256)
+#   signCount       unsigned integer; 0 for authenticators that do not
+#                   support counters
+#   aaguid          authenticator attestation GUID in 8-4-4-4-12 UUID
+#                   form, or empty if not provided
+#   transports      comma-separated transport hints (usb, nfc, ble,
+#                   internal, hybrid, cable), or empty
+#   backupEligible  TRUE or FALSE (WebAuthn BE flag)
+#   backupState     TRUE or FALSE (WebAuthn BS flag)
+#   nickname        percent-encoded UTF-8 display name chosen by the
+#                   user, or empty
+#   createdDate     ISO 8601 UTC timestamp of credential registration
+#   lastUsedDate    ISO 8601 UTC timestamp of last successful use,
+#                   or empty
+#
+# Structure:
+#   1.3.6.1.4.1.26481.2.9.1.x = Attribute Types
+#   1.3.6.1.4.1.26481.2.9.2.x = Object Classes
+
+# passkeyCredential - one value per registered passkey (see format above)
+attributetype ( 1.3.6.1.4.1.26481.2.9.1.1
+  NAME 'passkeyCredential'
+  DESC 'Encoded WebAuthn/FIDO2 passkey credential record; one value per registered passkey'
+  EQUALITY caseExactMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+
+# passkeyRpId - the Relying Party identifier (domain) for this user
+attributetype ( 1.3.6.1.4.1.26481.2.9.1.2
+  NAME 'passkeyRpId'
+  DESC 'WebAuthn Relying Party identifier (domain) for passkey authentication, e.g. example.com'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# passkeyUserVerification - UV policy applied when authenticating this user
+attributetype ( 1.3.6.1.4.1.26481.2.9.1.3
+  NAME 'passkeyUserVerification'
+  DESC 'User verification policy for passkey authentication: required, preferred, or discouraged (default: preferred)'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# passkeyUser - auxiliary objectClass for users with passkey credentials
+objectclass ( 1.3.6.1.4.1.26481.2.9.2.1
+  NAME 'passkeyUser'
+  DESC 'User with one or more WebAuthn/FIDO2 passkey credentials'
+  SUP top
+  AUXILIARY
+  MAY ( passkeyCredential $ passkeyRpId $ passkeyUserVerification ) )

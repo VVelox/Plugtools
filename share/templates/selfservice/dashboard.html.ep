@@ -218,3 +218,161 @@
 
 
 % } # end if $totp_schema
+
+% if ($passkey_schema) {
+% my $has_passkey = ($passkey_info && $passkey_info->{hasPasskeyUser}) ? 1 : 0;
+% my @pk_creds    = $has_passkey ? @{ $passkey_info->{credentials} // [] } : ();
+<!-- Passkeys -->
+<div class="card border-secondary mb-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span class="text-danger fw-bold">Passkeys</span>
+    % if ($has_passkey) {
+    <span class="badge bg-success">Enabled</span>
+    % } else {
+    <span class="badge bg-secondary">Not enabled</span>
+    % }
+  </div>
+  <div class="card-body">
+  % if ($has_passkey) {
+    % if (@pk_creds) {
+    <ul class="list-group list-group-flush mb-3">
+      % for my $cred (@pk_creds) {
+      <li class="list-group-item bg-transparent border-secondary d-flex justify-content-between align-items-start gap-2">
+        <div class="flex-grow-1">
+          <div class="small fw-semibold"><%= $cred->{nickname} || 'Unnamed passkey' %></div>
+          <div class="text-secondary" style="font-size:.75rem">
+            % my $tr = join(', ', @{$cred->{transports} // []});
+            <%= $tr || 'unknown transport' %> &middot;
+            registered <%= $cred->{createdDate} || 'unknown' %>
+            % if ($cred->{lastUsedDate}) {
+            &middot; last used <%= $cred->{lastUsedDate} %>
+            % }
+          </div>
+        </div>
+        <form method="post" action="<%= url_for('passkey_remove') %>"
+              data-confirm="Remove this passkey?" class="flex-shrink-0">
+          <input type="hidden" name="credentialId" value="<%= $cred->{credentialId} %>">
+          <button type="submit" class="btn btn-outline-danger btn-sm">Remove</button>
+        </form>
+      </li>
+      % }
+    </ul>
+    % } else {
+    <p class="text-secondary small">No passkeys registered yet.</p>
+    % }
+    <button type="button" class="btn btn-outline-secondary btn-sm" id="pk-add-btn">+ Add Passkey</button>
+    <div id="pk-add-form" class="mt-3 d-none">
+      <div class="mb-2">
+        <label class="form-label small" for="pk-nickname">Nickname <span class="text-secondary">(optional)</span></label>
+        <input type="text" class="form-control form-control-sm" id="pk-nickname"
+               placeholder="e.g. MacBook Touch ID" maxlength="100">
+      </div>
+      <div class="d-flex gap-2">
+        <button type="button" class="btn btn-danger btn-sm" id="pk-add-go">Register Passkey</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="pk-add-cancel">Cancel</button>
+      </div>
+      <div id="pk-add-status" class="mt-2 small text-secondary d-none"></div>
+    </div>
+  % } else {
+    <p class="text-secondary small mb-3">
+      Passkey storage is not yet enabled for your account.
+      Enable it to register WebAuthn/FIDO2 passkeys as a second factor.
+    </p>
+    <form method="post" action="<%= url_for('passkey_enable') %>">
+      <button type="submit" class="btn btn-outline-secondary btn-sm">Enable Passkey Storage</button>
+    </form>
+  % }
+  </div>
+</div>
+
+% if ($has_passkey) {
+<script>
+(function () {
+  'use strict';
+
+  // Base64url <-> ArrayBuffer helpers
+  function b64uToBuf(b64u) {
+    var b64 = b64u.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    var raw = atob(b64), buf = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i);
+    return buf.buffer;
+  }
+  function bufToB64u(buf) {
+    var bytes = new Uint8Array(buf), raw = '';
+    for (var i = 0; i < bytes.length; i++) raw += String.fromCharCode(bytes[i]);
+    return btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  var addBtn    = document.getElementById('pk-add-btn');
+  var addForm   = document.getElementById('pk-add-form');
+  var addGo     = document.getElementById('pk-add-go');
+  var addCancel = document.getElementById('pk-add-cancel');
+  var status    = document.getElementById('pk-add-status');
+
+  if (!window.PublicKeyCredential) {
+    addBtn.disabled = true;
+    addBtn.title    = 'This browser does not support passkeys.';
+  }
+
+  addBtn.addEventListener('click', function () {
+    addForm.classList.remove('d-none');
+    addBtn.classList.add('d-none');
+  });
+  addCancel.addEventListener('click', function () {
+    addForm.classList.add('d-none');
+    addBtn.classList.remove('d-none');
+    status.classList.add('d-none');
+  });
+
+  addGo.addEventListener('click', async function () {
+    status.textContent = 'Starting\u2026';
+    status.classList.remove('d-none');
+    addGo.disabled = true;
+    try {
+      var optResp = await fetch('<%= url_for('passkey_register_start') %>');
+      if (!optResp.ok) throw new Error('Server error fetching options');
+      var opts = await optResp.json();
+      if (opts.error) throw new Error(opts.error);
+
+      opts.challenge = b64uToBuf(opts.challenge);
+      opts.user.id   = b64uToBuf(opts.user.id);
+      if (opts.excludeCredentials) {
+        opts.excludeCredentials = opts.excludeCredentials.map(function (c) {
+          return Object.assign({}, c, { id: b64uToBuf(c.id) });
+        });
+      }
+
+      var cred = await navigator.credentials.create({ publicKey: opts });
+
+      var body = {
+        id:       cred.id,
+        rawId:    bufToB64u(cred.rawId),
+        type:     cred.type,
+        nickname: document.getElementById('pk-nickname').value,
+        response: {
+          clientDataJSON:    bufToB64u(cred.response.clientDataJSON),
+          attestationObject: bufToB64u(cred.response.attestationObject),
+          transports:        cred.response.getTransports ? cred.response.getTransports() : [],
+        },
+      };
+
+      var finResp = await fetch('<%= url_for('passkey_register_finish') %>', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(body),
+      });
+      var result = await finResp.json();
+      if (!finResp.ok) throw new Error(result.error || 'Registration failed');
+
+      window.location.reload();
+    } catch (err) {
+      status.textContent = 'Error: ' + err.message;
+      addGo.disabled = false;
+    }
+  });
+})();
+</script>
+% } # end if $has_passkey
+
+% } # end if $passkey_schema

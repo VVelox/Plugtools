@@ -168,6 +168,12 @@ sub new {
 				87 => 'invalidTotpDigits',
 				88 => 'invalidTotpPeriod',
 				89 => 'totpScratchCodeLimitReached',
+				90 => 'noPasskeySchema',
+				91 => 'alreadyPasskeyUser',
+				92 => 'noPasskeyCredential',
+				93 => 'invalidPasskeyCredential',
+				94 => 'invalidPasskeyUserVerification',
+				95 => 'passkeyCredentialNotFound',
 			},
 			fatal_flags      => {},
 			perror_not_fatal => 0,
@@ -3010,6 +3016,12 @@ sub readConfig {
 	}
 	if ( !defined( $ini->{''}->{totpMaxScratchCodes} ) ) {
 		$ini->{''}->{totpMaxScratchCodes} = 10;
+	}
+	if ( !defined( $ini->{''}->{passkeyRpId} ) ) {
+		$ini->{''}->{passkeyRpId} = '';
+	}
+	if ( !defined( $ini->{''}->{passkeyUserVerification} ) ) {
+		$ini->{''}->{passkeyUserVerification} = 'preferred';
 	}
 	if ( !defined( $ini->{''}->{smtpserver} ) ) {
 		$ini->{''}->{smtpserver} = '';
@@ -9506,6 +9518,817 @@ sub totpQRCodeBase64 {
 
 	return encode_base64( $png_data, '' );
 } ## end sub totpQRCodeBase64
+
+# =========================================================================== #
+# Passkey (WebAuthn / FIDO2) support
+# =========================================================================== #
+
+# Valid passkeyUserVerification values
+my %_PASSKEY_UV_OK = map { $_ => 1 } qw(required preferred discouraged);
+
+# Percent-encode '|' and '%' in free-text fields (nickname) so they cannot
+# break the pipe-delimited credential record format.
+sub _passkey_pct_encode {
+	my $str = defined $_[0] ? $_[0] : '';
+	$str =~ s/%/%25/g;
+	$str =~ s/\|/%7C/g;
+	return $str;
+}
+
+sub _passkey_pct_decode {
+	my $str = defined $_[0] ? $_[0] : '';
+	$str =~ s/%7C/|/gi;
+	$str =~ s/%25/%/g;
+	return $str;
+}
+
+# Encode a passkey credential hash into the pipe-delimited storage string.
+sub _passkey_encode_credential {
+	my %c         = @_;
+	my $transports = ref( $c{transports} ) eq 'ARRAY'
+		? join( ',', @{ $c{transports} } )
+		: ( $c{transports} // '' );
+	return join( '|',
+		$c{credentialId}   // '',
+		$c{cosePublicKey}  // '',
+		$c{algorithm}      // '',
+		$c{signCount}      // 0,
+		$c{aaguid}         // '',
+		$transports,
+		$c{backupEligible} // 'FALSE',
+		$c{backupState}    // 'FALSE',
+		_passkey_pct_encode( $c{nickname} // '' ),
+		$c{createdDate}    // '',
+		$c{lastUsedDate}   // '',
+	);
+} ## end sub _passkey_encode_credential
+
+# Decode a pipe-delimited storage string into a passkey credential hash.
+sub _passkey_decode_credential {
+	my $raw    = $_[0] // '';
+	my @fields = split /\|/, $raw, 11;
+	return (
+		credentialId   => $fields[0]  // '',
+		cosePublicKey  => $fields[1]  // '',
+		algorithm      => $fields[2]  // '',
+		signCount      => $fields[3]  // 0,
+		aaguid         => $fields[4]  // '',
+		transports     => [ grep { $_ ne '' } split /,/, ( $fields[5] // '' ) ],
+		backupEligible => $fields[6]  // 'FALSE',
+		backupState    => $fields[7]  // 'FALSE',
+		nickname       => _passkey_pct_decode( $fields[8] // '' ),
+		createdDate    => $fields[9]  // '',
+		lastUsedDate   => $fields[10] // '',
+		raw            => $raw,
+	);
+} ## end sub _passkey_decode_credential
+
+# Return the current UTC time as an ISO 8601 string.
+sub _passkeyNow {
+	my @t = gmtime(time);
+	return sprintf( '%04d-%02d-%02dT%02d:%02d:%02dZ',
+		$t[5] + 1900, $t[4] + 1, $t[3], $t[2], $t[1], $t[0] );
+}
+
+=head2 passkeySchemaAvailable
+
+Returns 1 if the C<passkeyUser> objectClass is present in the LDAP
+server's schema, undef otherwise.
+
+    if ( $pt->passkeySchemaAvailable ) {
+        # passkey schema is loaded
+    }
+
+=cut
+
+sub passkeySchemaAvailable {
+	my $self = $_[0];
+
+	$self->errorblank;
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $schema = $ldap->schema;
+	return undef unless defined $schema;
+
+	my $oc = $schema->objectclass('passkeyUser');
+	return ( defined $oc && defined $oc->{name} ) ? 1 : undef;
+} ## end sub passkeySchemaAvailable
+
+=head2 userConvertToPasskeyUser
+
+Add the C<passkeyUser> auxiliary objectClass to a user entry, enabling
+storage of WebAuthn/FIDO2 passkey credentials.
+
+Returns 1 on success, undef on error.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid). Required.
+
+    $pt->userConvertToPasskeyUser({ user => 'jdoe' });
+
+=cut
+
+sub userConvertToPasskeyUser {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, undef, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	my %oc = map { lc($_) => 1 } $entry->get_value('objectClass');
+	if ( $oc{passkeyuser} ) {
+		$self->{error}       = 91;
+		$self->{errorString} = 'User "' . $args{user} . '" already has the passkeyUser objectClass';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->add( objectClass => 'passkeyUser' );
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 19;
+		$self->{errorString} = 'Adding passkeyUser objectClass for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userConvertToPasskeyUser
+
+=head2 userPasskeyRpIdSet
+
+Set the C<passkeyRpId> attribute (the WebAuthn Relying Party identifier)
+on a user's LDAP entry.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid). Required.
+
+=head4 rpId
+
+The relying party identifier, typically a domain name (e.g. C<example.com>).
+Required.
+
+    $pt->userPasskeyRpIdSet({ user => 'jdoe', rpId => 'example.com' });
+
+=cut
+
+sub userPasskeyRpIdSet {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+	if ( !defined( $args{rpId} ) || $args{rpId} eq '' ) {
+		$self->{error}       = 2;
+		$self->{errorString} = 'No relying party ID specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, undef, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->replace( passkeyRpId => $args{rpId} );
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Setting passkeyRpId for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userPasskeyRpIdSet
+
+=head2 userPasskeyUserVerificationSet
+
+Set the C<passkeyUserVerification> attribute on a user's LDAP entry.
+Valid values are C<required>, C<preferred>, and C<discouraged>.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid). Required.
+
+=head4 uv
+
+The user verification policy. Required.
+
+    $pt->userPasskeyUserVerificationSet({ user => 'jdoe', uv => 'required' });
+
+=cut
+
+sub userPasskeyUserVerificationSet {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+	my $uv = lc( $args{uv} // '' );
+	if ( !$_PASSKEY_UV_OK{$uv} ) {
+		$self->{error}       = 94;
+		$self->{errorString} = 'Invalid user verification value "'
+			. ( $args{uv} // '' )
+			. '"; must be required, preferred, or discouraged';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, undef, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->replace( passkeyUserVerification => $uv );
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Setting passkeyUserVerification for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userPasskeyUserVerificationSet
+
+=head2 userPasskeyCredentialAdd
+
+Register a new passkey credential on a user's LDAP entry.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid). Required.
+
+=head4 credentialId
+
+The base64url-encoded WebAuthn credential ID. Required.
+
+=head4 cosePublicKey
+
+The base64url-encoded COSE-encoded public key. Required.
+
+=head4 algorithm
+
+The COSE algorithm integer (e.g. -7 for ES256, -8 for EdDSA, -257 for
+RS256). Required.
+
+=head4 signCount
+
+The initial authenticator signature counter value. Use 0 for authenticators
+that do not support counters. Required.
+
+=head4 aaguid
+
+Authenticator Attestation GUID (UUID string). Optional.
+
+=head4 transports
+
+Array ref of transport hints: usb, nfc, ble, internal, hybrid, or cable.
+Optional.
+
+=head4 backupEligible
+
+C<TRUE> or C<FALSE>. Optional, defaults to C<FALSE>.
+
+=head4 backupState
+
+C<TRUE> or C<FALSE>. Optional, defaults to C<FALSE>.
+
+=head4 nickname
+
+Human-readable display name for the credential. Optional.
+
+    $pt->userPasskeyCredentialAdd({
+        user          => 'jdoe',
+        credentialId  => 'abc123...',
+        cosePublicKey => 'def456...',
+        algorithm     => -7,
+        signCount     => 0,
+        transports    => ['internal', 'hybrid'],
+        backupEligible => 'TRUE',
+        backupState    => 'TRUE',
+        nickname       => 'MacBook Touch ID',
+    });
+
+=cut
+
+sub userPasskeyCredentialAdd {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+	if ( !defined( $args{credentialId} ) || $args{credentialId} eq '' ) {
+		$self->{error}       = 92;
+		$self->{errorString} = 'No credential ID specified';
+		$self->warn;
+		return undef;
+	}
+	if ( !defined( $args{cosePublicKey} ) || $args{cosePublicKey} eq '' ) {
+		$self->{error}       = 93;
+		$self->{errorString} = 'No COSE public key specified';
+		$self->warn;
+		return undef;
+	}
+	if ( !defined( $args{signCount} ) ) {
+		$self->{error}       = 93;
+		$self->{errorString} = 'No sign count specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, undef, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	# Reject duplicate credential IDs
+	for my $raw ( $entry->get_value('passkeyCredential') ) {
+		my %existing = _passkey_decode_credential($raw);
+		if ( $existing{credentialId} eq $args{credentialId} ) {
+			$self->{error}       = 93;
+			$self->{errorString} = 'Credential ID "' . $args{credentialId} . '" is already registered for user "' . $args{user} . '"';
+			$self->warn;
+			return undef;
+		}
+	}
+
+	my $record = _passkey_encode_credential(
+		credentialId   => $args{credentialId},
+		cosePublicKey  => $args{cosePublicKey},
+		algorithm      => $args{algorithm},
+		signCount      => $args{signCount},
+		aaguid         => $args{aaguid}        // '',
+		transports     => $args{transports}     // [],
+		backupEligible => $args{backupEligible} // 'FALSE',
+		backupState    => $args{backupState}    // 'FALSE',
+		nickname       => $args{nickname}       // '',
+		createdDate    => _passkeyNow(),
+		lastUsedDate   => '',
+	);
+
+	$entry->add( passkeyCredential => $record );
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Adding passkeyCredential for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userPasskeyCredentialAdd
+
+=head2 userPasskeyCredentialRemove
+
+Remove a specific passkey credential from a user's LDAP entry, identified
+by its credential ID.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid). Required.
+
+=head4 credentialId
+
+The base64url-encoded credential ID to remove. Required.
+
+    $pt->userPasskeyCredentialRemove({ user => 'jdoe', credentialId => 'abc123...' });
+
+=cut
+
+sub userPasskeyCredentialRemove {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+	if ( !defined( $args{credentialId} ) || $args{credentialId} eq '' ) {
+		$self->{error}       = 92;
+		$self->{errorString} = 'No credential ID specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, undef, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	my ($raw_to_remove) = grep {
+		my %c = _passkey_decode_credential($_);
+		$c{credentialId} eq $args{credentialId};
+	} $entry->get_value('passkeyCredential');
+
+	if ( !defined $raw_to_remove ) {
+		$self->{error}       = 95;
+		$self->{errorString} = 'Credential ID "' . $args{credentialId} . '" not found for user "' . $args{user} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->delete( passkeyCredential => [$raw_to_remove] );
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Removing passkeyCredential for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userPasskeyCredentialRemove
+
+=head2 userPasskeyCredentialUpdate
+
+Update the C<signCount>, C<backupState>, and C<lastUsedDate> fields of a
+stored passkey credential after a successful authentication.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid). Required.
+
+=head4 credentialId
+
+The base64url-encoded credential ID to update. Required.
+
+=head4 signCount
+
+The new signature counter value. Required.
+
+=head4 backupState
+
+The new backup state (C<TRUE> or C<FALSE>). Optional — existing value is
+preserved if not supplied.
+
+=head4 lastUsedDate
+
+ISO 8601 UTC timestamp to record as the last-used date. Defaults to the
+current time.
+
+    $pt->userPasskeyCredentialUpdate({
+        user         => 'jdoe',
+        credentialId => 'abc123...',
+        signCount    => 42,
+        backupState  => 'TRUE',
+    });
+
+=cut
+
+sub userPasskeyCredentialUpdate {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+	if ( !defined( $args{credentialId} ) || $args{credentialId} eq '' ) {
+		$self->{error}       = 92;
+		$self->{errorString} = 'No credential ID specified';
+		$self->warn;
+		return undef;
+	}
+	if ( !defined( $args{signCount} ) ) {
+		$self->{error}       = 93;
+		$self->{errorString} = 'No sign count specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, undef, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $raw_to_replace, %cred );
+	for my $raw ( $entry->get_value('passkeyCredential') ) {
+		my %c = _passkey_decode_credential($raw);
+		if ( $c{credentialId} eq $args{credentialId} ) {
+			$raw_to_replace = $raw;
+			%cred           = %c;
+			last;
+		}
+	}
+
+	if ( !defined $raw_to_replace ) {
+		$self->{error}       = 95;
+		$self->{errorString} = 'Credential ID "' . $args{credentialId} . '" not found for user "' . $args{user} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$cred{signCount}    = $args{signCount};
+	$cred{backupState}  = $args{backupState} if defined $args{backupState};
+	$cred{lastUsedDate} = $args{lastUsedDate} // _passkeyNow();
+
+	my $new_raw = _passkey_encode_credential(%cred);
+	$entry->delete( passkeyCredential => [$raw_to_replace] );
+	$entry->add( passkeyCredential => $new_raw );
+
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Updating passkeyCredential for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userPasskeyCredentialUpdate
+
+=head2 userPasskeyInfoGet
+
+Return all passkey-related data stored for a user.
+
+Returns a hash ref with the following keys:
+
+=over 4
+
+=item hasPasskeyUser
+
+1 if the user has the C<passkeyUser> objectClass, 0 otherwise.
+
+=item passkeyRpId
+
+The stored relying party identifier, or undef if not set.
+
+=item passkeyUserVerification
+
+The stored UV policy, or undef if not set.
+
+=item credentials
+
+Array ref of hash refs, one per registered credential, each containing:
+C<credentialId>, C<cosePublicKey>, C<algorithm>, C<signCount>, C<aaguid>,
+C<transports> (array ref), C<backupEligible>, C<backupState>, C<nickname>,
+C<createdDate>, C<lastUsedDate>, and C<raw> (the verbatim LDAP value).
+
+=back
+
+    my $info = $pt->userPasskeyInfoGet({ user => 'jdoe' });
+
+=cut
+
+sub userPasskeyInfoGet {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, undef, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error}       = 18;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	my %oc          = map { lc($_) => 1 } $entry->get_value('objectClass');
+	my @credentials = map { my %c = _passkey_decode_credential($_); \%c }
+		$entry->get_value('passkeyCredential');
+
+	return {
+		hasPasskeyUser          => $oc{passkeyuser} ? 1 : 0,
+		passkeyRpId             => scalar( $entry->get_value('passkeyRpId') )             // undef,
+		passkeyUserVerification => scalar( $entry->get_value('passkeyUserVerification') ) // undef,
+		credentials             => \@credentials,
+	};
+} ## end sub userPasskeyInfoGet
 
 1;
 
