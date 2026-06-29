@@ -68,6 +68,8 @@ sub startup {
 	$r->post('/users/:user/totp')->to('users#totp')->name('users_totp');
 	$r->post('/users/:user/totp/generate')->to('users#totp_generate')->name('users_totp_generate');
 	$r->post('/users/:user/totp/verify')->to('users#totp_verify')->name('users_totp_verify');
+	$r->post('/users/:user/passkeys/enable')->to('users#passkey_enable')->name('users_passkey_enable');
+	$r->post('/users/:user/passkeys/:credentialId/remove')->to('users#passkey_remove')->name('users_passkey_remove');
 	$r->post('/users/:user/groups')->to('users#add_to_group')->name('users_add_to_group');
 	$r->post('/users/:user/groups/:group/remove')->to('users#remove_from_group')->name('users_remove_from_group');
 

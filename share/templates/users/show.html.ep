@@ -387,6 +387,69 @@
     </div>
     % } # end totp_schema
 
+    <!-- Passkeys -->
+    % if ($passkey_schema) {
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Passkeys</strong>
+        % if ($has_passkey) {
+        <span class="badge bg-success">Enabled</span>
+        % } else {
+        <span class="badge bg-secondary">Not enabled</span>
+        % }
+      </div>
+      % if ($has_passkey) {
+      <div class="card-body p-0">
+        % my @pk_creds = @{ $passkey_info->{credentials} // [] };
+        % if (@pk_creds) {
+        <ul class="list-group list-group-flush mb-0">
+          % for my $cred (@pk_creds) {
+          <li class="list-group-item px-3 py-2">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <div class="flex-grow-1">
+                <div class="small fw-semibold"><%= $cred->{nickname} || 'Unnamed passkey' %></div>
+                <div class="text-muted" style="font-size:.75rem">
+                  % my $tr = join(', ', @{$cred->{transports} // []});
+                  <%= $tr || 'unknown transport' %> &middot;
+                  registered <%= $cred->{createdDate} || 'unknown' %>
+                  % if ($cred->{lastUsedDate}) {
+                  &middot; last used <%= $cred->{lastUsedDate} %>
+                  % }
+                </div>
+                <div class="text-muted" style="font-size:.72rem">
+                  ID: <code class="text-break"><%= substr($cred->{credentialId}, 0, 32) %>…</code>
+                </div>
+              </div>
+              <form method="post"
+                    action="/users/<%= $username %>/passkeys/<%= $cred->{credentialId} %>/remove"
+                    class="flex-shrink-0"
+                    data-confirm="Remove this passkey from <%= $username %>?">
+                <button class="btn btn-outline-danger btn-sm py-0" title="Remove">&#10005;</button>
+              </form>
+            </div>
+          </li>
+          % }
+        </ul>
+        % } else {
+        <p class="text-muted p-3 mb-0">No passkeys registered yet.</p>
+        % }
+      </div>
+      % } else {
+      <div class="card-body">
+        <p class="text-muted mb-3">
+          This account does not have the <code>passkeyUser</code> objectClass.
+          Enabling it allows WebAuthn/FIDO2 passkeys to be stored in LDAP.
+          The user must register their passkey via the self-service portal.
+        </p>
+        <form method="post" action="/users/<%= $username %>/passkeys/enable"
+              data-confirm="Enable passkey storage for <%= $username %>?">
+          <button class="btn btn-outline-primary">Enable Passkey Storage</button>
+        </form>
+      </div>
+      % }
+    </div>
+    % } # end passkey_schema
+
   </div>
 
   <!-- Right column: Group Memberships -->
@@ -1099,7 +1162,7 @@ document.getElementById('group-add-all').addEventListener('change', function() {
 % }
 
 <!-- ===== LDAP entry viewer ===== -->
-% my %sensitive = map { lc($_) => 1 } qw(userPassword sambaNTPassword sambaLMPassword totpSecret totpScratchCode);
+% my %sensitive = map { lc($_) => 1 } qw(userPassword sambaNTPassword sambaLMPassword totpSecret totpScratchCode passkeyCredential);
 <div class="modal fade" id="modal-ldap-entry" tabindex="-1">
   <div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
     <div class="modal-header">

@@ -112,6 +112,20 @@ sub show {
 
 	my $totp_admin_add_scratch = $self->pt->{ini}->{''}->{totpAdminAddScratchCodes} ? 1 : 0;
 
+	my $passkey_schema = 0;
+	eval { $passkey_schema = $self->pt->passkeySchemaAvailable // 0 };
+
+	my $passkey_info = undef;
+	my $has_passkey  = 0;
+	if ( $passkey_schema && $entry ) {
+		my %oc = map { lc($_) => 1 } $entry->get_value('objectClass');
+		$has_passkey = $oc{passkeyuser} ? 1 : 0;
+		if ($has_passkey) {
+			eval { $passkey_info = $self->pt->userPasskeyInfoGet( { user => $user } ) };
+			$passkey_info //= {};
+		}
+	}
+
 	$self->render(
 		template               => 'users/show',
 		entry                  => $entry,
@@ -126,6 +140,9 @@ sub show {
 		has_totp               => $has_totp,
 		totp_info              => $totp_info,
 		totp_admin_add_scratch => $totp_admin_add_scratch,
+		passkey_schema         => $passkey_schema,
+		has_passkey            => $has_passkey,
+		passkey_info           => $passkey_info,
 	);
 } ## end sub show
 
@@ -433,6 +450,36 @@ sub remove_password {
 	$self->flash( success => "Password removed for '$user'." );
 	$self->redirect_to( 'users_show', user => $user );
 } ## end sub remove_password
+
+sub passkey_enable {
+	my $self = shift;
+	my $user = $self->param('user');
+
+	my $error = $self->_pt_call( sub { $self->pt->userConvertToPasskeyUser( { user => $user } ) } );
+	if ($error) {
+		$self->flash( error => "Failed to enable passkey storage for '$user': $error" );
+		return $self->redirect_to( 'users_show', user => $user );
+	}
+
+	$self->flash( success => "Passkey storage enabled for '$user'." );
+	$self->redirect_to( 'users_show', user => $user );
+} ## end sub passkey_enable
+
+sub passkey_remove {
+	my $self          = shift;
+	my $user          = $self->param('user');
+	my $credential_id = $self->param('credentialId');
+
+	my $error = $self->_pt_call(
+		sub { $self->pt->userPasskeyCredentialRemove( { user => $user, credentialId => $credential_id } ) } );
+	if ($error) {
+		$self->flash( error => "Failed to remove passkey for '$user': $error" );
+		return $self->redirect_to( 'users_show', user => $user );
+	}
+
+	$self->flash( success => "Passkey removed for '$user'." );
+	$self->redirect_to( 'users_show', user => $user );
+} ## end sub passkey_remove
 
 sub add_to_group {
 	my $self   = shift;
