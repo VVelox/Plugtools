@@ -3695,430 +3695,6 @@ sub userUIDchange {
 	return 1;
 } ## end sub userUIDchange
 
-=head1 ERROR CODES
-
-=head2 1
-
-Could not read config.
-
-=head2 2
-
-Missing required variable.
-
-=head2 3
-
-Can't find a free UID.
-
-=head2 4
-
-Can't find a free GID.
-
-=head2 5
-
-No user name specified.
-
-=head2 6
-
-No group name specified.
-
-=head2 7
-
-UID is not numeric.
-
-=head2 8
-
-GID is not numeric.
-
-=head2 9
-
-User already exists.
-
-=head2 10
-
-Group already exists.
-
-=head2 11
-
-Connecting to LDAP failed.
-
-=head2 12
-
-Net::LDAP::posixGroup failed.
-
-=head2 13
-
-Failed to bind to the LDAP server.
-
-=head2 14
-
-The group does not exist.
-
-=head2 15
-
-The group does not exist in LDAP or under specified group base.
-
-=head2 16
-
-Failed to delete the group's entry.
-
-=head2 17
-
-The user does not exist.
-
-=head2 18
-
-The user does not exist in LDAP or under specified user base.
-
-=head2 19
-
-Adding the new entry failed.
-
-=head2 20
-
-The GID already exists.
-
-=head2 21
-
-Failed to create home.
-
-=head2 22
-
-Copying the skeleton to the home location failed.
-
-=head2 23
-
-Failed to chown the new home directory.
-
-=head2 24
-
-Failed to chmod the new home directory.
-
-=head2 25
-
-Failed to update a entry when removing a memberUid.
-
-=head2 26
-
-Failed to remove the users home directory.
-
-=head2 27
-
-Faild to fetch a list posixGroup objects.
-
-=head2 28
-
-No GID specified.
-
-=head2 29
-
-Failed to update the entry when changing the GID.
-
-=head2 30
-
-No UID specified.
-
-=head2 31
-
-Failed to update the entry when changing the UID.
-
-=head2 32
-
-Failed to fetch the user entry.
-
-=head2 33
-
-No GECOS specified.
-
-=head2 34
-
-Failed to update the entry when changing the GECOS.
-
-=head2 35
-
-No password specified.
-
-=head2 36
-
-Updating the password for the user failed.
-
-=head2 37
-
-Errored when fetching a list of users that may possibly need updated.
-
-=head2 38
-
-No LDAP object given.
-
-=head2 39
-
-$opts{do} has not been specified.
-
-=head2 40
-
-The specified selection of plugins to run does not exist.
-
-=head2 41
-
-Exectuting a plugin failed.
-
-=head2 42
-
-$opts{entry} is not defined.
-
-=head2 43
-
-$opts{entry} is not a Net::LDAP::Entry object.
-
-=head2 44
-
-$opts{ldap} is not a Net::LDAP object.
-
-=head2 45
-
-$returned{error} is set to true.
-
-=head2 46
-
-Calling the LDAP update function on the entry modified by the userSetPass
-plugin failed. The unix password has been set though.
-
-=head2 47
-
-No shell specified.
-
-=head1 CONFIG FILE
-
-The default is xdg_config_home().'/nisabarc', which wraps
-around to "~/.config/nisabarc". The file format is ini.
-
-The only required ones are 'bind', 'pass', 'groupbase', and
-'userbase'.
-
-    bind=cn=admin,dc=foo,dc=bar
-    pass=somebl00dyp@ssw0rd
-    userbase=ou=users,dc=foo,dc=bar
-    groupbase=ou=groups,dc=foo,dc=bar
-
-=head2 bind
-
-This is the DN to bind as.
-
-=head2 pass
-
-This is the password for the bind DN.
-
-=head2 userbase
-
-This is the base for where the users are located.
-
-=head2 groupbase
-
-This is the base where the groups are located.
-
-=head2 server
-
-This is the LDAP server to connect to. If the server is not
-specified, '127.0.0.1' is used.
-
-=head2 port
-
-This is the LDAP port to use. If the port is not specified, '389'
-is used.
-
-=head2 UIDstart
-
-This is the first UID to start checking for existing users at. The default is '1001'.
-
-=head2 GIDstart
-
-This is the first GID to start checking for existing groups at. The default is '1001'.
-
-=head2 defaultShell
-
-This is the default shell for a user. The default is '/bin/tcsh'.
-
-=head2 HOMEproto
-
-The prototype for the home directory. %%USERNAME%% is replaced with
-the username. The default is '/home/%%USERNAME%%/'.
-
-=head2 skeletonHome
-
-This is the location that will be copied for when creating a new home directory. If this is not defined,
-a blanked one will be created. The default is '/etc/skel'.
-
-=head2 chmodValue
-
-This is the numeric value the newly created home directory will be chmoded to. The default is '640'.
-
-=head2 chmodHome
-
-If home should be chmoded. The default value is '1', true.
-
-=head2 chownHome
-
-If home should be chowned. The default value is '1', true.
-
-=head2 createHome
-
-If this is true, it the home directory for the user will be created. The default is '1'.
-
-=head2 groupPrimary
-
-This is the attribute to use for when creating the DN for the group entry. Either 'cn' or
-'gidNumber' are currently accepted. The default is 'cn'.
-
-=head2 userPrimary
-
-This is the attribute to use for when creating the DN for the user entry. Either
-'cn', 'uid', or 'uidNumber' are currently accepted. The default is 'uid'.
-
-=head2 starttls
-
-Wether or not it should try to do start_tls.
-
-=head2 TLSverify
-
-The verify mode for TLS. The default is 'none'.
-
-=head3 none
-
-The server may provide a certificate but it will not be
-checked - this may mean you are be connected to the wrong
-server.
-
-=head3 optional
-
-Verify only when the server offers a certificate.
-
-=head3 require
-
-The server must provide a certificate, and it must be valid.
-
-=head2 SSLversion
-
-This is the SSL versions accepted.
-
-'sslv2', 'sslv3', 'sslv2/3', or 'tlsv1' are the possible values. The default
-is 'tlsv1'.
-
-=head2 SSLciphers
-
-This is a list of ciphers to accept. The string is in the standard OpenSSL
-format. The default value is 'ALL'.
-
-=head2 removeGroup
-
-This determines if it should try to remove the user's primary group after removing the
-user.
-
-The default value is '1', true.
-
-=head2 removeHome
-
-This determines if it should try to remove a user's home directory when deleting the
-user.
-
-The default value is '0', false.
-
-=head2 userUpdate
-
-This determines if it should update the primary GIDs for users after groupGIDchange
-has been called.
-
-The default value is '1', true.
-
-=head2 pluginAddGroup
-
-A comma seperated list of plugins to run when addGroup is called.
-
-=head2 pluginAddUser
-
-A comma seperated list of plugins to run when addUser is called.
-
-=head2 pluginGroupAddUser
-
-A comma seperated list of plugins to run when groupAddUser is called.
-
-=head2 pluginGroupGIDchange
-
-A comma seperated list of plugins to run when groupGIDchange is called.
-
-=head2 pluginGroupRemoveUser
-
-A comma seperated list of plugins to run when groupRemoveUser is called.
-
-=head2 pluginUserGECOSchange
-
-A comma seperated list of plugins to run when userGECOSchange is called.
-
-=head2 pluginUserSetPass
-
-A comma seperated list of plugins to run when userSetPass is called.
-
-=head2 pluginUserGIDchange
-
-A comma seperated list of plugins to run when userGIDchange is called.
-
-=head2 pluginUserShellChange
-
-A comma seperated list of plugins to run when userShellChange is called.
-
-=head2 pluginUserUIDchange
-
-A comma seperated list of plugins to run when userUIDchange is called.
-
-=head2 pluginDeleteUser
-
-A comma seperated list of plugins to run when deleteUser is called.
-
-=head2 pluginDeleteGroup
-
-A comma seperated list of plugins to run when deleteGroup is called.
-
-=head1 PLUGINS
-
-Plugins are supported by the functions specified in the config section.
-
-A plugin may be specified for any of those by setting that value to a comma seperated
-list of plugins. For example if you wanted to call 'App::Nisaba::Plugins::Dump' and then
-'Foo::Bar' for a userSetPass, you would set the value 'pluginsUserSetPass' equal to
-'App::Nisaba::Plugins::Dump,Foo::Bar'.
-
-Both hashes specified in the section covering the plugin function. The key 'self' is added
-to %opts before it is passed to the plugin. That key contains a copy of the App::Nisaba object.
-
-A plugin is a Perl module that is used via eval and then the function 'plugin' is called on
-it. The expected return is
-
-The plugin is called before the update method is called on a Net::LDAP::Entry object, except for
-the function 'userSetPass'. It is called after the password is updated.
-
-=head2 example
-
-What is shown below is copied from App::Nisaba::Plugins::Dump. This is a simple plugin
-that calls Data::Dumper->Dumper on what is passed to it.
-
-    package App::Nisaba::Plugins::Dump;
-    use warnings;
-    use strict;
-    use Data::Dumper;
-    our $VERSION = '0.0.0';
-    sub plugin{
-        my %opts;
-        if(defined($_[1])){
-            %opts= %{$_[1]};
-        };
-        my %args;
-        if(defined($_[2])){
-                %args= %{$_[2]};
-        };
-        print '%opts=...'."\n".Dumper(\%opts)."\n\n".'%args=...'."\n".Dumper(\%args);
-        my %returned;
-        $returned{error}=undef;
-        return %returned;
-    }
-
 =head2 ensureInetOrgPerson
 
 Ensures that a L<Net::LDAP::Entry> has C<inetOrgPerson> (and its required
@@ -9262,6 +8838,636 @@ sub userPasskeyFindByCredentialId {
 
 1;
 
+=head1 ERROR CODES
+
+Each error code has a short mnemonic flag (used by Error::Helper) shown in
+parentheses after the code number.
+
+=head2 1, readConfigFailed
+
+Could not read the configuration file.
+
+=head2 2, missingRequired
+
+Missing required configuration variable or argument.
+
+=head2 3, noFreeUID
+
+Could not locate a free UID.
+
+=head2 4, noFreeGID
+
+Could not locate a free GID.
+
+=head2 5, noUser
+
+No user name specified.
+
+=head2 6, noGroup
+
+No group name specified.
+
+=head2 7, UIDnotNumeric
+
+The specified UID is not numeric.
+
+=head2 8, GIDnotNumeric
+
+The specified GID is not numeric.
+
+=head2 9, userExists
+
+The user already exists.
+
+=head2 10, groupExists
+
+The group already exists.
+
+=head2 11, ldapConnectFailed
+
+Connecting to the LDAP server failed.
+
+=head2 12, posixGroupFailed
+
+Net::LDAP::posixGroup or Net::LDAP::nisNetgroup failed (e.g. constructor
+returned undef or create failed).
+
+=head2 13, ldapBindFailed
+
+Failed to bind to the LDAP server. This includes start_tls failures.
+
+=head2 14, groupNotFound
+
+The group does not exist.
+
+=head2 15, groupNotInLDAP
+
+The group (or netgroup) does not exist in LDAP under the specified base.
+
+=head2 16, groupDeleteFailed
+
+Failed to delete the group or netgroup entry from LDAP.
+
+=head2 17, userNotFound
+
+The user does not exist.
+
+=head2 18, userNotInLDAP
+
+The user does not exist in LDAP under the specified user base.
+
+=head2 19, addEntryFailed
+
+Adding a new LDAP entry failed.
+
+=head2 20, GIDexists
+
+The GID already exists.
+
+=head2 21, createHomeFailed
+
+Failed to create the user's home directory.
+
+=head2 22, skelCopyFailed
+
+Copying the skeleton directory to the home location failed.
+
+=head2 23, chownFailed
+
+Failed to chown the new home directory.
+
+=head2 24, chmodFailed
+
+Failed to chmod the new home directory.
+
+=head2 25, removeMemberFailed
+
+Failed to update an entry when removing a memberUid.
+
+=head2 26, removeHomeFailed
+
+Failed to remove the user's home directory.
+
+=head2 27, fetchGroupsFailed
+
+Failed to fetch a list of posixGroup or nisNetgroup objects from LDAP.
+
+=head2 28, noGID
+
+No GID specified.
+
+=head2 29, updateGIDfailed
+
+Failed to update the entry when changing the GID.
+
+=head2 30, noUID
+
+No UID specified.
+
+=head2 31, updateUIDfailed
+
+Failed to update the entry when changing the UID.
+
+=head2 32, fetchUserFailed
+
+Failed to fetch the user entry from LDAP.
+
+=head2 33, noGECOS
+
+No GECOS specified.
+
+=head2 34, updateFailed
+
+Failed to update an LDAP entry. This is a general-purpose code used
+whenever an C<< $entry->update($ldap) >> or similar modify/replace/delete
+operation fails. The errorString contains the specific LDAP error message
+and the DN of the affected entry.
+
+=head2 35, noPassword
+
+No password specified.
+
+=head2 36, setPasswordFailed
+
+Setting the password for the user failed.
+
+=head2 37, fetchUsersFailed
+
+Failed to fetch a list of users from LDAP when scanning for entries that
+may need updating (e.g. during a GID change cascade).
+
+=head2 38, noLDAP
+
+No LDAP connection object was passed to the plugin runner.
+
+=head2 39, noPluginDo
+
+The C<$opts{do}> parameter (which selection of plugins to process) has not
+been specified.
+
+=head2 40, pluginConfigMissing
+
+The specified selection of plugins to run does not exist in the
+configuration.
+
+=head2 41, pluginExecFailed
+
+Executing a plugin failed.
+
+=head2 42, noLDAPentry
+
+C<$opts{entry}> is not defined.
+
+=head2 43, entryNotLDAPEntry
+
+C<$opts{entry}> is not a Net::LDAP::Entry object.
+
+=head2 44, ldapNotLDAP
+
+C<$opts{ldap}> is not a Net::LDAP object.
+
+=head2 45, pluginError
+
+C<$returned{error}> from a plugin is set to true.
+
+=head2 46, updateAfterPassFailed
+
+Calling the LDAP update function on the entry modified by the userSetPass
+plugin failed. The unix password has been set though.
+
+=head2 47, noShell
+
+No shell specified.
+
+=head2 48, noHome
+
+No home directory specified.
+
+=head2 49, noMail
+
+No mail address specified.
+
+=head2 50, noTelephoneNumber
+
+No telephoneNumber specified.
+
+=head2 51, noMobile
+
+No mobile number specified.
+
+=head2 52, noTitle
+
+No title specified.
+
+=head2 53, noRoomNumber
+
+No roomNumber specified.
+
+=head2 54, noEmployeeNumber
+
+No employeeNumber specified.
+
+=head2 55, noEmployeeType
+
+No employeeType specified.
+
+=head2 56, noPreferredLanguage
+
+No preferredLanguage specified.
+
+=head2 57, noLabeledURI
+
+No labeledURI specified.
+
+=head2 58, noSN
+
+No sn (surname) specified.
+
+=head2 59, noGivenName
+
+No givenName specified.
+
+=head2 60, noDescription
+
+No description specified.
+
+=head2 61, noPostalAddress
+
+No postalAddress specified.
+
+=head2 62, noHomePostalAddress
+
+No homePostalAddress specified.
+
+=head2 63, noDisplayName
+
+No displayName specified.
+
+=head2 64, alreadyInetOrgPerson
+
+The user already has the inetOrgPerson objectClass.
+
+=head2 66, netgroupbaseNotConfigured
+
+The netgroupbase is not configured. Netgroup operations require the
+C<netgroupbase> configuration value to be set.
+
+=head2 67, noNetgroupName
+
+No netgroup name specified.
+
+=head2 68, noTripleSpecified
+
+No nisNetgroupTriple value specified.
+
+=head2 69, noMemberSpecified
+
+No memberNisNetgroup value specified.
+
+=head2 70, noCN
+
+No CN (common name) value specified.
+
+=head2 71, lastCN
+
+Cannot remove the last cn value from a user entry.
+
+=head2 72, noLdapPublicKeySchema
+
+The ldapPublicKey schema (for SSH public keys) is not available on this
+LDAP server.
+
+=head2 73, noSSHPublicKey
+
+No SSH public key specified, or the SSH public key contains newlines.
+
+=head2 74, alreadyLdapPublicKey
+
+The user already has the ldapPublicKey objectClass.
+
+=head2 75, authFailed
+
+Authentication failed. The supplied credentials were rejected by the LDAP
+server.
+
+=head2 76, smtpNotConfigured
+
+SMTP is not configured. Both C<smtpserver> and C<smtpfrom> must be set in
+the configuration.
+
+=head2 77, smtpConnectionFailed
+
+Failed to connect to the SMTP server, or STARTTLS / authentication with
+the SMTP server failed.
+
+=head2 78, smtpSendFailed
+
+An SMTP send operation failed (MAIL FROM, RCPT TO, DATA, or dataend).
+
+=head2 79, noTotpSchema
+
+The totpUser schema is not available on this LDAP server.
+
+=head2 80, alreadyTotpUser
+
+The user already has the totpUser objectClass.
+
+=head2 81, noTotpSecret
+
+No TOTP secret is set or specified.
+
+=head2 82, invalidTotpStatus
+
+Invalid TOTP status value specified.
+
+=head2 83, noTotpScratchCode
+
+No TOTP scratch code specified, or the scratch code is empty.
+
+=head2 84, alreadyMfaGroup
+
+The group already has the mfaGroup objectClass.
+
+=head2 85, noMfaGracePeriod
+
+No valid MFA grace period (days) specified.
+
+=head2 86, invalidTotpAlgorithm
+
+Invalid TOTP algorithm specified.
+
+=head2 87, invalidTotpDigits
+
+Invalid TOTP digits value specified. The scratch code length does not
+match the configured totpDigits for the user.
+
+=head2 88, invalidTotpPeriod
+
+Invalid or missing totpPeriod; must be a positive integer.
+
+=head2 89, totpScratchCodeLimitReached
+
+The requested number of TOTP scratch codes exceeds the configured maximum.
+
+=head2 90, noPasskeySchema
+
+The passkey schema is not available on this LDAP server.
+
+=head2 91, alreadyPasskeyUser
+
+The user already has the passkeyUser objectClass.
+
+=head2 92, noPasskeyCredential
+
+No credential ID specified, or no COSE public key specified.
+
+=head2 93, invalidPasskeyCredential
+
+Invalid passkey credential data. The COSE public key or sign count is
+missing or invalid.
+
+=head2 94, invalidPasskeyUserVerification
+
+Invalid passkey user verification value specified.
+
+=head2 95, passkeyCredentialNotFound
+
+The specified passkey credential ID was not found for the user or in the
+directory.
+
+=head1 CONFIG FILE
+
+The default is xdg_config_home().'/nisabarc', which wraps
+around to "~/.config/nisabarc". The file format is ini.
+
+The only required ones are 'bind', 'pass', 'groupbase', and
+'userbase'.
+
+    bind=cn=admin,dc=foo,dc=bar
+    pass=somebl00dyp@ssw0rd
+    userbase=ou=users,dc=foo,dc=bar
+    groupbase=ou=groups,dc=foo,dc=bar
+
+=head2 bind
+
+This is the DN to bind as.
+
+=head2 pass
+
+This is the password for the bind DN.
+
+=head2 userbase
+
+This is the base for where the users are located.
+
+=head2 groupbase
+
+This is the base where the groups are located.
+
+=head2 server
+
+This is the LDAP server to connect to. If the server is not
+specified, '127.0.0.1' is used.
+
+=head2 port
+
+This is the LDAP port to use. If the port is not specified, '389'
+is used.
+
+=head2 UIDstart
+
+This is the first UID to start checking for existing users at. The default is '1001'.
+
+=head2 GIDstart
+
+This is the first GID to start checking for existing groups at. The default is '1001'.
+
+=head2 defaultShell
+
+This is the default shell for a user. The default is '/bin/tcsh'.
+
+=head2 HOMEproto
+
+The prototype for the home directory. %%USERNAME%% is replaced with
+the username. The default is '/home/%%USERNAME%%/'.
+
+=head2 skeletonHome
+
+This is the location that will be copied for when creating a new home directory. If this is not defined,
+a blanked one will be created. The default is '/etc/skel'.
+
+=head2 chmodValue
+
+This is the numeric value the newly created home directory will be chmoded to. The default is '640'.
+
+=head2 chmodHome
+
+If home should be chmoded. The default value is '1', true.
+
+=head2 chownHome
+
+If home should be chowned. The default value is '1', true.
+
+=head2 createHome
+
+If this is true, it the home directory for the user will be created. The default is '1'.
+
+=head2 groupPrimary
+
+This is the attribute to use for when creating the DN for the group entry. Either 'cn' or
+'gidNumber' are currently accepted. The default is 'cn'.
+
+=head2 userPrimary
+
+This is the attribute to use for when creating the DN for the user entry. Either
+'cn', 'uid', or 'uidNumber' are currently accepted. The default is 'uid'.
+
+=head2 starttls
+
+Wether or not it should try to do start_tls.
+
+=head2 TLSverify
+
+The verify mode for TLS. The default is 'none'.
+
+=head3 none
+
+The server may provide a certificate but it will not be
+checked - this may mean you are be connected to the wrong
+server.
+
+=head3 optional
+
+Verify only when the server offers a certificate.
+
+=head3 require
+
+The server must provide a certificate, and it must be valid.
+
+=head2 SSLversion
+
+This is the SSL versions accepted.
+
+'sslv2', 'sslv3', 'sslv2/3', or 'tlsv1' are the possible values. The default
+is 'tlsv1'.
+
+=head2 SSLciphers
+
+This is a list of ciphers to accept. The string is in the standard OpenSSL
+format. The default value is 'ALL'.
+
+=head2 removeGroup
+
+This determines if it should try to remove the user's primary group after removing the
+user.
+
+The default value is '1', true.
+
+=head2 removeHome
+
+This determines if it should try to remove a user's home directory when deleting the
+user.
+
+The default value is '0', false.
+
+=head2 userUpdate
+
+This determines if it should update the primary GIDs for users after groupGIDchange
+has been called.
+
+The default value is '1', true.
+
+=head2 pluginAddGroup
+
+A comma seperated list of plugins to run when addGroup is called.
+
+=head2 pluginAddUser
+
+A comma seperated list of plugins to run when addUser is called.
+
+=head2 pluginGroupAddUser
+
+A comma seperated list of plugins to run when groupAddUser is called.
+
+=head2 pluginGroupGIDchange
+
+A comma seperated list of plugins to run when groupGIDchange is called.
+
+=head2 pluginGroupRemoveUser
+
+A comma seperated list of plugins to run when groupRemoveUser is called.
+
+=head2 pluginUserGECOSchange
+
+A comma seperated list of plugins to run when userGECOSchange is called.
+
+=head2 pluginUserSetPass
+
+A comma seperated list of plugins to run when userSetPass is called.
+
+=head2 pluginUserGIDchange
+
+A comma seperated list of plugins to run when userGIDchange is called.
+
+=head2 pluginUserShellChange
+
+A comma seperated list of plugins to run when userShellChange is called.
+
+=head2 pluginUserUIDchange
+
+A comma seperated list of plugins to run when userUIDchange is called.
+
+=head2 pluginDeleteUser
+
+A comma seperated list of plugins to run when deleteUser is called.
+
+=head2 pluginDeleteGroup
+
+A comma seperated list of plugins to run when deleteGroup is called.
+
+=head1 PLUGINS
+
+Plugins are supported by the functions specified in the config section.
+
+A plugin may be specified for any of those by setting that value to a comma seperated
+list of plugins. For example if you wanted to call 'App::Nisaba::Plugins::Dump' and then
+'Foo::Bar' for a userSetPass, you would set the value 'pluginsUserSetPass' equal to
+'App::Nisaba::Plugins::Dump,Foo::Bar'.
+
+Both hashes specified in the section covering the plugin function. The key 'self' is added
+to %opts before it is passed to the plugin. That key contains a copy of the App::Nisaba object.
+
+A plugin is a Perl module that is used via eval and then the function 'plugin' is called on
+it. The expected return is
+
+The plugin is called before the update method is called on a Net::LDAP::Entry object, except for
+the function 'userSetPass'. It is called after the password is updated.
+
+=head2 example
+
+What is shown below is copied from App::Nisaba::Plugins::Dump. This is a simple plugin
+that calls Data::Dumper->Dumper on what is passed to it.
+
+    package App::Nisaba::Plugins::Dump;
+    use warnings;
+    use strict;
+    use Data::Dumper;
+    our $VERSION = '0.0.0';
+    sub plugin{
+        my %opts;
+        if(defined($_[1])){
+            %opts= %{$_[1]};
+        };
+        my %args;
+        if(defined($_[2])){
+                %args= %{$_[2]};
+        };
+        print '%opts=...'."\n".Dumper(\%opts)."\n\n".'%args=...'."\n".Dumper(\%args);
+        my %returned;
+        $returned{error}=undef;
+        return %returned;
+    }
+
 =head1 AUTHOR
 
 Zane C. Bowers, C<< <vvelox at vvelox.net> >>
@@ -9271,9 +9477,6 @@ Zane C. Bowers, C<< <vvelox at vvelox.net> >>
 Please report any bugs or feature requests to C<bug-nisaba at rt.cpan.org>, or through
 the web interface at L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=App::Nisaba>.  I will be notified, and then you'll
 automatically be notified of progress on your bug as I make changes.
-
-
-
 
 =head1 SUPPORT
 
