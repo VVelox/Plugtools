@@ -4,8 +4,6 @@ use warnings;
 use strict;
 use Config::IniHash;
 use File::BaseDir qw/xdg_config_home/;
-use Sys::User::UIDhelper;
-use Sys::Group::GIDhelper;
 use Net::LDAP;
 use Net::LDAP::Entry;
 use Net::LDAP::posixAccount;
@@ -194,6 +192,66 @@ sub new {
 # Private NSS / LDAP lookup helpers
 # --------------------------------------------------------------------------- #
 
+# Return the first GID >= $min that is not already in use.
+# Checks all posixGroup gidNumber values in LDAP, and also NSS when NSScheck
+# is active.  Returns undef if no free GID is found below 2^31.
+# Return the first UID >= $min that is not already in use.
+# Checks all posixAccount uidNumber values in LDAP, and also NSS when NSScheck
+# is active.  Returns undef if no free UID is found below 2^31.
+sub _firstFreeUID {
+	my ( $self, $ldap, $min ) = @_;
+
+	# Collect every uidNumber already present in LDAP
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(objectClass=posixAccount)',
+		attrs  => ['uidNumber'],
+	);
+	my %used;
+	while ( my $e = $mesg->shift_entry ) {
+		my $un = $e->get_value('uidNumber');
+		$used{$un} = 1 if defined $un;
+	}
+
+	# Scan upward from $min for the first gap
+	my $uid = int($min);
+	while ( $uid < 2_147_483_648 ) {
+		unless ( $used{$uid} ) {
+			my ($nss_name) = $self->_nssUserByUID($uid);
+			return $uid unless defined $nss_name;
+		}
+		$uid++;
+	}
+	return undef;
+}
+
+sub _firstFreeGID {
+	my ( $self, $ldap, $min ) = @_;
+
+	# Collect every gidNumber already present in LDAP
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{groupbase},
+		filter => '(objectClass=posixGroup)',
+		attrs  => ['gidNumber'],
+	);
+	my %used;
+	while ( my $e = $mesg->shift_entry ) {
+		my $gn = $e->get_value('gidNumber');
+		$used{$gn} = 1 if defined $gn;
+	}
+
+	# Scan upward from $min for the first gap
+	my $gid = int($min);
+	while ( $gid < 2_147_483_648 ) {
+		unless ( $used{$gid} ) {
+			my ($nss_name) = $self->_nssGroupByGID($gid);
+			return $gid unless defined $nss_name;
+		}
+		$gid++;
+	}
+	return undef;
+}
+
 # Return the LDAP entry for a posixGroup by name (cn), or undef.
 # Caller must already hold an active $ldap connection.
 sub _getLDAPGroupEntry {
@@ -310,8 +368,7 @@ sub addGroup {
 
 	#if we don't have a GID, find the first free one
 	if ( !defined( $args{gid} ) ) {
-		my $gidhelper = Sys::Group::GIDhelper->new( min => $self->{ini}->{''}->{GIDstart} );
-		my $gid       = $gidhelper->firstfree();
+		my $gid = $self->_firstFreeGID( $ldap, $self->{ini}->{''}->{GIDstart} );
 		if ( !defined($gid) ) {
 			$self->{error}       = 4;
 			$self->{errorString} = 'Could not locate a free GID';
@@ -536,8 +593,7 @@ sub addUser {
 	#makes sure the UID is defined
 	if ( !defined( $args{uid} ) ) {
 		#gets it if it not defined
-		my $uidhelper = Sys::User::UIDhelper->new( min => $self->{ini}->{''}->{UIDstart} );
-		my $uid       = $uidhelper->firstfree();
+		my $uid = $self->_firstFreeUID( $ldap, $self->{ini}->{''}->{UIDstart} );
 		if ( !defined($uid) ) {
 			$self->{error}       = 3;
 			$self->{errorString} = 'Could not locate a free UID';
