@@ -257,6 +257,136 @@
     % }
     % } # end lpk_schema
 
+    <!-- TOTP / MFA -->
+    % if ($totp_schema) {
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>TOTP / MFA</strong>
+        % if ($has_totp) {
+        <span class="badge bg-success">Enabled</span>
+        % } else {
+        <span class="badge bg-secondary">Not enabled</span>
+        % }
+      </div>
+      % if ($has_totp) {
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <tbody>
+            <tr>
+              <th class="ps-3" style="width:30%">Status</th>
+              <td>
+                <form method="post" action="/users/<%= $username %>"
+                      class="d-flex gap-2 align-items-center">
+                  <input type="hidden" name="action" value="totp_status">
+                  <select name="status" class="form-select form-select-sm" style="width:auto">
+                    % for my $s (qw(none pending active disabled bypassed)) {
+                    <option value="<%= $s %>"
+                      <%= (($totp_info->{totpStatus}//'') eq $s) ? 'selected' : '' %>><%= $s %></option>
+                    % }
+                  </select>
+                  <button type="submit" class="btn btn-sm btn-outline-primary py-0">Set</button>
+                </form>
+              </td>
+            </tr>
+            <tr>
+              <th class="ps-3">Algorithm</th>
+              <td>
+                <form method="post" action="/users/<%= $username %>"
+                      class="d-flex gap-2 align-items-center">
+                  <input type="hidden" name="action" value="totp_algorithm">
+                  <select name="algorithm" class="form-select form-select-sm" style="width:auto">
+                    % for my $a (qw(SHA1 SHA256 SHA512)) {
+                    <option value="<%= $a %>"
+                      <%= (($totp_info->{totpAlgorithm}//'SHA1') eq $a) ? 'selected' : '' %>><%= $a %></option>
+                    % }
+                  </select>
+                  <button type="submit" class="btn btn-sm btn-outline-primary py-0">Set</button>
+                </form>
+              </td>
+            </tr>
+            <tr>
+              <th class="ps-3">Period (s)</th>
+              <td>
+                <form method="post" action="/users/<%= $username %>"
+                      class="d-flex gap-2 align-items-center">
+                  <input type="hidden" name="action" value="totp_period">
+                  <input type="number" name="period" class="form-control form-control-sm"
+                         style="width:6rem" min="1" required
+                         value="<%= $totp_info->{totpPeriod} // 30 %>">
+                  <button type="submit" class="btn btn-sm btn-outline-primary py-0">Set</button>
+                </form>
+              </td>
+            </tr>
+            <tr>
+              <th class="ps-3">Digits</th>
+              <td>
+                <form method="post" action="/users/<%= $username %>"
+                      class="d-flex gap-2 align-items-center">
+                  <input type="hidden" name="action" value="totp_digits">
+                  <select name="digits" class="form-select form-select-sm" style="width:auto">
+                    % for my $d (6, 8) {
+                    <option value="<%= $d %>"
+                      <%= (($totp_info->{totpDigits}//6) == $d) ? 'selected' : '' %>><%= $d %></option>
+                    % }
+                  </select>
+                  <button type="submit" class="btn btn-sm btn-outline-primary py-0">Set</button>
+                </form>
+              </td>
+            </tr>
+            <tr>
+              <th class="ps-3">Secret</th>
+              <td>
+                <div class="d-flex align-items-center gap-2">
+                  % if (defined $totp_info->{totpSecret}) {
+                  <span class="badge bg-success">Set</span>
+                  <form method="post" action="/users/<%= $username %>"
+                        data-confirm="Remove TOTP secret for <%= $username %>? This will reset their status to none.">
+                    <input type="hidden" name="action" value="totp_secret_remove">
+                    <button type="submit" class="btn btn-outline-danger btn-sm py-0">Remove</button>
+                  </form>
+                  % } else {
+                  <span class="badge bg-secondary">Not set</span>
+                  % }
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <th class="ps-3">Enrolled</th>
+              <td><span class="text-muted small"><%= $totp_info->{totpEnrolledDate} // 'Not set' %></span></td>
+            </tr>
+            <tr>
+              <th class="ps-3">Scratch Codes</th>
+              <td>
+                <div class="d-flex align-items-center gap-2">
+                  % my $sc_count = scalar @{ $totp_info->{totpScratchCodes} };
+                  <span class="text-muted small"><%= $sc_count %> remaining</span>
+                  % if ($totp_admin_add_scratch) {
+                  <button class="btn btn-sm btn-outline-secondary py-0"
+                          data-bs-toggle="modal" data-bs-target="#modal-totp-scratch-add">
+                    + Add
+                  </button>
+                  % }
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      % } else {
+      <div class="card-body">
+        <p class="text-muted mb-3">
+          This account does not have the <code>totpUser</code> objectClass.
+          Enable it to allow TOTP/MFA authentication.
+        </p>
+        <form method="post" action="/users/<%= $username %>/totp"
+              data-confirm="Enable TOTP for <%= $username %>?">
+          <button class="btn btn-outline-primary">Enable TOTP</button>
+        </form>
+      </div>
+      % }
+    </div>
+    % } # end totp_schema
+
   </div>
 
   <!-- Right column: Group Memberships -->
@@ -888,6 +1018,34 @@
   </div></div>
 </div>
 
+<!-- ===== TOTP modals ===== -->
+
+% if ($totp_schema && $has_totp && $totp_admin_add_scratch) {
+
+<div class="modal fade" id="modal-totp-scratch-add" tabindex="-1">
+  <div class="modal-dialog"><div class="modal-content">
+    <form method="post" action="/users/<%= $username %>">
+      <input type="hidden" name="action" value="totp_scratch_add">
+      <div class="modal-header">
+        <h5 class="modal-title">Add Scratch Code</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      % my $sc_len = $totp_info->{totpDigits} // 6;
+      <div class="modal-body">
+        <label class="form-label"><%= $sc_len %>-digit Scratch Code</label>
+        <input type="text" name="code" class="form-control font-monospace"
+               placeholder="<%= '1' x $sc_len %>" pattern="\d{<%= $sc_len %>}"
+               maxlength="<%= $sc_len %>" required autocomplete="off">
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">Add</button>
+      </div>
+    </form>
+  </div></div>
+</div>
+% }
+
 <!-- ===== Group membership modal ===== -->
 
 % if (@{$nonmember_groups}) {
@@ -941,7 +1099,7 @@ document.getElementById('group-add-all').addEventListener('change', function() {
 % }
 
 <!-- ===== LDAP entry viewer ===== -->
-% my %sensitive = map { lc($_) => 1 } qw(userPassword sambaNTPassword sambaLMPassword);
+% my %sensitive = map { lc($_) => 1 } qw(userPassword sambaNTPassword sambaLMPassword totpSecret totpScratchCode);
 <div class="modal fade" id="modal-ldap-entry" tabindex="-1">
   <div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
     <div class="modal-header">

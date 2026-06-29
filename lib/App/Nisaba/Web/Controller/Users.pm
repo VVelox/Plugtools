@@ -13,7 +13,7 @@ sub _pt_call {
 		return $self->pt->errorString || ( 'Error code ' . $self->pt->error );
 	}
 	return '';
-} ## end sub _pt_call
+}
 
 sub index {
 	my $self = shift;
@@ -86,7 +86,7 @@ sub show {
 				push @nonmember_groups, $g;
 			}
 		}
-	}
+	} ## end if ( !$@ && $all_groups )
 
 	my $has_password = 0;
 	eval { $has_password = $self->pt->userHasPassword( { user => $user } ) // 0 };
@@ -94,22 +94,38 @@ sub show {
 	my $lpk_schema = 0;
 	eval { $lpk_schema = $self->pt->ldapPublicKeyAvailable // 0 };
 
-	my $has_lpk = 0;
+	my $totp_schema = 0;
+	eval { $totp_schema = $self->pt->totpSchemaAvailable // 0 };
+
+	my ( $has_lpk, $has_totp ) = ( 0, 0 );
+	my $totp_info = undef;
 	if ($entry) {
 		my %oc = map { lc($_) => 1 } $entry->get_value('objectClass');
-		$has_lpk = $oc{ldappublickey} ? 1 : 0;
+		$has_lpk  = $oc{ldappublickey} ? 1 : 0;
+		$has_totp = $oc{totpuser}      ? 1 : 0;
+	}
+	if ( $totp_schema && $has_totp ) {
+		eval { $totp_info = $self->pt->userTotpInfoGet( { user => $user } ) };
+		$totp_info //= {};
+		$totp_info->{totpScratchCodes} //= [];
 	}
 
+	my $totp_admin_add_scratch = $self->pt->{ini}->{''}->{totpAdminAddScratchCodes} ? 1 : 0;
+
 	$self->render(
-		template         => 'users/show',
-		entry            => $entry,
-		username         => $user,
-		shells           => \@shells,
-		member_groups    => \@member_groups,
-		nonmember_groups => \@nonmember_groups,
-		has_password     => $has_password,
-		lpk_schema       => $lpk_schema,
-		has_lpk          => $has_lpk,
+		template               => 'users/show',
+		entry                  => $entry,
+		username               => $user,
+		shells                 => \@shells,
+		member_groups          => \@member_groups,
+		nonmember_groups       => \@nonmember_groups,
+		has_password           => $has_password,
+		lpk_schema             => $lpk_schema,
+		has_lpk                => $has_lpk,
+		totp_schema            => $totp_schema,
+		has_totp               => $has_totp,
+		totp_info              => $totp_info,
+		totp_admin_add_scratch => $totp_admin_add_scratch,
 	);
 } ## end sub show
 
@@ -120,59 +136,128 @@ sub update {
 
 	my $error;
 	if ( $action eq 'gecos' ) {
-		$error = $self->_pt_call( sub { $self->pt->userGECOSchange( { user => $user, gecos => $self->param('gecos') } ) } );
+		$error = $self->_pt_call(
+			sub { $self->pt->userGECOSchange( { user => $user, gecos => $self->param('gecos') } ) } );
 	} elsif ( $action eq 'shell' ) {
-		$error = $self->_pt_call( sub { $self->pt->userShellChange( { user => $user, shell => $self->param('shell') } ) } );
+		$error = $self->_pt_call(
+			sub { $self->pt->userShellChange( { user => $user, shell => $self->param('shell') } ) } );
 	} elsif ( $action eq 'uid' ) {
 		$error = $self->_pt_call( sub { $self->pt->userUIDchange( { user => $user, uid => $self->param('uid') } ) } );
 	} elsif ( $action eq 'gid' ) {
 		$error = $self->_pt_call( sub { $self->pt->userGIDchange( { user => $user, gid => $self->param('gid') } ) } );
 	} elsif ( $action eq 'home' ) {
-		$error = $self->_pt_call( sub { $self->pt->userHomeChange( { user => $user, home => $self->param('home') } ) } );
+		$error
+			= $self->_pt_call( sub { $self->pt->userHomeChange( { user => $user, home => $self->param('home') } ) } );
 	} elsif ( $action eq 'title' ) {
-		$error = $self->_pt_call( sub { $self->pt->userTitleChange( { user => $user, title => $self->param('title') } ) } );
+		$error = $self->_pt_call(
+			sub { $self->pt->userTitleChange( { user => $user, title => $self->param('title') } ) } );
 	} elsif ( $action eq 'roomNumber' ) {
-		$error = $self->_pt_call( sub { $self->pt->userRoomNumberChange( { user => $user, roomNumber => $self->param('roomNumber') } ) } );
+		$error
+			= $self->_pt_call(
+				sub { $self->pt->userRoomNumberChange( { user => $user, roomNumber => $self->param('roomNumber') } ) }
+			);
 	} elsif ( $action eq 'employeeNumber' ) {
-		$error = $self->_pt_call( sub { $self->pt->userEmployeeNumberChange( { user => $user, employeeNumber => $self->param('employeeNumber') } ) } );
+		$error = $self->_pt_call(
+			sub {
+				$self->pt->userEmployeeNumberChange(
+					{ user => $user, employeeNumber => $self->param('employeeNumber') } );
+			}
+		);
 	} elsif ( $action eq 'employeeType' ) {
-		$error = $self->_pt_call( sub { $self->pt->userEmployeeTypeChange( { user => $user, employeeType => $self->param('employeeType') } ) } );
+		$error = $self->_pt_call(
+			sub {
+				$self->pt->userEmployeeTypeChange( { user => $user, employeeType => $self->param('employeeType') } );
+			}
+		);
 	} elsif ( $action eq 'mail_add' ) {
 		$error = $self->_pt_call( sub { $self->pt->userMailAdd( { user => $user, mail => $self->param('mail') } ) } );
 	} elsif ( $action eq 'mail_remove' ) {
-		$error = $self->_pt_call( sub { $self->pt->userMailRemove( { user => $user, mail => $self->param('mail') } ) } );
+		$error
+			= $self->_pt_call( sub { $self->pt->userMailRemove( { user => $user, mail => $self->param('mail') } ) } );
 	} elsif ( $action eq 'telephoneNumber_add' ) {
-		$error = $self->_pt_call( sub { $self->pt->userTelephoneNumberAdd( { user => $user, telephoneNumber => $self->param('telephoneNumber') } ) } );
+		$error = $self->_pt_call(
+			sub {
+				$self->pt->userTelephoneNumberAdd(
+					{ user => $user, telephoneNumber => $self->param('telephoneNumber') } );
+			}
+		);
 	} elsif ( $action eq 'telephoneNumber_remove' ) {
-		$error = $self->_pt_call( sub { $self->pt->userTelephoneNumberRemove( { user => $user, telephoneNumber => $self->param('telephoneNumber') } ) } );
+		$error = $self->_pt_call(
+			sub {
+				$self->pt->userTelephoneNumberRemove(
+					{ user => $user, telephoneNumber => $self->param('telephoneNumber') } );
+			}
+		);
 	} elsif ( $action eq 'mobile_add' ) {
-		$error = $self->_pt_call( sub { $self->pt->userMobileAdd( { user => $user, mobile => $self->param('mobile') } ) } );
+		$error = $self->_pt_call(
+			sub { $self->pt->userMobileAdd( { user => $user, mobile => $self->param('mobile') } ) } );
 	} elsif ( $action eq 'mobile_remove' ) {
-		$error = $self->_pt_call( sub { $self->pt->userMobileRemove( { user => $user, mobile => $self->param('mobile') } ) } );
+		$error = $self->_pt_call(
+			sub { $self->pt->userMobileRemove( { user => $user, mobile => $self->param('mobile') } ) } );
 	} elsif ( $action eq 'preferredLanguage_add' ) {
-		$error = $self->_pt_call( sub { $self->pt->userPreferredLanguageAdd( { user => $user, preferredLanguage => $self->param('preferredLanguage') } ) } );
+		$error = $self->_pt_call(
+			sub {
+				$self->pt->userPreferredLanguageAdd(
+					{ user => $user, preferredLanguage => $self->param('preferredLanguage') } );
+			}
+		);
 	} elsif ( $action eq 'preferredLanguage_remove' ) {
-		$error = $self->_pt_call( sub { $self->pt->userPreferredLanguageRemove( { user => $user, preferredLanguage => $self->param('preferredLanguage') } ) } );
+		$error = $self->_pt_call(
+			sub {
+				$self->pt->userPreferredLanguageRemove(
+					{ user => $user, preferredLanguage => $self->param('preferredLanguage') } );
+			}
+		);
 	} elsif ( $action eq 'labeledURI_add' ) {
-		$error = $self->_pt_call( sub { $self->pt->userLabeledURIAdd( { user => $user, labeledURI => $self->param('labeledURI') } ) } );
+		$error = $self->_pt_call(
+			sub { $self->pt->userLabeledURIAdd( { user => $user, labeledURI => $self->param('labeledURI') } ) } );
 	} elsif ( $action eq 'labeledURI_remove' ) {
-		$error = $self->_pt_call( sub { $self->pt->userLabeledURIRemove( { user => $user, labeledURI => $self->param('labeledURI') } ) } );
+		$error
+			= $self->_pt_call(
+				sub { $self->pt->userLabeledURIRemove( { user => $user, labeledURI => $self->param('labeledURI') } ) }
+			);
 	} elsif ( $action eq 'sn' ) {
 		$error = $self->_pt_call( sub { $self->pt->userSNchange( { user => $user, sn => $self->param('sn') } ) } );
 	} elsif ( $action eq 'givenName' ) {
-		$error = $self->_pt_call( sub { $self->pt->userGivenNameChange( { user => $user, givenName => $self->param('givenName') } ) } );
+		$error = $self->_pt_call(
+			sub { $self->pt->userGivenNameChange( { user => $user, givenName => $self->param('givenName') } ) } );
 	} elsif ( $action eq 'displayName' ) {
-		$error = $self->_pt_call( sub { $self->pt->userDisplayNameChange( { user => $user, displayName => $self->param('displayName') } ) } );
+		$error = $self->_pt_call(
+			sub {
+				$self->pt->userDisplayNameChange( { user => $user, displayName => $self->param('displayName') } );
+			}
+		);
 	} elsif ( $action eq 'homePostalAddress' ) {
-		$error = $self->_pt_call( sub { $self->pt->userHomePostalAddressChange( { user => $user, homePostalAddress => $self->param('homePostalAddress') } ) } );
+		$error = $self->_pt_call(
+			sub {
+				$self->pt->userHomePostalAddressChange(
+					{ user => $user, homePostalAddress => $self->param('homePostalAddress') } );
+			}
+		);
 	} elsif ( $action eq 'description_add' ) {
-		$error = $self->_pt_call( sub { $self->pt->userDescriptionAdd( { user => $user, description => $self->param('description') } ) } );
+		$error
+			= $self->_pt_call(
+				sub { $self->pt->userDescriptionAdd( { user => $user, description => $self->param('description') } ) }
+			);
 	} elsif ( $action eq 'description_remove' ) {
-		$error = $self->_pt_call( sub { $self->pt->userDescriptionRemove( { user => $user, description => $self->param('description') } ) } );
+		$error = $self->_pt_call(
+			sub {
+				$self->pt->userDescriptionRemove( { user => $user, description => $self->param('description') } );
+			}
+		);
 	} elsif ( $action eq 'postalAddress_add' ) {
-		$error = $self->_pt_call( sub { $self->pt->userPostalAddressAdd( { user => $user, postalAddress => $self->param('postalAddress') } ) } );
+		$error = $self->_pt_call(
+			sub {
+				$self->pt->userPostalAddressAdd( { user => $user, postalAddress => $self->param('postalAddress') } );
+			}
+		);
 	} elsif ( $action eq 'postalAddress_remove' ) {
-		$error = $self->_pt_call( sub { $self->pt->userPostalAddressRemove( { user => $user, postalAddress => $self->param('postalAddress') } ) } );
+		$error = $self->_pt_call(
+			sub {
+				$self->pt->userPostalAddressRemove(
+					{ user => $user, postalAddress => $self->param('postalAddress') } );
+			}
+		);
 	} elsif ( $action eq 'cn_add' ) {
 		$error = $self->_pt_call( sub { $self->pt->userCNadd( { user => $user, cn => $self->param('cn') } ) } );
 	} elsif ( $action eq 'cn_remove' ) {
@@ -182,7 +267,34 @@ sub update {
 		$key =~ s/[\r\n]+$//;    # strip trailing newline that textareas append
 		$error = $self->_pt_call( sub { $self->pt->userSSHPublicKeyAdd( { user => $user, key => $key } ) } );
 	} elsif ( $action eq 'sshkey_remove' ) {
-		$error = $self->_pt_call( sub { $self->pt->userSSHPublicKeyRemove( { user => $user, key => $self->param('key') } ) } );
+		$error = $self->_pt_call(
+			sub { $self->pt->userSSHPublicKeyRemove( { user => $user, key => $self->param('key') } ) } );
+	} elsif ( $action eq 'totp_secret_remove' ) {
+		$error = $self->_pt_call( sub { $self->pt->userTotpSecretRemove( { user => $user } ) } );
+	} elsif ( $action eq 'totp_status' ) {
+		$error = $self->_pt_call(
+			sub { $self->pt->userTotpStatusSet( { user => $user, status => $self->param('status') } ) } );
+	} elsif ( $action eq 'totp_algorithm' ) {
+		$error = $self->_pt_call(
+			sub { $self->pt->userTotpAlgorithmSet( { user => $user, algorithm => $self->param('algorithm') } ) } );
+	} elsif ( $action eq 'totp_period' ) {
+		$error = $self->_pt_call(
+			sub { $self->pt->userTotpPeriodSet( { user => $user, period => $self->param('period') } ) } );
+	} elsif ( $action eq 'totp_digits' ) {
+		$error = $self->_pt_call(
+			sub { $self->pt->userTotpDigitsSet( { user => $user, digits => $self->param('digits') } ) } );
+	} elsif ( $action eq 'totp_secret' ) {
+		$error = $self->_pt_call(
+			sub { $self->pt->userTotpSecretSet( { user => $user, secret => $self->param('secret') } ) } );
+	} elsif ( $action eq 'totp_enrolled_now' ) {
+		$error = $self->_pt_call( sub { $self->pt->userTotpEnrolledDateSet( { user => $user } ) } );
+	} elsif ( $action eq 'totp_scratch_add' ) {
+		unless ( $self->pt->{ini}->{''}->{totpAdminAddScratchCodes} ) {
+			$self->flash( error => 'Adding scratch codes via the admin portal is disabled.' );
+			return $self->redirect_to( 'users_show', user => $user );
+		}
+		$error = $self->_pt_call(
+			sub { $self->pt->userTotpScratchCodeAdd( { user => $user, code => $self->param('code') } ) } );
 	} else {
 		$self->flash( error => "Unknown action: $action" );
 		return $self->redirect_to( 'users_show', user => $user );
@@ -203,7 +315,10 @@ sub delete {
 	my $removeHome  = $self->param('removeHome')  // 0;
 	my $removeGroup = $self->param('removeGroup') // 1;
 
-	my $error = $self->_pt_call( sub { $self->pt->deleteUser( { user => $user, removeHome => $removeHome, removeGroup => $removeGroup } ) } );
+	my $error
+		= $self->_pt_call(
+			sub { $self->pt->deleteUser( { user => $user, removeHome => $removeHome, removeGroup => $removeGroup } ) }
+		);
 	if ($error) {
 		$self->flash( error => "Failed to delete user '$user': $error" );
 		return $self->redirect_to( 'users_show', user => $user );
@@ -226,6 +341,54 @@ sub inetorgperson {
 	$self->flash( success => "User '$user' converted to inetOrgPerson." );
 	$self->redirect_to( 'users_show', user => $user );
 } ## end sub inetorgperson
+
+sub totp {
+	my $self = shift;
+	my $user = $self->param('user');
+
+	my $error = $self->_pt_call( sub { $self->pt->userConvertToTotp( { user => $user } ) } );
+	if ($error) {
+		$self->flash( error => "Failed to enable TOTP for '$user': $error" );
+		return $self->redirect_to( 'users_show', user => $user );
+	}
+
+	$self->flash( success => "TOTP enabled for '$user'." );
+	$self->redirect_to( 'users_show', user => $user );
+} ## end sub totp
+
+sub totp_generate {
+	my $self = shift;
+	my $user = $self->param('user');
+
+	my $secret;
+	my $error = $self->_pt_call( sub { $secret = $self->pt->userTotpGenerateSecret( { user => $user } ) } );
+	if ($error) {
+		$self->flash( error => "Failed to generate TOTP secret for '$user': $error" );
+		return $self->redirect_to( 'users_show', user => $user );
+	}
+
+	$self->flash( success => "TOTP secret generated for '$user'. Scan the QR code to enrol." );
+	$self->redirect_to( 'users_show', user => $user );
+} ## end sub totp_generate
+
+sub totp_verify {
+	my $self = shift;
+	my $user = $self->param('user');
+	my $code = $self->param('code') // '';
+
+	my $ok;
+	my $error = $self->_pt_call( sub { $ok = $self->pt->userTotpVerify( { user => $user, code => $code } ) } );
+	if ( $error || !$ok ) {
+		$self->flash( error => "TOTP verification failed for '$user'. Please try again." );
+		return $self->redirect_to( 'users_show', user => $user );
+	}
+
+	$self->_pt_call( sub { $self->pt->userTotpStatusSet( { user => $user, status => 'active' } ) } );
+	$self->_pt_call( sub { $self->pt->userTotpEnrolledDateSet( { user => $user } ) } );
+
+	$self->flash( success => "TOTP verified and activated for '$user'." );
+	$self->redirect_to( 'users_show', user => $user );
+} ## end sub totp_verify
 
 sub lpk {
 	my $self = shift;

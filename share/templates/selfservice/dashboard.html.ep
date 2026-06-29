@@ -100,3 +100,121 @@
 % }
 
 % } # end if $lpk_schema
+
+% if ($totp_schema) {
+% my $has_totp = $info->{objectClasses}{totpuser} ? 1 : 0;
+% my $new_scratch_codes = flash('new_scratch_codes');
+<!-- TOTP / MFA -->
+<div class="card border-secondary mb-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span class="text-danger fw-bold">TOTP / MFA</span>
+    % if ($has_totp) {
+    <span class="badge bg-success">Enabled</span>
+    % } else {
+    <span class="badge bg-secondary">Not enabled</span>
+    % }
+  </div>
+  <div class="card-body">
+  % if ($new_scratch_codes && @$new_scratch_codes) {
+  <div class="alert alert-warning border-warning mb-3" role="alert">
+    <strong>New scratch codes — save these now.</strong>
+    They will not be shown again.
+    <ul class="mt-2 mb-0 font-monospace">
+      % for my $sc (@$new_scratch_codes) {
+      <li><%= $sc %></li>
+      % }
+    </ul>
+  </div>
+  % }
+  % if ($has_totp) {
+    <table class="table table-sm mb-3">
+      <tbody>
+        <tr>
+          <th style="width:40%">Status</th>
+          <td>
+            % if (defined $info->{totpStatus}) {
+            <%= $info->{totpStatus} %>
+            % } else {
+            <span class="text-secondary">not set</span>
+            % }
+          </td>
+        </tr>
+        <tr>
+          <th>Enrolled</th>
+          <td>
+            % if (defined $info->{totpEnrolledDate}) {
+            <%= $info->{totpEnrolledDate} %>
+            % } else {
+            <span class="text-secondary">not set</span>
+            % }
+          </td>
+        </tr>
+        <tr>
+          <th>Algorithm</th>
+          <td><%= $info->{totpAlgorithm} // 'SHA1' %></td>
+        </tr>
+        <tr>
+          <th>Period</th>
+          <td><%= $info->{totpPeriod} // 30 %>s</td>
+        </tr>
+        <tr>
+          <th>Digits</th>
+          <td><%= $info->{totpDigits} // 6 %></td>
+        </tr>
+        <tr>
+          <th>Scratch codes</th>
+          <td class="d-flex align-items-center gap-2">
+            <span><%= $info->{totpScratchCodeCount} // 0 %> remaining</span>
+            <form method="post" action="<%= url_for('totp_scratch_replace') %>"
+                  data-confirm="This will replace all existing scratch codes. Continue?">
+              <button type="submit" class="btn btn-outline-secondary btn-sm">Replace</button>
+            </form>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    % if (($info->{totpStatus}//'') eq 'none') {
+    <form method="post" action="<%= url_for('totp_generate') %>">
+      <button type="submit" class="btn btn-outline-secondary btn-sm">Set up TOTP</button>
+    </form>
+    % } elsif (($info->{totpStatus}//'') eq 'pending') {
+    <div class="mb-3">
+      % if ($totp_qr_b64) {
+      <p class="text-secondary small mb-2">Scan this QR code with your authenticator app:</p>
+      <img src="data:image/png;base64,<%= $totp_qr_b64 %>"
+           alt="TOTP QR Code" class="mb-2 d-block" style="max-width:200px">
+      % }
+      % if ($totp_uri) {
+      <details class="mb-3">
+        <summary class="text-secondary small" style="cursor:pointer">Show setup URL</summary>
+        <div class="mt-2">
+          <code class="text-break small d-block p-2 bg-dark rounded" style="word-break:break-all"><%= $totp_uri %></code>
+          <div class="form-text">Copy this URL into your authenticator app if you cannot scan the QR code.</div>
+        </div>
+      </details>
+      % }
+      <p class="text-secondary small mb-1">Enter a code from your authenticator to verify and activate MFA:</p>
+      <form method="post" action="<%= url_for('totp_verify') %>">
+        <div class="d-flex gap-2">
+          <input type="text" class="form-control form-control-sm" name="code"
+                 pattern="\d{6}" maxlength="6" required autocomplete="one-time-code"
+                 placeholder="6-digit code" style="width:9rem">
+          <button type="submit" class="btn btn-success btn-sm">Verify &amp; Activate</button>
+        </div>
+      </form>
+    </div>
+    % }
+  % } else {
+    <p class="text-secondary small mb-3">
+      TOTP/MFA is not yet enabled on your account. Enable it to protect your account
+      with a second factor using an authenticator app.
+    </p>
+    <form method="post" action="<%= url_for('totp_enable') %>">
+      <button type="submit" class="btn btn-outline-secondary btn-sm">Enable TOTP</button>
+    </form>
+  % }
+  </div>
+</div>
+
+
+% } # end if $totp_schema

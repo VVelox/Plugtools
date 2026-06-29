@@ -14,7 +14,13 @@ use Net::LDAP::nisNetgroup;
 use String::ShellQuote;
 use Net::LDAP::Extension::SetPassword;
 use Net::SMTP;
+use Authen::TOTP;
+use Imager;
+use Imager::QRCode;
+use MIME::Base64 qw(encode_base64);
 use base 'Error::Helper';
+
+=encoding utf8
 
 =head1 NAME
 
@@ -151,6 +157,17 @@ sub new {
 				76 => 'smtpNotConfigured',
 				77 => 'smtpConnectionFailed',
 				78 => 'smtpSendFailed',
+				79 => 'noTotpSchema',
+				80 => 'alreadyTotpUser',
+				81 => 'noTotpSecret',
+				82 => 'invalidTotpStatus',
+				83 => 'noTotpScratchCode',
+				84 => 'alreadyMfaGroup',
+				85 => 'noMfaGracePeriod',
+				86 => 'invalidTotpAlgorithm',
+				87 => 'invalidTotpDigits',
+				88 => 'invalidTotpPeriod',
+				89 => 'totpScratchCodeLimitReached',
 			},
 			fatal_flags      => {},
 			perror_not_fatal => 0,
@@ -2249,9 +2266,10 @@ method.
 
 sub netgroupbaseConfigured {
 	my $self = $_[0];
-	return ( defined( $self->{ini}->{''}->{netgroupbase} )
-			&& $self->{ini}->{''}->{netgroupbase} ne '' ) ? 1 : 0;
-} ## end sub netgroupbaseConfigured
+	return ( defined( $self->{ini}->{''}->{netgroupbase} ) && $self->{ini}->{''}->{netgroupbase} ne '' )
+		? 1
+		: 0;
+}
 
 =head2 addNetgroup
 
@@ -2422,14 +2440,15 @@ sub getNetgroups {
 		filter => '(objectClass=nisNetgroup)'
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 27;
-		$self->{errorString} = 'Fetching nisNetgroup objects under "'
+		$self->{error} = 27;
+		$self->{errorString}
+			= 'Fetching nisNetgroup objects under "'
 			. $self->{ini}->{''}->{netgroupbase}
 			. '" failed: '
 			. $mesg->{errorMessage};
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg->{errorMessage} ne '' )
 
 	my @entries;
 	my $entry = $mesg->pop_entry;
@@ -2983,6 +3002,15 @@ sub readConfig {
 	if ( !defined( $ini->{''}->{websecret} ) ) {
 		$ini->{''}->{websecret} = 'nisaba_change_me';
 	}
+	if ( !defined( $ini->{''}->{totpissuer} ) ) {
+		$ini->{''}->{totpissuer} = 'Nisaba';
+	}
+	if ( !defined( $ini->{''}->{totpAdminAddScratchCodes} ) ) {
+		$ini->{''}->{totpAdminAddScratchCodes} = 0;
+	}
+	if ( !defined( $ini->{''}->{totpMaxScratchCodes} ) ) {
+		$ini->{''}->{totpMaxScratchCodes} = 10;
+	}
 	if ( !defined( $ini->{''}->{smtpserver} ) ) {
 		$ini->{''}->{smtpserver} = '';
 	}
@@ -3457,8 +3485,9 @@ sub userHasPassword {
 
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -3642,8 +3671,9 @@ sub userRemovePassword {
 
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -4485,8 +4515,9 @@ sub userTitleChange {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -4498,8 +4529,9 @@ sub userTitleChange {
 
 	my $mesg2 = $entry->update($ldap);
 	if ( $mesg2->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Changing title to "' . $args{title} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Changing title to "' . $args{title} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
 		$self->warn;
 		return undef;
 	}
@@ -4574,8 +4606,9 @@ sub userRoomNumberChange {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -4587,11 +4620,17 @@ sub userRoomNumberChange {
 
 	my $mesg2 = $entry->update($ldap);
 	if ( $mesg2->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Changing roomNumber to "' . $args{roomNumber} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Changing roomNumber to "'
+			. $args{roomNumber}
+			. '" for "'
+			. $entry->dn
+			. '" failed: '
+			. $mesg2->{errorMessage};
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg2->{errorMessage} ne '' )
 
 	$entry->dump if $args{dump};
 	return 1;
@@ -4663,8 +4702,9 @@ sub userEmployeeNumberChange {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -4676,11 +4716,17 @@ sub userEmployeeNumberChange {
 
 	my $mesg2 = $entry->update($ldap);
 	if ( $mesg2->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Changing employeeNumber to "' . $args{employeeNumber} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Changing employeeNumber to "'
+			. $args{employeeNumber}
+			. '" for "'
+			. $entry->dn
+			. '" failed: '
+			. $mesg2->{errorMessage};
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg2->{errorMessage} ne '' )
 
 	$entry->dump if $args{dump};
 	return 1;
@@ -4752,8 +4798,9 @@ sub userEmployeeTypeChange {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -4765,11 +4812,17 @@ sub userEmployeeTypeChange {
 
 	my $mesg2 = $entry->update($ldap);
 	if ( $mesg2->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Changing employeeType to "' . $args{employeeType} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Changing employeeType to "'
+			. $args{employeeType}
+			. '" for "'
+			. $entry->dn
+			. '" failed: '
+			. $mesg2->{errorMessage};
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg2->{errorMessage} ne '' )
 
 	$entry->dump if $args{dump};
 	return 1;
@@ -4841,8 +4894,9 @@ sub userMailAdd {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -4852,8 +4906,9 @@ sub userMailAdd {
 
 	my $mesg2 = $entry->update($ldap);
 	if ( $mesg2->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Adding mail "' . $args{mail} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Adding mail "' . $args{mail} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
 		$self->warn;
 		return undef;
 	}
@@ -4928,8 +4983,9 @@ sub userMailRemove {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -4938,8 +4994,9 @@ sub userMailRemove {
 
 	my $mesg2 = $entry->update($ldap);
 	if ( $mesg2->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Removing mail "' . $args{mail} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Removing mail "' . $args{mail} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
 		$self->warn;
 		return undef;
 	}
@@ -5014,8 +5071,9 @@ sub userTelephoneNumberAdd {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5025,11 +5083,17 @@ sub userTelephoneNumberAdd {
 
 	my $mesg2 = $entry->update($ldap);
 	if ( $mesg2->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Adding telephoneNumber "' . $args{telephoneNumber} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Adding telephoneNumber "'
+			. $args{telephoneNumber}
+			. '" for "'
+			. $entry->dn
+			. '" failed: '
+			. $mesg2->{errorMessage};
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg2->{errorMessage} ne '' )
 
 	$entry->dump if $args{dump};
 	return 1;
@@ -5101,8 +5165,9 @@ sub userTelephoneNumberRemove {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5111,11 +5176,17 @@ sub userTelephoneNumberRemove {
 
 	my $mesg2 = $entry->update($ldap);
 	if ( $mesg2->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Removing telephoneNumber "' . $args{telephoneNumber} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Removing telephoneNumber "'
+			. $args{telephoneNumber}
+			. '" for "'
+			. $entry->dn
+			. '" failed: '
+			. $mesg2->{errorMessage};
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg2->{errorMessage} ne '' )
 
 	$entry->dump if $args{dump};
 	return 1;
@@ -5187,8 +5258,9 @@ sub userMobileAdd {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5198,8 +5270,9 @@ sub userMobileAdd {
 
 	my $mesg2 = $entry->update($ldap);
 	if ( $mesg2->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Adding mobile "' . $args{mobile} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Adding mobile "' . $args{mobile} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
 		$self->warn;
 		return undef;
 	}
@@ -5274,8 +5347,9 @@ sub userMobileRemove {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5284,8 +5358,9 @@ sub userMobileRemove {
 
 	my $mesg2 = $entry->update($ldap);
 	if ( $mesg2->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Removing mobile "' . $args{mobile} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Removing mobile "' . $args{mobile} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
 		$self->warn;
 		return undef;
 	}
@@ -5360,8 +5435,9 @@ sub userPreferredLanguageAdd {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5371,11 +5447,17 @@ sub userPreferredLanguageAdd {
 
 	my $mesg2 = $entry->update($ldap);
 	if ( $mesg2->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Adding preferredLanguage "' . $args{preferredLanguage} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Adding preferredLanguage "'
+			. $args{preferredLanguage}
+			. '" for "'
+			. $entry->dn
+			. '" failed: '
+			. $mesg2->{errorMessage};
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg2->{errorMessage} ne '' )
 
 	$entry->dump if $args{dump};
 	return 1;
@@ -5447,8 +5529,9 @@ sub userPreferredLanguageRemove {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5457,11 +5540,17 @@ sub userPreferredLanguageRemove {
 
 	my $mesg2 = $entry->update($ldap);
 	if ( $mesg2->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Removing preferredLanguage "' . $args{preferredLanguage} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Removing preferredLanguage "'
+			. $args{preferredLanguage}
+			. '" for "'
+			. $entry->dn
+			. '" failed: '
+			. $mesg2->{errorMessage};
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg2->{errorMessage} ne '' )
 
 	$entry->dump if $args{dump};
 	return 1;
@@ -5533,8 +5622,9 @@ sub userLabeledURIAdd {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5544,11 +5634,17 @@ sub userLabeledURIAdd {
 
 	my $mesg2 = $entry->update($ldap);
 	if ( $mesg2->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Adding labeledURI "' . $args{labeledURI} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Adding labeledURI "'
+			. $args{labeledURI}
+			. '" for "'
+			. $entry->dn
+			. '" failed: '
+			. $mesg2->{errorMessage};
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg2->{errorMessage} ne '' )
 
 	$entry->dump if $args{dump};
 	return 1;
@@ -5620,8 +5716,9 @@ sub userLabeledURIRemove {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5630,11 +5727,17 @@ sub userLabeledURIRemove {
 
 	my $mesg2 = $entry->update($ldap);
 	if ( $mesg2->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Removing labeledURI "' . $args{labeledURI} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Removing labeledURI "'
+			. $args{labeledURI}
+			. '" for "'
+			. $entry->dn
+			. '" failed: '
+			. $mesg2->{errorMessage};
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg2->{errorMessage} ne '' )
 
 	$entry->dump if $args{dump};
 	return 1;
@@ -5706,8 +5809,9 @@ sub userSNchange {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5719,8 +5823,9 @@ sub userSNchange {
 
 	my $mesg2 = $entry->update($ldap);
 	if ( $mesg2->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Changing sn to "' . $args{sn} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Changing sn to "' . $args{sn} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
 		$self->warn;
 		return undef;
 	}
@@ -5795,8 +5900,9 @@ sub userGivenNameChange {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5808,11 +5914,17 @@ sub userGivenNameChange {
 
 	my $mesg2 = $entry->update($ldap);
 	if ( $mesg2->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Changing givenName to "' . $args{givenName} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Changing givenName to "'
+			. $args{givenName}
+			. '" for "'
+			. $entry->dn
+			. '" failed: '
+			. $mesg2->{errorMessage};
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg2->{errorMessage} ne '' )
 
 	$entry->dump if $args{dump};
 	return 1;
@@ -5884,8 +5996,9 @@ sub userDisplayNameChange {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5897,11 +6010,17 @@ sub userDisplayNameChange {
 
 	my $mesg2 = $entry->update($ldap);
 	if ( $mesg2->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Changing displayName to "' . $args{displayName} . '" for "' . $entry->dn . '" failed: ' . $mesg2->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Changing displayName to "'
+			. $args{displayName}
+			. '" for "'
+			. $entry->dn
+			. '" failed: '
+			. $mesg2->{errorMessage};
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $mesg2->{errorMessage} ne '' )
 
 	$entry->dump if $args{dump};
 	return 1;
@@ -5973,8 +6092,9 @@ sub userHomePostalAddressChange {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -6062,8 +6182,9 @@ sub userDescriptionAdd {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -6149,8 +6270,9 @@ sub userDescriptionRemove {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -6236,8 +6358,9 @@ sub userPostalAddressAdd {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -6323,8 +6446,9 @@ sub userPostalAddressRemove {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -6424,8 +6548,9 @@ sub userConvertToInetOrgPerson {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -6438,8 +6563,8 @@ sub userConvertToInetOrgPerson {
 	my $before = _entryToString($entry);
 
 	# Build the new objectClass list: drop account, add inetOrgPerson chain
-	my @new_oc    = grep { lc($_) ne 'account' } $entry->get_value('objectClass');
-	my %new_oc_map = map { lc($_) => 1 } @new_oc;
+	my @new_oc     = grep { lc($_) ne 'account' } $entry->get_value('objectClass');
+	my %new_oc_map = map  { lc($_) => 1 } @new_oc;
 	my @oc_added;
 	for my $oc (qw(top person organizationalPerson inetOrgPerson)) {
 		unless ( $new_oc_map{ lc($oc) } ) {
@@ -6472,26 +6597,36 @@ sub userConvertToInetOrgPerson {
 		$self->{error}       = 34;
 		$self->{errorString} = 'Deleting "' . $entry->dn . '" prior to re-add failed: ' . $del_mesg->error;
 		warn "userConvertToInetOrgPerson diagnostic dump\n"
-			. "=== Original entry ===\n" . $before
-			. "=== Attempted changes ===\n" . $changes
-			. "=== Resulting entry (not written) ===\n" . $after;
+			. "=== Original entry ===\n"
+			. $before
+			. "=== Attempted changes ===\n"
+			. $changes
+			. "=== Resulting entry (not written) ===\n"
+			. $after;
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $del_mesg->code )
 
 	# Re-add with the corrected objectClass chain
 	my $add_mesg = $ldap->add($new_entry);
 	if ( $add_mesg->code ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Re-adding "' . $entry->dn . '" as inetOrgPerson failed: ' . $add_mesg->error
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Re-adding "'
+			. $entry->dn
+			. '" as inetOrgPerson failed: '
+			. $add_mesg->error
 			. ' — original entry was deleted and must be restored manually';
 		warn "userConvertToInetOrgPerson diagnostic dump\n"
-			. "=== Original entry (now deleted) ===\n" . $before
-			. "=== Attempted changes ===\n" . $changes
-			. "=== Resulting entry (failed to write) ===\n" . $after;
+			. "=== Original entry (now deleted) ===\n"
+			. $before
+			. "=== Attempted changes ===\n"
+			. $changes
+			. "=== Resulting entry (failed to write) ===\n"
+			. $after;
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( $add_mesg->code )
 
 	$new_entry->dump if $args{dump};
 	return 1;
@@ -6563,8 +6698,9 @@ sub userCNadd {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -6573,8 +6709,9 @@ sub userCNadd {
 
 	my $update = $entry->update($ldap);
 	if ( $update->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Adding cn "' . $args{cn} . '" for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Adding cn "' . $args{cn} . '" for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
 		$self->warn;
 		return undef;
 	}
@@ -6650,8 +6787,9 @@ sub userCNremove {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -6668,8 +6806,9 @@ sub userCNremove {
 
 	my $update = $entry->update($ldap);
 	if ( $update->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Removing cn "' . $args{cn} . '" for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Removing cn "' . $args{cn} . '" for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
 		$self->warn;
 		return undef;
 	}
@@ -6765,8 +6904,9 @@ sub userConvertToLdapPublicKey {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -6785,8 +6925,9 @@ sub userConvertToLdapPublicKey {
 
 	my $update = $entry->update($ldap);
 	if ( $update->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Adding ldapPublicKey objectClass to "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Adding ldapPublicKey objectClass to "' . $entry->dn . '" failed: ' . $update->{errorMessage};
 		$self->warn;
 		return undef;
 	}
@@ -6870,8 +7011,9 @@ sub userSSHPublicKeyAdd {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -6964,8 +7106,9 @@ sub userSSHPublicKeyRemove {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -6994,7 +7137,7 @@ sub _entryToString {
 		}
 	}
 	return $out;
-}
+} ## end sub _entryToString
 
 =head2 userVerifyPassword
 
@@ -7059,8 +7202,9 @@ sub userVerifyPassword {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -7148,8 +7292,9 @@ sub userSetPassSelf {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -7231,18 +7376,25 @@ sub userSelfInfo {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
 
 	my %info;
-	$info{cn}            = [ $entry->get_value('cn') ];
-	$info{mail}          = $entry->get_value('mail');
-	$info{displayName}   = $entry->get_value('displayName');
-	$info{sshPublicKey}  = [ $entry->get_value('sshPublicKey') ];
-	$info{objectClasses} = { map { lc($_) => 1 } $entry->get_value('objectClass') };
+	$info{cn}                   = [ $entry->get_value('cn') ];
+	$info{mail}                 = $entry->get_value('mail');
+	$info{displayName}          = $entry->get_value('displayName');
+	$info{sshPublicKey}         = [ $entry->get_value('sshPublicKey') ];
+	$info{objectClasses}        = { map { lc($_) => 1 } $entry->get_value('objectClass') };
+	$info{totpStatus}           = $entry->get_value('totpStatus');
+	$info{totpEnrolledDate}     = $entry->get_value('totpEnrolledDate');
+	$info{totpScratchCodeCount} = () = $entry->get_value('totpScratchCode');
+	$info{totpAlgorithm}        = $entry->get_value('totpAlgorithm');
+	$info{totpPeriod}           = $entry->get_value('totpPeriod');
+	$info{totpDigits}           = $entry->get_value('totpDigits');
 
 	return \%info;
 } ## end sub userSelfInfo
@@ -7311,8 +7463,9 @@ sub userSSHPublicKeyAddSelf {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -7395,8 +7548,9 @@ sub userSSHPublicKeyRemoveSelf {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -7467,8 +7621,9 @@ sub userConvertToLdapPublicKeySelf {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -7485,8 +7640,9 @@ sub userConvertToLdapPublicKeySelf {
 
 	my $update = $entry->update($ldap);
 	if ( $update->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Adding ldapPublicKey objectClass for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Adding ldapPublicKey objectClass for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
 		$self->warn;
 		return undef;
 	}
@@ -7511,7 +7667,7 @@ sub smtpAvailable {
 	$self->errorblank;
 
 	return ( $self->{ini}->{''}->{smtpserver} ne '' && $self->{ini}->{''}->{smtpfrom} ne '' ) ? 1 : undef;
-} ## end sub smtpAvailable
+}
 
 =head2 sendEmail
 
@@ -7556,7 +7712,7 @@ sub sendEmail {
 	}
 
 	my $tls_mode = lc( $self->{ini}->{''}->{smtptls} // '' );
-	my $smtp = Net::SMTP->new(
+	my $smtp     = Net::SMTP->new(
 		$self->{ini}->{''}->{smtpserver},
 		Port    => $self->{ini}->{''}->{smtpport},
 		Timeout => 30,
@@ -7615,13 +7771,14 @@ sub sendEmail {
 		$self->warn;
 		return undef;
 	}
-	$smtp->datasend( "From: $from\r\n" );
-	$smtp->datasend( "To: $to\r\n" );
-	$smtp->datasend( "Subject: $subject\r\n" );
-	$smtp->datasend( "MIME-Version: 1.0\r\n" );
-	$smtp->datasend( "Content-Type: text/plain; charset=UTF-8\r\n" );
-	$smtp->datasend( "\r\n" );
+	$smtp->datasend("From: $from\r\n");
+	$smtp->datasend("To: $to\r\n");
+	$smtp->datasend("Subject: $subject\r\n");
+	$smtp->datasend("MIME-Version: 1.0\r\n");
+	$smtp->datasend("Content-Type: text/plain; charset=UTF-8\r\n");
+	$smtp->datasend("\r\n");
 	$smtp->datasend($body);
+
 	if ( !$smtp->dataend ) {
 		$self->{error}       = 78;
 		$self->{errorString} = 'SMTP dataend failed';
@@ -7634,8 +7791,1723 @@ sub sendEmail {
 	return 1;
 } ## end sub sendEmail
 
-	1;
+# Valid totpStatus values
+my %_TOTP_STATUS_OK = map { $_ => 1 } qw( none pending active disabled bypassed );
 
+# Valid totpAlgorithm values (stored and passed to Authen::TOTP in upper-case)
+my %_TOTP_ALGORITHM_OK = map { $_ => 1 } qw( SHA1 SHA256 SHA512 );
+
+# Valid totpDigits values
+my %_TOTP_DIGITS_OK = map { $_ => 1 } ( 6, 8 );
+
+# Build a GeneralizedTime string for the current UTC time.
+sub _generalizedTimeNow {
+	my @t = gmtime(time);
+	return sprintf( '%04d%02d%02d%02d%02d%02dZ', $t[5] + 1900, $t[4] + 1, $t[3], $t[2], $t[1], $t[0] );
+}
+
+=head2 totpSchemaAvailable
+
+Returns 1 if the C<totpUser> objectClass is present in the LDAP
+server's schema, undef otherwise.
+
+    if ( $pt->totpSchemaAvailable ) {
+        # TOTP schema is loaded
+    }
+
+=cut
+
+sub totpSchemaAvailable {
+	my $self = $_[0];
+
+	$self->errorblank;
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $schema = $ldap->schema;
+	return undef unless defined $schema;
+
+	my $oc = $schema->objectclass('totpUser');
+	return ( defined $oc && defined $oc->{name} ) ? 1 : undef;
+} ## end sub totpSchemaAvailable
+
+=head2 userConvertToTotp
+
+Add the C<totpUser> auxiliary objectClass to a user entry.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid).
+
+    $pt->userConvertToTotp({ user => 'jdoe' });
+
+=cut
+
+sub userConvertToTotp {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !$self->totpSchemaAvailable ) {
+		$self->{error}       = 79;
+		$self->{errorString} = 'The totpUser schema is not available on this LDAP server';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, undef, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	my @ocs = map { lc($_) } $entry->get_value('objectClass');
+	if ( grep { $_ eq 'totpuser' } @ocs ) {
+		$self->{error}       = 80;
+		$self->{errorString} = 'User "' . $args{user} . '" already has the totpUser objectClass';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->add( objectClass => 'totpUser' );
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Adding totpUser objectClass for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userConvertToTotp
+
+=head2 userTotpInfoGet
+
+Return a hashref of TOTP-related attributes for a user.
+
+Returned keys:
+
+=over 4
+
+=item totpSecret
+
+The Base32-encoded TOTP secret (may be undef).
+
+=item totpStatus
+
+Enrollment status string (may be undef).
+
+=item totpEnrolledDate
+
+GeneralizedTime enrollment timestamp (may be undef).
+
+=item totpScratchCodes
+
+Arrayref of current scratch codes.
+
+=item hasTotpUser
+
+1 if the entry carries the C<totpUser> objectClass, 0 otherwise.
+
+=back
+
+
+    my $info = $pt->userTotpInfoGet({ user => 'jdoe' });
+
+=cut
+
+sub userTotpInfoGet {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, undef, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	my @ocs = map { lc($_) } $entry->get_value('objectClass');
+	return {
+		hasTotpUser      => ( grep { $_ eq 'totpuser' } @ocs ) ? 1 : 0,
+		totpSecret       => scalar( $entry->get_value('totpSecret') ),
+		totpStatus       => scalar( $entry->get_value('totpStatus') ),
+		totpEnrolledDate => scalar( $entry->get_value('totpEnrolledDate') ),
+		totpScratchCodes => [ $entry->get_value('totpScratchCode') ],
+		totpAlgorithm    => scalar( $entry->get_value('totpAlgorithm') ),
+		totpPeriod       => scalar( $entry->get_value('totpPeriod') ),
+		totpDigits       => scalar( $entry->get_value('totpDigits') ),
+	};
+} ## end sub userTotpInfoGet
+
+=head2 userTotpSecretSet
+
+Set the C<totpSecret> attribute on a user.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid).
+
+=head4 secret
+
+The Base32-encoded TOTP secret string.
+
+    $pt->userTotpSecretSet({ user => 'jdoe', secret => 'JBSWY3DPEHPK3PXP' });
+
+=cut
+
+sub userTotpSecretSet {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+	if ( !defined( $args{secret} ) || $args{secret} eq '' ) {
+		$self->{error}       = 81;
+		$self->{errorString} = 'No TOTP secret specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, undef, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->replace( totpSecret => $args{secret} );
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Setting totpSecret for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userTotpSecretSet
+
+=head2 userTotpSecretRemove
+
+Remove the C<totpSecret> from a user's entry and clear the associated
+algorithm, digits, and period attributes. Sets C<totpStatus> to C<none>
+and clears C<totpEnrolledDate>.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid).
+
+    $pt->userTotpSecretRemove({ user => 'jdoe' });
+
+=cut
+
+sub userTotpSecretRemove {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, undef, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	for my $attr (qw( totpSecret totpAlgorithm totpDigits totpPeriod totpEnrolledDate totpScratchCode )) {
+		$entry->delete($attr) if defined scalar( $entry->get_value($attr) );
+	}
+	$entry->replace( totpStatus => 'none' );
+
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Removing TOTP secret for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userTotpSecretRemove
+
+=head2 userTotpStatusSet
+
+Set the C<totpStatus> attribute on a user. Valid values are
+C<none>, C<pending>, C<active>, C<disabled>, C<bypassed>.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid).
+
+=head4 status
+
+The status string.
+
+    $pt->userTotpStatusSet({ user => 'jdoe', status => 'active' });
+
+=cut
+
+sub userTotpStatusSet {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+	if ( !defined( $args{status} ) || !$_TOTP_STATUS_OK{ lc( $args{status} ) } ) {
+		$self->{error} = 82;
+		$self->{errorString}
+			= 'Invalid or missing totpStatus; must be one of: ' . join( ', ', sort keys %_TOTP_STATUS_OK );
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, undef, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->replace( totpStatus => lc( $args{status} ) );
+	if ( lc( $args{status} ) eq 'pending' && defined scalar( $entry->get_value('totpEnrolledDate') ) ) {
+		$entry->delete('totpEnrolledDate');
+	}
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Setting totpStatus for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userTotpStatusSet
+
+=head2 userTotpAlgorithmSet
+
+Set the C<totpAlgorithm> attribute on a user. Valid values are
+C<SHA1>, C<SHA256>, C<SHA512>.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid).
+
+=head4 algorithm
+
+The algorithm string (case-insensitive).
+
+    $pt->userTotpAlgorithmSet({ user => 'jdoe', algorithm => 'SHA256' });
+
+=cut
+
+sub userTotpAlgorithmSet {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+	if ( !defined( $args{algorithm} ) || !$_TOTP_ALGORITHM_OK{ uc( $args{algorithm} ) } ) {
+		$self->{error} = 86;
+		$self->{errorString}
+			= 'Invalid or missing totpAlgorithm; must be one of: ' . join( ', ', sort keys %_TOTP_ALGORITHM_OK );
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, undef, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->replace( totpAlgorithm => uc( $args{algorithm} ) );
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Setting totpAlgorithm for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userTotpAlgorithmSet
+
+=head2 userTotpPeriodSet
+
+Set the C<totpPeriod> attribute on a user. Must be a positive integer;
+30 is the standard time step.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid).
+
+=head4 period
+
+Time step in seconds (positive integer).
+
+    $pt->userTotpPeriodSet({ user => 'jdoe', period => 30 });
+
+=cut
+
+sub userTotpPeriodSet {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+	my $period = defined( $args{period} ) ? int( $args{period} ) : undef;
+	if ( !defined($period) || $period < 1 ) {
+		$self->{error}       = 88;
+		$self->{errorString} = 'Invalid or missing totpPeriod; must be a positive integer';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, undef, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->replace( totpPeriod => $period );
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Setting totpPeriod for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userTotpPeriodSet
+
+=head2 userTotpDigitsSet
+
+Set the C<totpDigits> attribute on a user. Valid values are 6 or 8.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid).
+
+=head4 digits
+
+Number of OTP digits (6 or 8).
+
+    $pt->userTotpDigitsSet({ user => 'jdoe', digits => 6 });
+
+=cut
+
+sub userTotpDigitsSet {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+	my $digits = defined( $args{digits} ) ? int( $args{digits} ) : undef;
+	if ( !defined($digits) || !$_TOTP_DIGITS_OK{$digits} ) {
+		$self->{error} = 87;
+		$self->{errorString}
+			= 'Invalid or missing totpDigits; must be one of: ' . join( ', ', sort keys %_TOTP_DIGITS_OK );
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, undef, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->replace( totpDigits => $digits );
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Setting totpDigits for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userTotpDigitsSet
+
+=head2 userTotpEnrolledDateSet
+
+Set the C<totpEnrolledDate> attribute on a user to the current UTC
+time in GeneralizedTime format.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid).
+
+    $pt->userTotpEnrolledDateSet({ user => 'jdoe' });
+
+=cut
+
+sub userTotpEnrolledDateSet {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, undef, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->replace( totpEnrolledDate => _generalizedTimeNow() );
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Setting totpEnrolledDate for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userTotpEnrolledDateSet
+
+=head2 userTotpScratchCodeAdd
+
+Add one or more scratch/backup codes to a user's C<totpScratchCode> attribute.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid).
+
+=head4 code
+
+A single scratch code string, or an array ref of scratch code strings. Each
+code must match the length defined by C<totpDigits> for the user (default 6).
+
+    $pt->userTotpScratchCodeAdd({ user => 'jdoe', code => '123456' });
+    $pt->userTotpScratchCodeAdd({ user => 'jdoe', code => ['123456', '654321'] });
+
+=cut
+
+sub userTotpScratchCodeAdd {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+	if ( !defined( $args{code} ) || ( ref( $args{code} ) eq '' && $args{code} eq '' ) ) {
+		$self->{error}       = 83;
+		$self->{errorString} = 'No scratch code specified';
+		$self->warn;
+		return undef;
+	}
+
+	my @codes = ref( $args{code} ) eq 'ARRAY' ? @{ $args{code} } : ( $args{code} );
+	if ( !@codes ) {
+		$self->{error}       = 83;
+		$self->{errorString} = 'No scratch code specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, undef, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	my $expected_len = scalar( $entry->get_value('totpDigits') ) // 6;
+	for my $code (@codes) {
+		if ( length($code) != $expected_len ) {
+			$self->{error}       = 87;
+			$self->{errorString} = 'Scratch code must be ' . $expected_len . ' digits (totpDigits for this user)';
+			$self->warn;
+			return undef;
+		}
+	}
+
+	my $max           = $self->{ini}->{''}->{totpMaxScratchCodes};
+	my $current_count = () = $entry->get_value('totpScratchCode');
+	if ( $current_count + scalar(@codes) > $max ) {
+		$self->{error} = 89;
+		$self->{errorString}
+			= 'Adding '
+			. scalar(@codes)
+			. ' scratch code(s) would exceed the maximum of '
+			. $max
+			. ' for user "'
+			. $args{user} . '"';
+		$self->warn;
+		return undef;
+	} ## end if ( $current_count + scalar(@codes) > $max)
+
+	$entry->add( totpScratchCode => \@codes );
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Adding totpScratchCode for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userTotpScratchCodeAdd
+
+=head2 userTotpScratchCodesReplace
+
+Remove all existing scratch codes for a user and replace them with freshly
+generated ones. Returns an array ref of the new plaintext codes on success,
+or C<undef> on error.
+
+The codes are generated using C<totpDigits> (default 6) zero-padded random
+integers. The number of codes generated is controlled by the optional C<count>
+argument (defaults to C<totpMaxScratchCodes>). Requesting more than
+C<totpMaxScratchCodes> is an error.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid).
+
+=head4 count
+
+Number of scratch codes to generate. Optional, defaults to 5.
+
+    my $codes = $pt->userTotpScratchCodesReplace({ user => 'jdoe' });
+    my $codes = $pt->userTotpScratchCodesReplace({ user => 'jdoe', count => 8 });
+
+=cut
+
+sub userTotpScratchCodesReplace {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, undef, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	my $digits = scalar( $entry->get_value('totpDigits') ) // 6;
+	my $max    = $self->{ini}->{''}->{totpMaxScratchCodes};
+	my $count  = $args{count} // $max;
+	if ( $count > $max ) {
+		$self->{error}       = 89;
+		$self->{errorString} = 'Requested scratch code count (' . $count . ') exceeds the maximum of ' . $max;
+		$self->warn;
+		return undef;
+	}
+
+	my @new_codes;
+	for ( 1 .. $count ) {
+		push @new_codes, sprintf( '%0*d', $digits, int( rand( 10**$digits ) ) );
+	}
+
+	# Remove existing scratch codes if present
+	if ( defined scalar( $entry->get_value('totpScratchCode') ) ) {
+		$entry->delete('totpScratchCode');
+	}
+
+	$entry->add( totpScratchCode => \@new_codes );
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Replacing totpScratchCode for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return \@new_codes;
+} ## end sub userTotpScratchCodesReplace
+
+=head2 userTotpScratchCodeRemove
+
+Remove a specific scratch code from a user.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid).
+
+=head4 code
+
+The exact scratch code string to remove.
+
+    $pt->userTotpScratchCodeRemove({ user => 'jdoe', code => '12345678' });
+
+=cut
+
+sub userTotpScratchCodeRemove {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+	if ( !defined( $args{code} ) || $args{code} eq '' ) {
+		$self->{error}       = 83;
+		$self->{errorString} = 'No scratch code specified';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, undef, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->delete( totpScratchCode => [ $args{code} ] );
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Removing totpScratchCode for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userTotpScratchCodeRemove
+
+=head2 groupConvertToMfa
+
+Add the C<mfaGroup> auxiliary objectClass to a group entry.
+
+=head3 args hash
+
+=head4 group
+
+The group name.
+
+    $pt->groupConvertToMfa({ group => 'engineers' });
+
+=cut
+
+sub groupConvertToMfa {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{group} ) ) {
+		$self->{error}       = 6;
+		$self->{errorString} = 'No group name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !$self->totpSchemaAvailable ) {
+		$self->{error}       = 79;
+		$self->{errorString} = 'The totpUser schema is not available on this LDAP server';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{groupbase},
+		filter => '(cn=' . $args{group} . ')',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 27;
+		$self->{errorString} = 'Fetching the entry for group "' . $args{group} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error} = 14;
+		$self->{errorString}
+			= 'Group "' . $args{group} . '" does not exist under "' . $self->{ini}->{''}->{groupbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	my @ocs = map { lc($_) } $entry->get_value('objectClass');
+	if ( grep { $_ eq 'mfagroup' } @ocs ) {
+		$self->{error}       = 84;
+		$self->{errorString} = 'Group "' . $args{group} . '" already has the mfaGroup objectClass';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->add( objectClass => 'mfaGroup' );
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Adding mfaGroup objectClass for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub groupConvertToMfa
+
+=head2 groupMfaRequiredSet
+
+Set the C<mfaRequired> boolean attribute on a group.
+
+=head3 args hash
+
+=head4 group
+
+The group name.
+
+=head4 required
+
+A true/false value. Written to LDAP as C<TRUE> or C<FALSE>.
+
+    $pt->groupMfaRequiredSet({ group => 'engineers', required => 1 });
+
+=cut
+
+sub groupMfaRequiredSet {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{group} ) ) {
+		$self->{error}       = 6;
+		$self->{errorString} = 'No group name specified';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{groupbase},
+		filter => '(cn=' . $args{group} . ')',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 27;
+		$self->{errorString} = 'Fetching the entry for group "' . $args{group} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error} = 14;
+		$self->{errorString}
+			= 'Group "' . $args{group} . '" does not exist under "' . $self->{ini}->{''}->{groupbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->replace( mfaRequired => ( $args{required} ? 'TRUE' : 'FALSE' ) );
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Setting mfaRequired for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub groupMfaRequiredSet
+
+=head2 groupMfaGracePeriodSet
+
+Set the C<mfaGracePeriodDays> integer attribute on a group.
+
+=head3 args hash
+
+=head4 group
+
+The group name.
+
+=head4 days
+
+Number of days for the grace period.
+
+    $pt->groupMfaGracePeriodSet({ group => 'engineers', days => 7 });
+
+=cut
+
+sub groupMfaGracePeriodSet {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{group} ) ) {
+		$self->{error}       = 6;
+		$self->{errorString} = 'No group name specified';
+		$self->warn;
+		return undef;
+	}
+	if ( !defined( $args{days} ) || $args{days} !~ /^\d+$/ ) {
+		$self->{error}       = 85;
+		$self->{errorString} = 'No valid grace period (days) specified';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{groupbase},
+		filter => '(cn=' . $args{group} . ')',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 27;
+		$self->{errorString} = 'Fetching the entry for group "' . $args{group} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error} = 14;
+		$self->{errorString}
+			= 'Group "' . $args{group} . '" does not exist under "' . $self->{ini}->{''}->{groupbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	$entry->replace( mfaGracePeriodDays => $args{days} + 0 );
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Setting mfaGracePeriodDays for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub groupMfaGracePeriodSet
+
+=head2 groupMfaInfoGet
+
+Return a hashref of MFA policy attributes for a group.
+
+Returned keys:
+
+=over 4
+
+=item hasMfaGroup
+
+1 if the group carries the C<mfaGroup> objectClass, 0 otherwise.
+
+=item mfaRequired
+
+Boolean string from LDAP (C<TRUE>/C<FALSE>), or undef.
+
+=item mfaGracePeriodDays
+
+Integer, or undef.
+
+=back
+
+    my $info = $pt->groupMfaInfoGet({ group => 'engineers' });
+
+=cut
+
+sub groupMfaInfoGet {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{group} ) ) {
+		$self->{error}       = 6;
+		$self->{errorString} = 'No group name specified';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{groupbase},
+		filter => '(cn=' . $args{group} . ')',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 27;
+		$self->{errorString} = 'Fetching the entry for group "' . $args{group} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error} = 14;
+		$self->{errorString}
+			= 'Group "' . $args{group} . '" does not exist under "' . $self->{ini}->{''}->{groupbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	my @ocs = map { lc($_) } $entry->get_value('objectClass');
+	return {
+		hasMfaGroup        => ( grep { $_ eq 'mfagroup' } @ocs ) ? 1 : 0,
+		mfaRequired        => $entry->get_value('mfaRequired'),
+		mfaGracePeriodDays => $entry->get_value('mfaGracePeriodDays'),
+	};
+} ## end sub groupMfaInfoGet
+
+=head2 userTotpGenerateSecret
+
+Generate a new random TOTP secret for a user, store it in LDAP, and
+set C<totpStatus> to C<pending>. Returns the Base32-encoded secret
+string on success so the caller can display or log it.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid).
+
+    my $secret = $pt->userTotpGenerateSecret({ user => 'jdoe' });
+
+=cut
+
+sub userTotpGenerateSecret {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !$self->totpSchemaAvailable ) {
+		$self->{error}       = 79;
+		$self->{errorString} = 'The totpUser schema is not available on this LDAP server';
+		$self->warn;
+		return undef;
+	}
+
+	my ( $name, undef, $uid ) = getpwnam( $args{user} );
+	if ( !defined($name) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+	my $entry = $mesg->pop_entry;
+	if ( !defined($entry) ) {
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	my $algorithm = uc( $args{algorithm} // 'SHA1' );
+	if ( !$_TOTP_ALGORITHM_OK{$algorithm} ) {
+		$self->{error} = 86;
+		$self->{errorString}
+			= 'Invalid algorithm "'
+			. $args{algorithm}
+			. '"; must be one of: '
+			. join( ', ', sort keys %_TOTP_ALGORITHM_OK );
+		$self->warn;
+		return undef;
+	} ## end if ( !$_TOTP_ALGORITHM_OK{$algorithm} )
+
+	my $digits = defined( $args{digits} ) ? int( $args{digits} ) : 6;
+	if ( !$_TOTP_DIGITS_OK{$digits} ) {
+		$self->{error} = 87;
+		$self->{errorString}
+			= 'Invalid digits "' . $args{digits} . '"; must be one of: ' . join( ', ', sort keys %_TOTP_DIGITS_OK );
+		$self->warn;
+		return undef;
+	}
+
+	my $period = defined( $args{period} ) ? int( $args{period} ) : 30;
+	if ( $period < 1 ) {
+		$self->{error}       = 88;
+		$self->{errorString} = 'Invalid period "' . $args{period} . '"; must be a positive integer';
+		$self->warn;
+		return undef;
+	}
+
+	my $gen    = Authen::TOTP->new( algorithm => $algorithm, digits => $digits, period => $period );
+	my $secret = $gen->base32secret;
+
+	$entry->replace( totpSecret    => $secret );
+	$entry->replace( totpStatus    => 'pending' );
+	$entry->replace( totpAlgorithm => $algorithm );
+	$entry->replace( totpDigits    => $digits );
+	$entry->replace( totpPeriod    => $period );
+
+	my $update = $entry->update($ldap);
+	if ( $update->{errorMessage} ne '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Storing TOTP secret for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return $secret;
+} ## end sub userTotpGenerateSecret
+
+=head2 userTotpVerify
+
+Verify a user-supplied code against the TOTP secret stored in LDAP, or
+against the user's stored scratch codes.
+
+If the code matches the TOTP secret, returns 1.
+
+If the code matches a scratch code, the matching C<totpScratchCode> value is
+removed from the user's LDAP entry and 1 is returned. If the removal fails,
+returns 0 with the error set.
+
+Returns C<undef> without setting an error if neither check succeeds.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid).
+
+=head4 code
+
+The TOTP or scratch code to verify.
+
+=head4 tolerance
+
+Number of time steps either side of the current time to accept for TOTP.
+Defaults to 1 (i.e. accepts codes from +-30 s).
+
+    if ( $pt->userTotpVerify({ user => 'jdoe', code => '123456' }) ) {
+        # valid
+    }
+
+=cut
+
+sub userTotpVerify {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+	if ( !defined( $args{code} ) || $args{code} eq '' ) {
+		$self->{error}       = 83;
+		$self->{errorString} = 'No TOTP code specified';
+		$self->warn;
+		return undef;
+	}
+
+	my $info = $self->userTotpInfoGet( { user => $args{user} } );
+	return undef if $self->error;
+
+	my $secret = $info->{totpSecret};
+	if ( !defined $secret ) {
+		$self->{error}       = 81;
+		$self->{errorString} = 'No TOTP secret is set for user "' . $args{user} . '"';
+		$self->warn;
+		return undef;
+	}
+
+	# Try TOTP validation first
+	my $algorithm = uc( $info->{totpAlgorithm} // 'SHA1' );
+	my $digits    = $info->{totpDigits} // 6;
+	my $period    = $info->{totpPeriod} // 30;
+	my $gen
+		= Authen::TOTP->new( base32secret => $secret, algorithm => $algorithm, digits => $digits, period => $period );
+	my $tolerance = defined( $args{tolerance} ) ? $args{tolerance} : 1;
+	my $valid     = eval { $gen->validate_otp( otp => $args{code}, tolerance => $tolerance ) };
+	return 1 if !$@ && $valid;
+
+	# Try scratch codes
+	my @scratch_codes = @{ $info->{totpScratchCodes} // [] };
+	my ($matched_code) = grep { $_ eq $args{code} } @scratch_codes;
+	if ( defined $matched_code ) {
+		$self->userTotpScratchCodeRemove( { user => $args{user}, code => $matched_code } );
+		if ( $self->error ) {
+			$self->{errorString}
+				= 'Could not remove used scratch code for user "' . $args{user} . '": ' . $self->errorString;
+			$self->warn;
+			return 0;
+		}
+		return 1;
+	} ## end if ( defined $matched_code )
+
+	return undef;
+} ## end sub userTotpVerify
+
+=head2 totpURI
+
+Build and return the C<otpauth://totp/...> URI for a user's TOTP secret.
+No LDAP interaction — the caller supplies the already-fetched values.
+
+=head3 args hash
+
+=head4 secret
+
+The Base32-encoded TOTP secret (as stored in LDAP).
+
+=head4 user
+
+The account label shown in the authenticator app.
+
+=head4 issuer
+
+The issuer name. Defaults to the C<totpissuer> config value.
+
+=head4 algorithm
+
+HMAC algorithm. Defaults to C<SHA1>.
+
+=head4 period
+
+Time step in seconds. Defaults to 30.
+
+=head4 digits
+
+OTP length. Defaults to 6.
+
+    my $uri = $pt->totpURI({ secret => $secret, user => 'jdoe' });
+
+=cut
+
+sub totpURI {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{secret} ) || $args{secret} eq '' ) {
+		$self->{error}       = 81;
+		$self->{errorString} = 'No TOTP secret specified';
+		$self->warn;
+		return undef;
+	}
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	my $issuer    = $args{issuer} // $self->{ini}->{''}->{totpissuer};
+	my $algorithm = uc( $args{algorithm} // 'SHA1' );
+	my $digits    = $args{digits} // 6;
+	my $period    = $args{period} // 30;
+
+	my $gen = Authen::TOTP->new(
+		base32secret => $args{secret},
+		algorithm    => $algorithm,
+		digits       => $digits,
+		period       => $period
+	);
+	return $gen->generate_otp( user => $args{user}, issuer => $issuer );
+} ## end sub totpURI
+
+=head2 totpQRCodeBase64
+
+Generate a QR code PNG for a C<otpauth://> URI and return it as a
+Base64-encoded string (suitable for embedding in an HTML data URI).
+No LDAP interaction - the caller supplies the already-fetched secret.
+
+=head3 args hash
+
+=head4 secret
+
+The Base32-encoded TOTP secret (as stored in LDAP).
+
+=head4 user
+
+The account label shown in the authenticator app.
+
+=head4 issuer
+
+The issuer name shown in the authenticator app. Defaults to the
+C<totpissuer> config value (default C<Nisaba>).
+
+    my $b64 = $pt->totpQRCodeBase64({
+        secret => $totp_info->{totpSecret},
+        user   => 'jdoe',
+    });
+    # Use in template: <img src="data:image/png;base64,<%= $b64 %>">
+
+=cut
+
+sub totpQRCodeBase64 {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{secret} ) || $args{secret} eq '' ) {
+		$self->{error}       = 81;
+		$self->{errorString} = 'No TOTP secret specified';
+		$self->warn;
+		return undef;
+	}
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	my $issuer    = $args{issuer} // $self->{ini}->{''}->{totpissuer};
+	my $algorithm = uc( $args{algorithm} // 'SHA1' );
+	my $digits    = $args{digits} // 6;
+	my $period    = $args{period} // 30;
+
+	my $gen = Authen::TOTP->new(
+		base32secret => $args{secret},
+		algorithm    => $algorithm,
+		digits       => $digits,
+		period       => $period
+	);
+	my $uri = $gen->generate_otp( user => $args{user}, issuer => $issuer );
+
+	my $qrcode = Imager::QRCode->new(
+		size          => 4,
+		margin        => 3,
+		level         => 'M',
+		casesensitive => 1,
+		lightcolor    => Imager::Color->new( 255, 255, 255 ),
+		darkcolor     => Imager::Color->new( 0,   0,   0 ),
+	);
+
+	my $img = $qrcode->plot($uri);
+
+	my $png_data;
+	$img->write( data => \$png_data, type => 'png' );
+
+	return encode_base64( $png_data, '' );
+} ## end sub totpQRCodeBase64
+
+1;
 
 =head1 AUTHOR
 
