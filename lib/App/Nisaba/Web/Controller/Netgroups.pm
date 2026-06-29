@@ -10,7 +10,7 @@ sub _pt_call {
 		return $self->pt->errorString || ( 'Error code ' . $self->pt->error );
 	}
 	return '';
-} ## end sub _pt_call
+}
 
 # Returns 1 if netgroupbase is configured; otherwise flashes an error,
 # redirects to the groups index, and returns 0.
@@ -20,7 +20,7 @@ sub _check_configured {
 	$self->flash( error => 'Netgroup support is not configured (netgroupbase is not set).' );
 	$self->redirect_to('groups_index');
 	return 0;
-} ## end sub _check_configured
+}
 
 sub index {
 	my $self = shift;
@@ -56,10 +56,10 @@ sub create {
 	my @members     = grep { defined($_) && $_ ne '' } $self->every_param('member')->@*;
 
 	# Triples may be entered one per line in a textarea — split on newlines too
-	@triples = map { split /\r?\n/, $_ } @triples;
+	@triples = map  { split /\r?\n/, $_ } @triples;
 	@triples = grep { $_ ne '' } @triples;
 
-	@members = map { split /\r?\n/, $_ } @members;
+	@members = map  { split /\r?\n/, $_ } @members;
 	@members = grep { $_ ne '' } @members;
 
 	my %args = ( group => $group );
@@ -119,15 +119,24 @@ sub update {
 
 	my $error;
 	if ( $action eq 'description' ) {
-		$error = $self->_pt_call( sub { $self->pt->netgroupDescriptionChange( { group => $group, description => $self->param('description') } ) } );
+		$error = $self->_pt_call(
+			sub {
+				$self->pt->netgroupDescriptionChange(
+					{ group => $group, description => $self->param('description') } );
+			}
+		);
 	} elsif ( $action eq 'triple_add' ) {
-		$error = $self->_pt_call( sub { $self->pt->netgroupTripleAdd( { group => $group, triple => $self->param('triple') } ) } );
+		$error = $self->_pt_call(
+			sub { $self->pt->netgroupTripleAdd( { group => $group, triple => $self->param('triple') } ) } );
 	} elsif ( $action eq 'triple_remove' ) {
-		$error = $self->_pt_call( sub { $self->pt->netgroupTripleRemove( { group => $group, triple => $self->param('triple') } ) } );
+		$error = $self->_pt_call(
+			sub { $self->pt->netgroupTripleRemove( { group => $group, triple => $self->param('triple') } ) } );
 	} elsif ( $action eq 'member_add' ) {
-		$error = $self->_pt_call( sub { $self->pt->netgroupMemberAdd( { group => $group, member => $self->param('member') } ) } );
+		$error = $self->_pt_call(
+			sub { $self->pt->netgroupMemberAdd( { group => $group, member => $self->param('member') } ) } );
 	} elsif ( $action eq 'member_remove' ) {
-		$error = $self->_pt_call( sub { $self->pt->netgroupMemberRemove( { group => $group, member => $self->param('member') } ) } );
+		$error = $self->_pt_call(
+			sub { $self->pt->netgroupMemberRemove( { group => $group, member => $self->param('member') } ) } );
 	} else {
 		$self->flash( error => "Unknown action: $action" );
 		return $self->redirect_to( 'netgroups_show', group => $group );

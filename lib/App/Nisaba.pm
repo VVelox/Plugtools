@@ -9544,22 +9544,23 @@ sub _passkey_pct_decode {
 
 # Encode a passkey credential hash into the pipe-delimited storage string.
 sub _passkey_encode_credential {
-	my %c         = @_;
-	my $transports = ref( $c{transports} ) eq 'ARRAY'
+	my %c = @_;
+	my $transports
+		= ref( $c{transports} ) eq 'ARRAY'
 		? join( ',', @{ $c{transports} } )
 		: ( $c{transports} // '' );
 	return join( '|',
-		$c{credentialId}   // '',
-		$c{cosePublicKey}  // '',
-		$c{algorithm}      // '',
-		$c{signCount}      // 0,
-		$c{aaguid}         // '',
+		$c{credentialId}  // '',
+		$c{cosePublicKey} // '',
+		$c{algorithm}     // '',
+		$c{signCount}     // 0,
+		$c{aaguid}        // '',
 		$transports,
 		$c{backupEligible} // 'FALSE',
 		$c{backupState}    // 'FALSE',
 		_passkey_pct_encode( $c{nickname} // '' ),
-		$c{createdDate}    // '',
-		$c{lastUsedDate}   // '',
+		$c{createdDate}  // '',
+		$c{lastUsedDate} // '',
 	);
 } ## end sub _passkey_encode_credential
 
@@ -9568,14 +9569,14 @@ sub _passkey_decode_credential {
 	my $raw    = $_[0] // '';
 	my @fields = split /\|/, $raw, 11;
 	return (
-		credentialId   => $fields[0]  // '',
-		cosePublicKey  => $fields[1]  // '',
-		algorithm      => $fields[2]  // '',
-		signCount      => $fields[3]  // 0,
-		aaguid         => $fields[4]  // '',
+		credentialId   => $fields[0] // '',
+		cosePublicKey  => $fields[1] // '',
+		algorithm      => $fields[2] // '',
+		signCount      => $fields[3] // 0,
+		aaguid         => $fields[4] // '',
 		transports     => [ grep { $_ ne '' } split /,/, ( $fields[5] // '' ) ],
-		backupEligible => $fields[6]  // 'FALSE',
-		backupState    => $fields[7]  // 'FALSE',
+		backupEligible => $fields[6] // 'FALSE',
+		backupState    => $fields[7] // 'FALSE',
 		nickname       => _passkey_pct_decode( $fields[8] // '' ),
 		createdDate    => $fields[9]  // '',
 		lastUsedDate   => $fields[10] // '',
@@ -9586,8 +9587,7 @@ sub _passkey_decode_credential {
 # Return the current UTC time as an ISO 8601 string.
 sub _passkeyNow {
 	my @t = gmtime(time);
-	return sprintf( '%04d-%02d-%02dT%02d:%02d:%02dZ',
-		$t[5] + 1900, $t[4] + 1, $t[3], $t[2], $t[1], $t[0] );
+	return sprintf( '%04d-%02d-%02dT%02d:%02d:%02dZ', $t[5] + 1900, $t[4] + 1, $t[3], $t[2], $t[1], $t[0] );
 }
 
 =head2 passkeySchemaAvailable
@@ -9670,8 +9670,9 @@ sub userConvertToPasskeyUser {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -9687,8 +9688,9 @@ sub userConvertToPasskeyUser {
 	$entry->add( objectClass => 'passkeyUser' );
 	my $update = $entry->update($ldap);
 	if ( $update->{errorMessage} ne '' ) {
-		$self->{error}       = 19;
-		$self->{errorString} = 'Adding passkeyUser objectClass for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->{error} = 19;
+		$self->{errorString}
+			= 'Adding passkeyUser objectClass for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
 		$self->warn;
 		return undef;
 	}
@@ -9759,8 +9761,9 @@ sub userPasskeyRpIdSet {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -9811,8 +9814,9 @@ sub userPasskeyUserVerificationSet {
 	}
 	my $uv = lc( $args{uv} // '' );
 	if ( !$_PASSKEY_UV_OK{$uv} ) {
-		$self->{error}       = 94;
-		$self->{errorString} = 'Invalid user verification value "'
+		$self->{error} = 94;
+		$self->{errorString}
+			= 'Invalid user verification value "'
 			. ( $args{uv} // '' )
 			. '"; must be required, preferred, or discouraged';
 		$self->warn;
@@ -9842,8 +9846,9 @@ sub userPasskeyUserVerificationSet {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -9851,8 +9856,9 @@ sub userPasskeyUserVerificationSet {
 	$entry->replace( passkeyUserVerification => $uv );
 	my $update = $entry->update($ldap);
 	if ( $update->{errorMessage} ne '' ) {
-		$self->{error}       = 34;
-		$self->{errorString} = 'Setting passkeyUserVerification for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Setting passkeyUserVerification for "' . $entry->dn . '" failed: ' . $update->{errorMessage};
 		$self->warn;
 		return undef;
 	}
@@ -9978,8 +9984,9 @@ sub userPasskeyCredentialAdd {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -9988,19 +9995,20 @@ sub userPasskeyCredentialAdd {
 	for my $raw ( $entry->get_value('passkeyCredential') ) {
 		my %existing = _passkey_decode_credential($raw);
 		if ( $existing{credentialId} eq $args{credentialId} ) {
-			$self->{error}       = 93;
-			$self->{errorString} = 'Credential ID "' . $args{credentialId} . '" is already registered for user "' . $args{user} . '"';
+			$self->{error} = 93;
+			$self->{errorString}
+				= 'Credential ID "' . $args{credentialId} . '" is already registered for user "' . $args{user} . '"';
 			$self->warn;
 			return undef;
 		}
-	}
+	} ## end for my $raw ( $entry->get_value('passkeyCredential'...))
 
 	my $record = _passkey_encode_credential(
 		credentialId   => $args{credentialId},
 		cosePublicKey  => $args{cosePublicKey},
 		algorithm      => $args{algorithm},
 		signCount      => $args{signCount},
-		aaguid         => $args{aaguid}        // '',
+		aaguid         => $args{aaguid}         // '',
 		transports     => $args{transports}     // [],
 		backupEligible => $args{backupEligible} // 'FALSE',
 		backupState    => $args{backupState}    // 'FALSE',
@@ -10083,8 +10091,9 @@ sub userPasskeyCredentialRemove {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -10200,8 +10209,9 @@ sub userPasskeyCredentialUpdate {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -10312,15 +10322,15 @@ sub userPasskeyInfoGet {
 	}
 	my $entry = $mesg->pop_entry;
 	if ( !defined($entry) ) {
-		$self->{error}       = 18;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error} = 18;
+		$self->{errorString}
+			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
 
 	my %oc          = map { lc($_) => 1 } $entry->get_value('objectClass');
-	my @credentials = map { my %c = _passkey_decode_credential($_); \%c }
-		$entry->get_value('passkeyCredential');
+	my @credentials = map { my %c = _passkey_decode_credential($_); \%c } $entry->get_value('passkeyCredential');
 
 	return {
 		hasPasskeyUser          => $oc{passkeyuser} ? 1 : 0,

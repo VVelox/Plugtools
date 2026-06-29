@@ -10,7 +10,7 @@ sub _pt_call {
 		return $self->pt->errorString || ( 'Error code ' . $self->pt->error );
 	}
 	return '';
-} ## end sub _pt_call
+}
 
 sub index {
 	my $self = shift;
@@ -101,9 +101,14 @@ sub update {
 
 	my $error;
 	if ( $action eq 'gid' ) {
-		$error = $self->_pt_call( sub { $self->pt->groupGIDchange( { group => $group, gid => $self->param('gid') } ) } );
+		$error
+			= $self->_pt_call( sub { $self->pt->groupGIDchange( { group => $group, gid => $self->param('gid') } ) } );
 	} elsif ( $action eq 'description' ) {
-		$error = $self->_pt_call( sub { $self->pt->groupDescriptionChange( { group => $group, description => $self->param('description') } ) } );
+		$error = $self->_pt_call(
+			sub {
+				$self->pt->groupDescriptionChange( { group => $group, description => $self->param('description') } );
+			}
+		);
 	} else {
 		$self->flash( error => "Unknown action: $action" );
 		return $self->redirect_to( 'groups_show', group => $group );

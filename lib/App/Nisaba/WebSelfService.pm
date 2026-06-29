@@ -104,7 +104,9 @@ sub startup ($self) {
 	$auth->post('/totp/scratch/replace')->to('self_service#totp_scratch_replace')->name('totp_scratch_replace');
 	$auth->post('/passkeys/enable')->to('self_service#passkey_enable')->name('passkey_enable');
 	$auth->get('/passkeys/register/start')->to('self_service#passkey_register_start')->name('passkey_register_start');
-	$auth->post('/passkeys/register/finish')->to('self_service#passkey_register_finish')->name('passkey_register_finish');
+	$auth->post('/passkeys/register/finish')
+		->to('self_service#passkey_register_finish')
+		->name('passkey_register_finish');
 	$auth->post('/passkeys/remove')->to('self_service#passkey_remove')->name('passkey_remove');
 	$auth->post('/passkeys/uv')->to('self_service#passkey_uv_set')->name('passkey_uv_set');
 } ## end sub startup

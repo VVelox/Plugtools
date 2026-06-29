@@ -100,9 +100,9 @@ sub dashboard ($self) {
 		return $self->redirect_to('login');
 	}
 
-	my $lpk_schema     = $self->pt->ldapPublicKeyAvailable  ? 1 : 0;
-	my $totp_schema    = $self->pt->totpSchemaAvailable     ? 1 : 0;
-	my $passkey_schema = $self->pt->passkeySchemaAvailable  ? 1 : 0;
+	my $lpk_schema     = $self->pt->ldapPublicKeyAvailable ? 1 : 0;
+	my $totp_schema    = $self->pt->totpSchemaAvailable    ? 1 : 0;
+	my $passkey_schema = $self->pt->passkeySchemaAvailable ? 1 : 0;
 
 	my ( $totp_qr_b64, $totp_uri ) = ( undef, undef );
 	if ( $totp_schema && $info->{objectClasses}{totpuser} && ( $info->{totpStatus} // '' ) eq 'pending' ) {
@@ -328,7 +328,7 @@ sub passkey_register_start ($self) {
 	$self->pt_call( sub { $info = $self->pt->userSelfInfo( { user => $user } ) } );
 	my $display = ( $info && $info->{displayName} ) ? $info->{displayName} : $user;
 
-	my $rp_id = $self->pt->{ini}->{''}->{passkeyRpId} || $self->req->url->to_abs->host;
+	my $rp_id = $self->pt->{ini}->{''}->{passkeyRpId}             || $self->req->url->to_abs->host;
 	my $uv    = $self->pt->{ini}->{''}->{passkeyUserVerification} || 'preferred';
 
 	# Encode username as base64url for the user handle
@@ -339,14 +339,14 @@ sub passkey_register_start ($self) {
 	# Collect existing credential IDs so the browser can exclude them
 	my $passkey_info;
 	$self->pt_call( sub { $passkey_info = $self->pt->userPasskeyInfoGet( { user => $user } ) } );
-	my @exclude = map { { id => $_->{credentialId}, type => 'public-key' } }
-		@{ ( $passkey_info // {} )->{credentials} // [] };
+	my @exclude
+		= map { { id => $_->{credentialId}, type => 'public-key' } } @{ ( $passkey_info // {} )->{credentials} // [] };
 
 	$self->render(
 		json => {
-			challenge => $challenge_b64,
-			rp        => { name => $rp_id, id => $rp_id },
-			user      => { id => $user_id, name => $user, displayName => $display },
+			challenge        => $challenge_b64,
+			rp               => { name => $rp_id,   id   => $rp_id },
+			user             => { id   => $user_id, name => $user, displayName => $display },
 			pubKeyCredParams => [
 				{ type => 'public-key', alg => -7 },
 				{ type => 'public-key', alg => -8 },
@@ -375,19 +375,19 @@ sub passkey_register_finish ($self) {
 	}
 
 	my $url    = $self->req->url->to_abs;
-	my $rp_id  = $self->pt->{ini}->{''}->{passkeyRpId} || $url->host;
+	my $rp_id  = $self->pt->{ini}->{''}->{passkeyRpId}             || $url->host;
 	my $uv     = $self->pt->{ini}->{''}->{passkeyUserVerification} || 'preferred';
 	my $origin = $url->scheme . '://' . $url->host;
 	my $port   = $url->port;
 	$origin .= ":$port"
 		if $port
-		&& !(  ( $url->scheme eq 'https' && $port == 443 )
-			|| ( $url->scheme eq 'http'  && $port == 80 ) );
+		&& !( ( $url->scheme eq 'https' && $port == 443 ) || ( $url->scheme eq 'http' && $port == 80 ) );
 
 	my $wa = eval { require Authen::WebAuthn; Authen::WebAuthn->new( rp_id => $rp_id, origin => $origin ) };
 	unless ($wa) {
 		return $self->render(
-			json   => { error => 'WebAuthn verification is not available on this server (Authen::WebAuthn not installed)' },
+			json =>
+				{ error => 'WebAuthn verification is not available on this server (Authen::WebAuthn not installed)' },
 			status => 501,
 		);
 	}
@@ -410,18 +410,20 @@ sub passkey_register_finish ($self) {
 
 	my $err = $self->pt_call(
 		sub {
-			$self->pt->userPasskeyCredentialAdd( {
-				user           => $user,
-				credentialId   => $reg->{credential_id},
-				cosePublicKey  => $reg->{credential_pubkey},
-				algorithm      => $reg->{credential_alg} // '',
-				signCount      => $reg->{sign_count}      // 0,
-				aaguid         => $reg->{aaguid}           // '',
-				transports     => $transports,
-				backupEligible => ( $reg->{be} // 0 ) ? 'TRUE' : 'FALSE',
-				backupState    => ( $reg->{bs} // 0 ) ? 'TRUE' : 'FALSE',
-				nickname       => $body->{nickname} // '',
-			} );
+			$self->pt->userPasskeyCredentialAdd(
+				{
+					user           => $user,
+					credentialId   => $reg->{credential_id},
+					cosePublicKey  => $reg->{credential_pubkey},
+					algorithm      => $reg->{credential_alg} // '',
+					signCount      => $reg->{sign_count}     // 0,
+					aaguid         => $reg->{aaguid}         // '',
+					transports     => $transports,
+					backupEligible => ( $reg->{be} // 0 ) ? 'TRUE' : 'FALSE',
+					backupState    => ( $reg->{bs} // 0 ) ? 'TRUE' : 'FALSE',
+					nickname       => $body->{nickname} // '',
+				}
+			);
 		}
 	);
 	if ($err) {
@@ -449,8 +451,7 @@ sub passkey_uv_set ($self) {
 	my $user = $self->session('user');
 	my $uv   = $self->param('uv') // '';
 
-	my $err = $self->pt_call(
-		sub { $self->pt->userPasskeyUserVerificationSet( { user => $user, uv => $uv } ) } );
+	my $err = $self->pt_call( sub { $self->pt->userPasskeyUserVerificationSet( { user => $user, uv => $uv } ) } );
 	if ($err) {
 		$self->flash( error => "Could not update user verification policy: $err" );
 	} else {

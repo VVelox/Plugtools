@@ -166,7 +166,8 @@ sub update {
 	} elsif ( $action eq 'employeeType' ) {
 		$error = $self->_pt_call(
 			sub {
-				$self->pt->userEmployeeTypeChange( { user => $user, employeeType => $self->param('employeeType') } );
+				$self->pt->userEmployeeTypeChange(
+					{ user => $user, employeeType => $self->param('employeeType') } );
 			}
 		);
 	} elsif ( $action eq 'mail_add' ) {
@@ -248,7 +249,8 @@ sub update {
 	} elsif ( $action eq 'postalAddress_add' ) {
 		$error = $self->_pt_call(
 			sub {
-				$self->pt->userPostalAddressAdd( { user => $user, postalAddress => $self->param('postalAddress') } );
+				$self->pt->userPostalAddressAdd(
+					{ user => $user, postalAddress => $self->param('postalAddress') } );
 			}
 		);
 	} elsif ( $action eq 'postalAddress_remove' ) {
