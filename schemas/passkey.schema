@@ -40,6 +40,7 @@ attributetype ( 1.3.6.1.4.1.26481.2.9.1.1
   NAME 'passkeyCredential'
   DESC 'Encoded WebAuthn/FIDO2 passkey credential record; one value per registered passkey'
   EQUALITY caseExactMatch
+  SUBSTR caseExactSubstringsMatch
   SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
 
 # passkeyRpId - the Relying Party identifier (domain) for this user
