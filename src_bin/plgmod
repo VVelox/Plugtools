@@ -9,113 +9,117 @@ $Getopt::Std::STANDARD_HELP_VERSION = 1;
 
 #version function
 sub main::VERSION_MESSAGE {
-        print "plgmod 0.0.0\n";
+	print "plgmod 0.0.0\n";
 }
 
 #print help
 sub main::HELP_MESSAGE {
-        print "\n".
-		      "-g <group name>  - The group to act on.\n".
-			  "-a <action>  - The action to perform.\n".
-			  "-u <user>  - The user to use.\n".
-			  "-G <gid>  - The GID to use.\n".
-			  "-c <description>  - The description to set (use '' to clear).\n".
-			  "-l  - This dumps change changed LDAP entry.\n".
-			  "-U <userUpdate>  - When doing the gid action, correct any user with it as their primary GID.\n".
-			  "\n".
-			  "Both -g and -a are required. Then additional ones may be required on what is specified.\n".
-			  "\n".
-			  "actions:\n".
-			  "add - This adds a user to a group.\n".
-			  "remove -  This removes a user from a group.\n".
-			  "gid - Change the GID of a group to the specified GID.\n".
-			  "description - Set or clear the description of a group.\n".
-			  "\n".
-			  "requirements:\n".
-			  "add - -g, -u\n".
-			  "remove - -g, -u\n".
-			  "gid - -g, -G\n".
-			  "description - -g, -c\n".
-			  "\n".
-			  "For more info, see the the perldocs for App::Nisaba and plgmod...\n".
-			  "perldoc plgmod\n".
-			  "perldoc App::Nisaba\n";
-}
+	print "\n"
+		. "-g <group name>  - The group to act on.\n"
+		. "-a <action>  - The action to perform.\n"
+		. "-u <user>  - The user to use.\n"
+		. "-G <gid>  - The GID to use.\n"
+		. "-c <description>  - The description to set (use '' to clear).\n"
+		. "-l  - This dumps change changed LDAP entry.\n"
+		. "-U <userUpdate>  - When doing the gid action, correct any user with it as their primary GID.\n" . "\n"
+		. "Both -g and -a are required. Then additional ones may be required on what is specified.\n" . "\n"
+		. "actions:\n"
+		. "add - This adds a user to a group.\n"
+		. "remove -  This removes a user from a group.\n"
+		. "gid - Change the GID of a group to the specified GID.\n"
+		. "description - Set or clear the description of a group.\n" . "\n"
+		. "requirements:\n"
+		. "add - -g, -u\n"
+		. "remove - -g, -u\n"
+		. "gid - -g, -G\n"
+		. "description - -g, -c\n" . "\n"
+		. "For more info, see the the perldocs for App::Nisaba and plgmod...\n"
+		. "perldoc plgmod\n"
+		. "perldoc App::Nisaba\n";
+} ## end sub main::HELP_MESSAGE
 
 #gets the options
-my %opts=();
-getopts('g:u:a:G:c:l', \%opts);
+my %opts = ();
+getopts( 'g:u:a:G:c:l', \%opts );
 
-if (!defined($opts{g})) {
+if ( !defined( $opts{g} ) ) {
 	warn('plgadd:254: No group name specified');
 	exit 254;
 }
 
-if (!defined($opts{a})) {
+if ( !defined( $opts{a} ) ) {
 	warn('plgadd:253: No action specified');
 	exit 25;
 }
 
-my $pt=App::Nisaba->new;
-if ($pt->error) {
+my $pt = App::Nisaba->new;
+if ( $pt->error ) {
 	warn('plgmod: Failed to initialize the App::Nisaba object');
 	exit $pt->error;
 }
 
 #process add requests
-if ($opts{a} eq 'add') {
-	$pt->groupAddUser({
-					   user=>$opts{u},
-					   group=>$opts{g},
-					   dump=>$opts{l},
-					   });
-	if ($pt->error) {
+if ( $opts{a} eq 'add' ) {
+	$pt->groupAddUser(
+		{
+			user  => $opts{u},
+			group => $opts{g},
+			dump  => $opts{l},
+		}
+	);
+	if ( $pt->error ) {
 		warn('plgmod: groupAddUser errored');
 		exit $pt->error;
 	}
-}
+} ## end if ( $opts{a} eq 'add' )
 
 #process remove requests
-if ($opts{a} eq 'remove') {
-	$pt->groupRemoveUser({
-					   user=>$opts{u},
-					   group=>$opts{g},
-					   dump=>$opts{l},
-					   });
-	if ($pt->error) {
+if ( $opts{a} eq 'remove' ) {
+	$pt->groupRemoveUser(
+		{
+			user  => $opts{u},
+			group => $opts{g},
+			dump  => $opts{l},
+		}
+	);
+	if ( $pt->error ) {
 		warn('plgmod: groupRemoveUser errored');
 		exit $pt->error;
 	}
-}
+} ## end if ( $opts{a} eq 'remove' )
 
 #process gid change requests
-if ($opts{a} eq 'gid') {
-	$pt->groupGIDchange({
-					   gid=>$opts{G},
-					   group=>$opts{g},
-					   dump=>$opts{l},
-					   });
-	if ($pt->error) {
+if ( $opts{a} eq 'gid' ) {
+	$pt->groupGIDchange(
+		{
+			gid   => $opts{G},
+			group => $opts{g},
+			dump  => $opts{l},
+		}
+	);
+	if ( $pt->error ) {
 		warn('plgmod: groupGIDchange errored');
 		exit $pt->error;
 	}
-}
+} ## end if ( $opts{a} eq 'gid' )
 
 #process description change requests
-if ($opts{a} eq 'description') {
-	if (!defined($opts{c})) {
+if ( $opts{a} eq 'description' ) {
+	if ( !defined( $opts{c} ) ) {
 		warn('plgmod:252: No description specified (-c)');
 		exit 252;
 	}
-	$pt->groupDescriptionChange({
-					   group=>$opts{g},
-					   description=>$opts{c},
-					   });
-	if ($pt->error) {
+	$pt->groupDescriptionChange(
+		{
+			group       => $opts{g},
+			description => $opts{c},
+		}
+	);
+	if ( $pt->error ) {
 		warn('plgmod: groupDescriptionChange errored');
 		exit $pt->error;
 	}
-}
+} ## end if ( $opts{a} eq 'description' )
 
 exit 0;
 

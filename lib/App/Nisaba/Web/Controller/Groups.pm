@@ -106,7 +106,8 @@ sub update {
 	} elsif ( $action eq 'description' ) {
 		$error = $self->_pt_call(
 			sub {
-				$self->pt->groupDescriptionChange( { group => $group, description => $self->param('description') } );
+				$self->pt->groupDescriptionChange(
+					{ group => $group, description => $self->param('description') } );
 			}
 		);
 	} else {

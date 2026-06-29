@@ -20,30 +20,26 @@ sub main::HELP_MESSAGE {
 		. "-c <description>  - The description to set (use '' to clear). Used with: description\n"
 		. "-t <triple>    - The triple to add/remove (format: host,user,domain or (host,user,domain)).\n"
 		. "                 Parentheses are added automatically if missing.\n"
-		. "-m <member>    - The member netgroup name. Used with: member_add, member_remove\n"
-		. "\n"
-		. "Both -g and -a are required. Additional options depend on the action.\n"
-		. "\n"
+		. "-m <member>    - The member netgroup name. Used with: member_add, member_remove\n" . "\n"
+		. "Both -g and -a are required. Additional options depend on the action.\n" . "\n"
 		. "actions:\n"
 		. "description    - Set or clear the description of a netgroup (-c).\n"
 		. "triple_add     - Add a nisNetgroupTriple to a netgroup (-t).\n"
 		. "triple_remove  - Remove a nisNetgroupTriple from a netgroup (-t).\n"
 		. "member_add     - Add a memberNisNetgroup to a netgroup (-m).\n"
 		. "member_remove  - Remove a memberNisNetgroup from a netgroup (-m).\n"
-		. "delete         - Delete the netgroup entirely.\n"
-		. "\n"
+		. "delete         - Delete the netgroup entirely.\n" . "\n"
 		. "requirements:\n"
 		. "description   - -g, -c\n"
 		. "triple_add    - -g, -t\n"
 		. "triple_remove - -g, -t\n"
 		. "member_add    - -g, -m\n"
 		. "member_remove - -g, -m\n"
-		. "delete        - -g\n"
-		. "\n"
+		. "delete        - -g\n" . "\n"
 		. "For more info, see the perldocs:\n"
 		. "perldoc plngmod\n"
 		. "perldoc App::Nisaba\n";
-}
+} ## end sub main::HELP_MESSAGE
 
 #gets the options
 my %opts = ();
@@ -76,7 +72,7 @@ if ( $opts{a} eq 'description' ) {
 		warn('plngmod: netgroupDescriptionChange errored');
 		exit $pt->error;
 	}
-}
+} ## end if ( $opts{a} eq 'description' )
 
 #process triple_add
 if ( $opts{a} eq 'triple_add' ) {
@@ -94,7 +90,7 @@ if ( $opts{a} eq 'triple_add' ) {
 		warn('plngmod: netgroupTripleAdd errored');
 		exit $pt->error;
 	}
-}
+} ## end if ( $opts{a} eq 'triple_add' )
 
 #process triple_remove
 if ( $opts{a} eq 'triple_remove' ) {
@@ -112,7 +108,7 @@ if ( $opts{a} eq 'triple_remove' ) {
 		warn('plngmod: netgroupTripleRemove errored');
 		exit $pt->error;
 	}
-}
+} ## end if ( $opts{a} eq 'triple_remove' )
 
 #process member_add
 if ( $opts{a} eq 'member_add' ) {
@@ -125,7 +121,7 @@ if ( $opts{a} eq 'member_add' ) {
 		warn('plngmod: netgroupMemberAdd errored');
 		exit $pt->error;
 	}
-}
+} ## end if ( $opts{a} eq 'member_add' )
 
 #process member_remove
 if ( $opts{a} eq 'member_remove' ) {
@@ -138,7 +134,7 @@ if ( $opts{a} eq 'member_remove' ) {
 		warn('plngmod: netgroupMemberRemove errored');
 		exit $pt->error;
 	}
-}
+} ## end if ( $opts{a} eq 'member_remove' )
 
 #process delete
 if ( $opts{a} eq 'delete' ) {

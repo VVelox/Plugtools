@@ -12,11 +12,11 @@
 #    and/or other materials provided with the distribution.
 #
 #THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-#ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED 
+#ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
 #WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
 #IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
-#INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, 
-#BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, 
+#INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+#BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
 #DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
 #LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
 #OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
@@ -31,42 +31,43 @@ $Getopt::Std::STANDARD_HELP_VERSION = 1;
 
 #version function
 sub main::VERSION_MESSAGE {
-        print "plgadd 0.0.0\n";
+	print "plgadd 0.0.0\n";
 }
 
 #print help
 sub main::HELP_MESSAGE {
-        print "\n".
-		      "-g <group name>  - The group to add.\n".
-			  "-G <GID>  - The GID to use for the group.\n".
-			  "-l  - If \$entry->dump should be called for a newly created entry.\n".
-			  "\n".
-			  "For more info, see the the perldocs for App::Nisaba and plgadd...\n".
-			  "perldoc plgadd\n".
-			  "perldoc App::Nisaba\n";
+	print "\n"
+		. "-g <group name>  - The group to add.\n"
+		. "-G <GID>  - The GID to use for the group.\n"
+		. "-l  - If \$entry->dump should be called for a newly created entry.\n" . "\n"
+		. "For more info, see the the perldocs for App::Nisaba and plgadd...\n"
+		. "perldoc plgadd\n"
+		. "perldoc App::Nisaba\n";
 }
 
 #gets the options
-my %opts=();
-getopts('g:G:l', \%opts);
+my %opts = ();
+getopts( 'g:G:l', \%opts );
 
-if (!defined($opts{g})) {
+if ( !defined( $opts{g} ) ) {
 	warn('plgadd:254: No group name specified');
 	exit 254;
 }
 
-my $pt=App::Nisaba->new;
-if ($pt->error) {
+my $pt = App::Nisaba->new;
+if ( $pt->error ) {
 	warn('plgadd: Failed to initialize the App::Nisaba object');
 	exit $pt->error;
 }
 
-$pt->addGroup({
-			   group=>$opts{g},
-			   gid=>$opts{G},
-			   dump=>$opts{l},
-			  });
-if ($pt->error) {
+$pt->addGroup(
+	{
+		group => $opts{g},
+		gid   => $opts{G},
+		dump  => $opts{l},
+	}
+);
+if ( $pt->error ) {
 	warn('plgadd: addGroup errored');
 	exit $pt->error;
 }

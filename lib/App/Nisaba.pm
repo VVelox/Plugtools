@@ -223,7 +223,7 @@ sub _firstFreeUID {
 		$uid++;
 	}
 	return undef;
-}
+} ## end sub _firstFreeUID
 
 sub _firstFreeGID {
 	my ( $self, $ldap, $min ) = @_;
@@ -250,7 +250,7 @@ sub _firstFreeGID {
 		$gid++;
 	}
 	return undef;
-}
+} ## end sub _firstFreeGID
 
 # Return the LDAP entry for a posixGroup by name (cn), or undef.
 # Caller must already hold an active $ldap connection.
@@ -2921,6 +2921,9 @@ sub readConfig {
 	}
 	if ( !defined( $ini->{''}->{NSScheck} ) ) {
 		$ini->{''}->{NSScheck} = 1;
+	}
+	if ( !defined( $ini->{''}->{adminGroup} ) ) {
+		$ini->{''}->{adminGroup} = 'LDAPadmin';
 	}
 	if ( !defined( $ini->{''}->{smtpserver} ) ) {
 		$ini->{''}->{smtpserver} = '';

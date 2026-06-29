@@ -107,6 +107,9 @@ my $t = Test::Mojo->new('App::Nisaba::Web');
 _install_stubs( $t->app );
 _add_referer_hook($t);
 
+# Inject an admin session so routes behind require_login are accessible
+$t->app->hook( before_dispatch => sub { $_[0]->session( admin_user => 'testadmin' ) } );
+
 # ── index ─────────────────────────────────────────────────────────────────────
 
 $t->get_ok('/netgroups')
