@@ -59,6 +59,124 @@ sub logout ($self) {
 	$self->redirect_to('login');
 }
 
+sub passkey_login_start ($self) {
+	# Generate a 32-byte random challenge
+	my $challenge_bytes = '';
+	open my $fh, '<:raw', '/dev/urandom' or do {
+		return $self->render( json => { error => 'Could not generate challenge' }, status => 500 );
+	};
+	read $fh, $challenge_bytes, 32;
+	close $fh;
+
+	my $challenge_b64 = b64_encode( $challenge_bytes, '' );
+	$challenge_b64 =~ tr|+/|-_|;
+	$challenge_b64 =~ s/=+$//;
+	$self->session( passkey_login_challenge => $challenge_b64 );
+
+	my $rp_id = $self->pt->{ini}->{''}->{passkeyRpId}             || $self->req->url->to_abs->host;
+	my $uv    = $self->pt->{ini}->{''}->{passkeyUserVerification} || 'preferred';
+
+	# Empty allowCredentials triggers discoverable-credential (resident key) mode
+	$self->render(
+		json => {
+			challenge        => $challenge_b64,
+			rpId             => $rp_id,
+			userVerification => $uv,
+			allowCredentials => [],
+			timeout          => 60000,
+		}
+	);
+} ## end sub passkey_login_start
+
+sub passkey_login_finish ($self) {
+	my $challenge_b64 = $self->session('passkey_login_challenge');
+	unless ($challenge_b64) {
+		return $self->render( json => { error => 'No login in progress' }, status => 400 );
+	}
+	delete $self->session->{passkey_login_challenge};
+
+	my $body = $self->req->json;
+	unless ( $body && ref $body->{response} eq 'HASH' ) {
+		return $self->render( json => { error => 'Invalid request body' }, status => 400 );
+	}
+
+	my $credential_id = $body->{id} // '';
+	unless ($credential_id) {
+		return $self->render( json => { error => 'Missing credential ID' }, status => 400 );
+	}
+
+	# Look up which user owns this credential
+	my $found;
+	my $find_err = $self->pt_call(
+		sub { $found = $self->pt->userPasskeyFindByCredentialId( { credentialId => $credential_id } ) } );
+	if ( $find_err || !$found ) {
+		return $self->render( json => { error => 'Unknown passkey' }, status => 401 );
+	}
+
+	my $user = $found->{user};
+	my $cred = $found->{credential};
+
+	my $url    = $self->req->url->to_abs;
+	my $rp_id  = $self->pt->{ini}->{''}->{passkeyRpId}             || $url->host;
+	my $uv     = $self->pt->{ini}->{''}->{passkeyUserVerification} || 'preferred';
+	my $origin = $url->scheme . '://' . $url->host;
+	my $port   = $url->port;
+	$origin .= ":$port"
+		if $port
+		&& !( ( $url->scheme eq 'https' && $port == 443 ) || ( $url->scheme eq 'http' && $port == 80 ) );
+
+	my $wa = eval { require Authen::WebAuthn; Authen::WebAuthn->new( rp_id => $rp_id, origin => $origin ) };
+	unless ($wa) {
+		return $self->render(
+			json   => { error => 'WebAuthn not available on this server (Authen::WebAuthn not installed)' },
+			status => 501,
+		);
+	}
+
+	my $result = eval {
+		$wa->validate_assertion(
+			challenge_b64          => $challenge_b64,
+			credential_pubkey_b64  => $cred->{cosePublicKey},
+			stored_sign_count      => $cred->{signCount},
+			requested_uv           => $uv,
+			client_data_json_b64   => $body->{response}{clientDataJSON},
+			authenticator_data_b64 => $body->{response}{authenticatorData},
+			signature_b64          => $body->{response}{signature},
+			user_handle_b64        => $body->{response}{userHandle},
+			token_binding_id_b64   => undef,
+		);
+	};
+	if ($@) {
+		( my $msg = $@ ) =~ s/ at \S+ line \d+\.?\s*$//;
+		return $self->render( json => { error => "Verification failed: $msg" }, status => 401 );
+	}
+
+	# Update sign count and last-used timestamp (best-effort; don't abort login on failure)
+	$self->pt_call(
+		sub {
+			$self->pt->userPasskeyCredentialUpdate(
+				{
+					user         => $user,
+					credentialId => $credential_id,
+					signCount    => $result->{sign_count} // $cred->{signCount},
+					backupState  => ( $result->{bs} // 0 ) ? 'TRUE' : 'FALSE',
+				}
+			);
+		}
+	);
+
+	# Check whether TOTP is also required
+	my $info;
+	$self->pt_call( sub { $info = $self->pt->userSelfInfo( { user => $user } ) } );
+	if ( $info && ( $info->{totpStatus} // '' ) eq 'active' ) {
+		$self->session( totp_pending_user => $user );
+		return $self->render( json => { ok => 1, totp_required => 1 } );
+	}
+
+	$self->session( user => $user );
+	$self->render( json => { ok => 1 } );
+} ## end sub passkey_login_finish
+
 sub totp_challenge_form ($self) {
 	unless ( $self->session('totp_pending_user') ) {
 		return $self->redirect_to('login');

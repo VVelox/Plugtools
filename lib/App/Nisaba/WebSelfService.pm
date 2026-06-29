@@ -76,6 +76,14 @@ sub startup ($self) {
 		}
 	);
 
+	# Helper: passkey login is available when the passkey schema is loaded
+	$self->helper(
+		passkey_login_available => sub {
+			my ($c) = @_;
+			return eval { $c->pt->passkeySchemaAvailable } ? 1 : 0;
+		}
+	);
+
 	# Routes
 	my $r = $self->routes;
 
@@ -86,6 +94,8 @@ sub startup ($self) {
 	$r->post('/totp/challenge')->to('self_service#totp_challenge')->name('totp_challenge_post');
 	$r->get('/forgot')->to('self_service#forgot_form')->name('forgot');
 	$r->post('/forgot')->to('self_service#forgot')->name('forgot_post');
+	$r->get('/passkeys/login/start')->to('self_service#passkey_login_start')->name('passkey_login_start');
+	$r->post('/passkeys/login/finish')->to('self_service#passkey_login_finish')->name('passkey_login_finish');
 	$r->get('/reset/:token')->to('self_service#reset_form')->name('reset');
 	$r->post('/reset/:token')->to('self_service#reset')->name('reset_post');
 	$r->get('/')->to( cb => sub { shift->redirect_to('dashboard') } );

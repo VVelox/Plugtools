@@ -190,6 +190,64 @@ sub new {
 	return $self;
 } ## end sub new
 
+# --------------------------------------------------------------------------- #
+# Private NSS / LDAP lookup helpers
+# --------------------------------------------------------------------------- #
+
+# Return the LDAP entry for a posixGroup by name (cn), or undef.
+# Caller must already hold an active $ldap connection.
+sub _getLDAPGroupEntry {
+	my ( $self, $ldap, $group ) = @_;
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{groupbase},
+		filter => '(&(objectClass=posixGroup)(cn=' . $group . '))',
+	);
+	return undef if $mesg->{errorMessage} ne '';
+	return $mesg->pop_entry;
+}
+
+# Return the LDAP entry for a posixAccount by uid, or undef.
+# Caller must already hold an active $ldap connection.
+sub _getLDAPUserEntry {
+	my ( $self, $ldap, $user ) = @_;
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(uid=' . $user . ')',
+	);
+	return undef if $mesg->{errorMessage} ne '';
+	return $mesg->pop_entry;
+}
+
+# Wrappers around POSIX NSS lookups that honour the NSScheck config setting.
+# When NSScheck is false these are no-ops that return all-undef, preventing
+# any dependency on NSS for normal operation against an LDAP-only directory.
+
+sub _nssGroupByName {
+	my ( $self, $group ) = @_;
+	return ( undef, undef, undef, undef ) unless $self->{ini}->{''}->{NSScheck};
+	return getgrnam($group);
+}
+
+sub _nssGroupByGID {
+	my ( $self, $gid ) = @_;
+	return ( undef, undef, undef, undef ) unless $self->{ini}->{''}->{NSScheck};
+	return getgrgid($gid);
+}
+
+sub _nssUserByName {
+	my ( $self, $user ) = @_;
+	return ( undef, undef, undef, undef, undef, undef, undef, undef, undef )
+		unless $self->{ini}->{''}->{NSScheck};
+	return getpwnam($user);
+}
+
+sub _nssUserByUID {
+	my ( $self, $uid ) = @_;
+	return ( undef, undef, undef, undef, undef, undef, undef, undef, undef )
+		unless $self->{ini}->{''}->{NSScheck};
+	return getpwuid($uid);
+}
+
 =head2 addGroup
 
 =head3 args hash
@@ -238,9 +296,12 @@ sub addGroup {
 		return undef;
 	}
 
-	#error if the user already exists
-	my ( $gname, $gpasswd, $gid, $members ) = getgrnam( $args{group} );
-	if ( defined($gname) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	# Check for group name collision: LDAP first, then NSS if NSScheck is on
+	my ($nss_gname) = $self->_nssGroupByName( $args{group} );
+	if ( defined($nss_gname) || defined( $self->_getLDAPGroupEntry( $ldap, $args{group} ) ) ) {
 		$self->{error}       = 10;
 		$self->{errorString} = 'The group "' . $args{group} . '" already exists';
 		$self->warn;
@@ -249,7 +310,7 @@ sub addGroup {
 
 	#if we don't have a GID, find the first free one
 	if ( !defined( $args{gid} ) ) {
-		my $gidhelper = Sys::Group::GIDhelper->new( { min => $self->{ini}->{''}->{GIDstart} } );
+		my $gidhelper = Sys::Group::GIDhelper->new( min => $self->{ini}->{''}->{GIDstart} );
 		my $gid       = $gidhelper->firstfree();
 		if ( !defined($gid) ) {
 			$self->{error}       = 4;
@@ -260,14 +321,6 @@ sub addGroup {
 		$args{gid} = $gid;
 	} ## end if ( !defined( $args{gid} ) )
 
-	( $gname, $gpasswd, $gid, $members ) = getgrnam( $args{gid} );
-	if ( defined($gid) ) {
-		$self->{error}       = 20;
-		$self->{errorString} = 'The GID "' . $args{gid} . '" already exists.';
-		$self->warn;
-		return undef;
-	}
-
 	#make sure the GID is complete numeric
 	if ( !( $args{gid} =~ /^[0123456789]*$/ ) ) {
 		$self->{error}       = 8;
@@ -276,8 +329,21 @@ sub addGroup {
 		return undef;
 	}
 
-	#initiates the Net::LDAP::posixAccount
-	my $entrycreator = Net::LDAP::posixGroup->new( { baseDN => $self->{ini}->{''}->{groupbase} } );
+	# Check for GID collision: NSS (if NSScheck) and LDAP
+	my ($nss_gbyid) = $self->_nssGroupByGID( $args{gid} );
+	my $gid_ldap = $ldap->search(
+		base   => $self->{ini}->{''}->{groupbase},
+		filter => '(gidNumber=' . $args{gid} . ')',
+	);
+	if ( defined($nss_gbyid) || $gid_ldap->count > 0 ) {
+		$self->{error}       = 20;
+		$self->{errorString} = 'The GID "' . $args{gid} . '" already exists.';
+		$self->warn;
+		return undef;
+	}
+
+	#initiates the Net::LDAP::posixGroup
+	my $entrycreator = Net::LDAP::posixGroup->new( baseDN => $self->{ini}->{''}->{groupbase} );
 	if ( ( !defined($entrycreator) ) || ( defined( $entrycreator->{error} ) ) ) {
 		$self->{error} = 12;
 		if ( !defined($entrycreator) ) {
@@ -293,11 +359,9 @@ sub addGroup {
 		return undef;
 	} ## end if ( ( !defined($entrycreator) ) || ( defined...))
 	my $entry = $entrycreator->create(
-		{
-			name    => $args{group},
-			gid     => $args{gid},
-			primary => $self->{ini}->{''}->{groupPrimary},
-		}
+		name    => $args{group},
+		gid     => $args{gid},
+		primary => $self->{ini}->{''}->{groupPrimary},
 	);
 	if ( defined( $entrycreator->{error} ) ) {
 		$self->{error} = 12;
@@ -314,9 +378,6 @@ sub addGroup {
 	if ( $args{dump} ) {
 		$entry->dump;
 	}
-
-	#connect to the LDAP server
-	my $ldap = $self->connect();
 
 	#call a plugin if needed
 	if ( defined( $self->{ini}->{''}->{pluginAddGroup} ) ) {
@@ -445,9 +506,12 @@ sub addUser {
 		return undef;
 	}
 
-	#error if the user already exists
-	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gcos, $dir, $shell, $expire ) = getpwnam( $args{user} );
-	if ( defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	# Check for username collision: NSS (if NSScheck) and LDAP
+	my ($nss_uname) = $self->_nssUserByName( $args{user} );
+	if ( defined($nss_uname) || defined( $self->_getLDAPUserEntry( $ldap, $args{user} ) ) ) {
 		$self->{error}       = 9;
 		$self->{errorString} = 'The user "' . $args{user} . '" already exists';
 		$self->warn;
@@ -472,12 +536,8 @@ sub addUser {
 	#makes sure the UID is defined
 	if ( !defined( $args{uid} ) ) {
 		#gets it if it not defined
-		my $uidhelper = Sys::User::UIDhelper->new(
-			{
-				min => $self->{ini}->{''}->{UIDstart}
-			}
-		);
-		my $uid = $uidhelper->firstfree();
+		my $uidhelper = Sys::User::UIDhelper->new( min => $self->{ini}->{''}->{UIDstart} );
+		my $uid       = $uidhelper->firstfree();
 		if ( !defined($uid) ) {
 			$self->{error}       = 3;
 			$self->{errorString} = 'Could not locate a free UID';
@@ -495,9 +555,10 @@ sub addUser {
 		return undef;
 	}
 
-	#check if the group exists or not
-	my ( $gname, $gpasswd, $ggid, $members ) = getgrnam( $args{group} );
-	if ( !defined($gname) ) {
+	# Create the primary group if it does not exist in LDAP (or NSS when NSScheck is on)
+	my $group_entry = $self->_getLDAPGroupEntry( $ldap, $args{group} );
+	my ($nss_grp) = $self->_nssGroupByName( $args{group} );
+	if ( !defined($group_entry) && !defined($nss_grp) ) {
 		$self->addGroup(
 			{
 				group => $args{group},
@@ -505,30 +566,30 @@ sub addUser {
 				dump  => $args{dump},
 			}
 		);
-	}
+		$group_entry = $self->_getLDAPGroupEntry( $ldap, $args{group} );
+	} ## end if ( !defined($group_entry) && !defined($nss_grp...))
 
-	#gets the GID
-	( $gname, $gpasswd, $args{gid}, $members ) = getgrnam( $args{group} );
+	# Get GID from LDAP entry if available, otherwise fall back to NSS
+	if ( defined($group_entry) ) {
+		$args{gid} = scalar( $group_entry->get_value('gidNumber') );
+	} elsif ( defined($nss_grp) ) {
+		( undef, undef, $args{gid} ) = $self->_nssGroupByName( $args{group} );
+	}
 
 	#build the user
 	$args{home} = $self->{ini}->{''}->{HOMEproto};
 	$args{home} =~ s/\%\%USERNAME\%\%/$args{user}/g;
 
 	#initiates the Net::LDAP::posixAccount
-	my $entrycreator = Net::LDAP::posixAccount->new( { baseDN => $self->{ini}->{''}->{userbase} } );
+	my $entrycreator = Net::LDAP::posixAccount->new( baseDN => $self->{ini}->{''}->{userbase} );
 	my $entry        = $entrycreator->create(
-		{
-			name       => $args{user},
-			uid        => $args{uid},
-			gid        => $args{gid},
-			home       => $args{home},
-			loginShell => $args{shell},
-			primary    => $self->{ini}->{''}->{userPrimary},
-		}
+		name       => $args{user},
+		uid        => $args{uid},
+		gid        => $args{gid},
+		home       => $args{home},
+		loginShell => $args{shell},
+		primary    => $self->{ini}->{''}->{userPrimary},
 	);
-
-	#connect to the LDAP server
-	my $ldap = $self->connect();
 
 	#call a plugin if needed
 	if ( defined( $self->{ini}->{''}->{pluginAddUser} ) ) {
@@ -690,36 +751,16 @@ sub deleteGroup {
 		return undef;
 	}
 
-	#error if the user does not exists
-	my ( $gname, $gpasswd, $gid, $members ) = getgrnam($group);
-	if ( !defined($gname) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPGroupEntry( $ldap, $group );
+	if ( !defined($entry) ) {
 		$self->{error}       = 10;
 		$self->{errorString} = 'The group "' . $group . '" does not exist';
 		$self->warn;
 		return undef;
 	}
-
-	#connect to the LDAP server
-	my $ldap = $self->connect();
-
-	#search and get the first entry
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{groupbase},
-		filter => '(&(cn=' . $group . ') (gidNumber=' . $gid . '))'
-	);
-	my $entry = $mesg->pop_entry;
-
-	#if $entry is not defined or does not exist under the specified base
-	if ( !defined($entry) ) {
-		$self->{error} = 15;
-		$self->{errorString}
-			= 'The group "'
-			. $group
-			. '" does not exist in specified group base, "'
-			. $self->{ini}->{''}->{groupbase} . '", ';
-		$self->warn;
-		return undef;
-	} ## end if ( !defined($entry) )
 
 	#call a plugin if needed
 	if ( defined( $self->{ini}->{''}->{pluginDeleteGroup} ) ) {
@@ -737,7 +778,7 @@ sub deleteGroup {
 
 	#delete the entry
 	$entry->delete();
-	$mesg = $entry->update($ldap);
+	my $mesg = $entry->update($ldap);
 	if ( $mesg->{errorMessage} ne '' ) {
 		$self->{error} = 13;
 		$self->{errorString}
@@ -805,44 +846,29 @@ sub deleteUser {
 		return undef;
 	}
 
-	#error if the user already exists
-	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gcos, $dir, $shell, $expire ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	#connect to the LDAP server
+	my $ldap = $self->connect();
+
+	#find the user entry in LDAP
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exists';
 		$self->warn;
 		return undef;
 	}
+	my $uid = $entry->get_value('uidNumber');
+	my $gid = $entry->get_value('gidNumber');
+	my $dir = $entry->get_value('homeDirectory');
 
-	#check if the group exists or not
-	my ( $gname, $gpasswd, $ggid, $members ) = getgrgid($gid);
-	my $removeGroup = 0;
-	#set the group to be removed if it exists
-	if ( defined($ggid) ) {
-		$removeGroup = 1;
-	}
-
-	#connect to the LDAP server
-	my $ldap = $self->connect();
-
-	#search and get the first entry
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
+	#check if the primary group exists in LDAP
+	my $gname_mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{groupbase},
+		filter => '(&(objectClass=posixGroup)(gidNumber=' . $gid . '))',
 	);
-	my $entry = $mesg->pop_entry;
-
-	#if $entry is not defined or does not exist under the specified base
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "'
-			. $args{user}
-			. '" does not exist in specified group base, "'
-			. $self->{ini}->{''}->{userbase} . '", ';
-		$self->warn;
-		return undef;
-	} ## end if ( !defined($entry) )
+	my $gname_entry = $gname_mesg->pop_entry;
+	my $gname       = defined($gname_entry) ? $gname_entry->get_value('cn') : undef;
+	my $removeGroup = defined($gname)       ? 1                             : 0;
 
 	#we check this here as checking it after wards after deleting the user does not work
 	my $onlyMember;
@@ -873,7 +899,7 @@ sub deleteUser {
 
 	#delete the entry
 	$entry->delete();
-	$mesg = $entry->update($ldap);
+	my $mesg = $entry->update($ldap);
 	if ( $mesg->{errorMessage} ne '' ) {
 		$self->{error} = 13;
 		$self->{errorString}
@@ -937,24 +963,10 @@ sub findGroupDN {
 		return undef;
 	}
 
-	#error if the user does not exists
-	my ( $gname, $gpasswd, $gid, $members ) = getgrnam($group);
-	if ( !defined($gname) ) {
-		$self->{error}       = 14;
-		$self->{errorString} = 'The group "' . $group . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	#connect to the LDAP server
 	my $ldap = $self->connect();
 
-	#search and get the first entry
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{groupbase},
-		filter => '(&(cn=' . $group . ') (gidNumber=' . $gid . '))'
-	);
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPGroupEntry( $ldap, $group );
 
 	#if $entry is not defined or does not exist under the specified base
 	if ( !defined($entry) ) {
@@ -994,24 +1006,10 @@ sub findUserDN {
 		return undef;
 	}
 
-	#error if the user already exists
-	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gcos, $dir, $shell, $expire ) = getpwnam($user);
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'The user "' . $user . '" does not exists';
-		$self->warn;
-		return undef;
-	}
-
 	#connect to the LDAP server
 	my $ldap = $self->connect();
 
-	#search and get the first entry
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $user . ') (uidNumber=' . $uid . '))'
-	);
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $user );
 
 	#if $entry is not defined or does not exist under the specified base
 	if ( !defined($entry) ) {
@@ -1063,45 +1061,16 @@ sub getUserEntry {
 		return undef;
 	}
 
-	#error if the user already exists
-	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gecos, $dir, $shell, $expire ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	#connect to the LDAP server
+	my $ldap = $self->connect();
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exists';
 		$self->warn;
 		return undef;
 	}
-
-	#connect to the LDAP server
-	my $ldap = $self->connect();
-
-	#search and get the first entry
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error} = 32;
-		$self->{errorString}
-			= 'Fetching the entry for the user failed under "'
-			. $self->{ini}->{''}->{userbase} . '"'
-			. $mesg->{errorMessage} . '"';
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "'
-			. $args{user}
-			. '" was not found under'
-			. 'the base "'
-			. $self->{ini}->{''}->{userbase} . '"';
-		$self->warn;
-		return undef;
-	} ## end if ( !defined($entry) )
 
 	return $entry;
 } ## end sub getUserEntry
@@ -1156,45 +1125,16 @@ sub groupAddUser {
 		return undef;
 	}
 
-	#error if the user does not exists
-	my ( $gname, $gpasswd, $gid, $members ) = getgrnam( $args{group} );
-	if ( !defined($gname) ) {
+	#connect to the LDAP server
+	my $ldap = $self->connect();
+
+	my $entry = $self->_getLDAPGroupEntry( $ldap, $args{group} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 14;
 		$self->{errorString} = 'The group "' . $args{group} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
-
-	#connect to the LDAP server
-	my $ldap = $self->connect();
-
-	#search and get the first entry
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{groupbase},
-		filter => '(&(cn=' . $args{group} . ') (gidNumber=' . $gid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error} = 27;
-		$self->{errorString}
-			= 'Fetching a list of posixGroup objects under "'
-			. $self->{ini}->{''}->{groupbase} . '"'
-			. $mesg->{errorMessage} . '"';
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-
-	#if $entry is not defined or does not exist under the specified base
-	if ( !defined($entry) ) {
-		$self->{error} = 15;
-		$self->{errorString}
-			= 'The group "'
-			. $args{group}
-			. '" does not exist in specified group base, "'
-			. $self->{ini}->{''}->{groupbase} . '", ';
-		$self->warn;
-		return undef;
-	} ## end if ( !defined($entry) )
 
 	$entry->add( memberUid => $args{user} );
 
@@ -1297,45 +1237,17 @@ sub groupGIDchange {
 		return undef;
 	}
 
-	#error if the user does not exists
-	my ( $gname, $gpasswd, $gid, $members ) = getgrnam( $args{group} );
-	if ( !defined($gname) ) {
+	#connect to the LDAP server
+	my $ldap = $self->connect();
+
+	my $entry = $self->_getLDAPGroupEntry( $ldap, $args{group} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 14;
 		$self->{errorString} = 'The group "' . $args{group} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
-
-	#connect to the LDAP server
-	my $ldap = $self->connect();
-
-	#search and get the first entry
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{groupbase},
-		filter => '(&(cn=' . $args{group} . ') (gidNumber=' . $gid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error} = 27;
-		$self->{errorString}
-			= 'Fetching a list of posixGroup objects under "'
-			. $self->{ini}->{''}->{groupbase} . '"'
-			. $mesg->{errorMessage} . '"';
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-
-	#if $entry is not defined or does not exist under the specified base
-	if ( !defined($entry) ) {
-		$self->{error} = 15;
-		$self->{errorString}
-			= 'The group "'
-			. $args{group}
-			. '" does not exist in specified group base, "'
-			. $self->{ini}->{''}->{groupbase} . '", ';
-		$self->warn;
-		return undef;
-	} ## end if ( !defined($entry) )
+	my $gid = $entry->get_value('gidNumber');
 
 	$entry->delete( gidNumber => $gid );
 	$entry->add( gidNumber => $args{gid} );
@@ -1387,7 +1299,7 @@ sub groupGIDchange {
 		base   => $self->{ini}->{''}->{userbase},
 		filter => '(&(objectClass=posixAccount) (gidNumber=' . $gid . '))'
 	);
-	if ( $mesg->{errorMessage} ne '' ) {
+	if ( $mesg3->{errorMessage} ne '' ) {
 		$self->{error} = 37;
 		$self->{errorString}
 			= 'The search for posixAccounts entries that need updating failed. base="'
@@ -1396,7 +1308,7 @@ sub groupGIDchange {
 			. $mesg3->{errorMessage} . '"';
 		$self->warn;
 		return undef;
-	} ## end if ( $mesg->{errorMessage} ne '' )
+	} ## end if ( $mesg3->{errorMessage} ne '' )
 	$entry = $mesg3->pop_entry;
 
 	#if no entries are found, nothing needs updated
@@ -1478,30 +1390,13 @@ sub groupDescriptionChange {
 		return undef;
 	}
 
-	my ( $gname, $gpasswd, $gid ) = getgrnam( $args{group} );
-	if ( !defined($gname) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPGroupEntry( $ldap, $args{group} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 14;
 		$self->{errorString} = 'The group "' . $args{group} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{groupbase},
-		filter => '(&(cn=' . $args{group} . ')(gidNumber=' . $gid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 27;
-		$self->{errorString} = 'Fetching group "' . $args{group} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error}       = 15;
-		$self->{errorString} = 'Group "' . $args{group} . '" not found under "' . $self->{ini}->{''}->{groupbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -1574,45 +1469,16 @@ sub groupRemoveUser {
 		return undef;
 	}
 
-	#error if the user does not exists
-	my ( $gname, $gpasswd, $gid, $members ) = getgrnam( $args{group} );
-	if ( !defined($gname) ) {
+	#connect to the LDAP server
+	my $ldap = $self->connect();
+
+	my $entry = $self->_getLDAPGroupEntry( $ldap, $args{group} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 14;
 		$self->{errorString} = 'The group "' . $args{group} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
-
-	#connect to the LDAP server
-	my $ldap = $self->connect();
-
-	#search and get the first entry
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{groupbase},
-		filter => '(&(cn=' . $args{group} . ') (gidNumber=' . $gid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error} = 27;
-		$self->{errorString}
-			= 'Fetching a list of posixGroup objects under "'
-			. $self->{ini}->{''}->{groupbase} . '"'
-			. $mesg->{errorMessage} . '"';
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-
-	#if $entry is not defined or does not exist under the specified base
-	if ( !defined($entry) ) {
-		$self->{error} = 15;
-		$self->{errorString}
-			= 'The group "'
-			. $args{group}
-			. '" does not exist in specified group base, "'
-			. $self->{ini}->{''}->{groupbase} . '", ';
-		$self->warn;
-		return undef;
-	} ## end if ( !defined($entry) )
 
 	$entry->delete( memberUid => $args{user} );
 
@@ -1714,10 +1580,9 @@ sub groupClean {
 			my $int     = 0;
 			my $changed = 0;    #records if any changes have happened or not
 			while ( defined( $members[$int] ) ) {
-				my ( $name, $passwd, $uid, $gid, $quota, $comment, $gcos, $dir, $shell, $expire )
-					= getpwnam( $members[$int] );
+				my $member_entry = $self->_getLDAPUserEntry( $ldap, $members[$int] );
 				#if it is not defined, it means the user does not exist
-				if ( !defined($name) ) {
+				if ( !defined($member_entry) ) {
 					$entry->delete( 'memberUid' => $members[$int] );
 					$changed = 1;
 				}
@@ -1877,24 +1742,10 @@ sub isLDAPgroup {
 		return undef;
 	}
 
-	#error if the user does not exists
-	my ( $gname, $gpasswd, $gid, $members ) = getgrnam($group);
-	if ( !defined($gname) ) {
-		$self->{error}       = 10;
-		$self->{errorString} = 'The group "' . $group . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	#connect to the LDAP server
 	my $ldap = $self->connect();
 
-	#search and get the first entry
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{groupbase},
-		filter => '(&(cn=' . $group . ') (gidNumber=' . $gid . '))'
-	);
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPGroupEntry( $ldap, $group );
 
 	#if $entry is not defined or does not exist under the specified base
 	if ( !defined($entry) ) {
@@ -1931,24 +1782,10 @@ sub isLDAPuser {
 		return undef;
 	}
 
-	#error if the user already exists
-	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gcos, $dir, $shell, $expire ) = getpwnam($user);
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'The user "' . $user . '" does not exists';
-		$self->warn;
-		return undef;
-	}
-
 	#connect to the LDAP server
 	my $ldap = $self->connect();
 
-	#search and get the first entry
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $user . ') (uidNumber=' . $uid . '))'
-	);
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $user );
 
 	#if $entry is not defined or does not exist under the specified base
 	if ( !defined($entry) ) {
@@ -2012,26 +1849,29 @@ sub onlyMember {
 		return undef;
 	}
 
-	#error if the user already exists
-	my ( $gname, $gpasswd, $ggid, $members ) = getgrnam( $args{group} );
-	if ( !defined($gname) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $grp_entry = $self->_getLDAPGroupEntry( $ldap, $args{group} );
+	if ( !defined($grp_entry) ) {
 		$self->{error}       = 14;
 		$self->{errorString} = 'The group "' . $args{group} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
+	my $ggid = $grp_entry->get_value('gidNumber');
 
-	#error if the user already exists
-	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gcos, $dir, $shell, $expire ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $usr_entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($usr_entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exists';
 		$self->warn;
 		return undef;
 	}
+	my $gid = $usr_entry->get_value('gidNumber');
 
-	#break the list of members apart
-	my @membersA = split( /,/, $members );
+	#get the list of explicit members from LDAP
+	my @membersA = $grp_entry->get_value('memberUid');
 
 	#handle it if there are no group members
 	if ( !defined( $membersA[0] ) ) {
@@ -3023,6 +2863,9 @@ sub readConfig {
 	if ( !defined( $ini->{''}->{passkeyUserVerification} ) ) {
 		$ini->{''}->{passkeyUserVerification} = 'preferred';
 	}
+	if ( !defined( $ini->{''}->{NSScheck} ) ) {
+		$ini->{''}->{NSScheck} = 1;
+	}
 	if ( !defined( $ini->{''}->{smtpserver} ) ) {
 		$ini->{''}->{smtpserver} = '';
 	}
@@ -3098,45 +2941,17 @@ sub userGECOSchange {
 		return undef;
 	}
 
-	#error if the user already exists
-	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gecos, $dir, $shell, $expire ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	#connect to the LDAP server
+	my $ldap = $self->connect();
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exists';
 		$self->warn;
 		return undef;
 	}
-
-	#connect to the LDAP server
-	my $ldap = $self->connect();
-
-	#search and get the first entry
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} eq '' ) {
-		$self->{error} = 32;
-		$self->{errorString}
-			= 'Fetching the entry for the user failed under "'
-			. $self->{ini}->{''}->{groupbase} . '"'
-			. $mesg->{errorMessage} . '"';
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-
-	#if $entry is not defined or does not exist under the specified base
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "'
-			. $args{user}
-			. '" does not exist in specified group base, "'
-			. $self->{ini}->{''}->{userbase} . '", ';
-		$self->warn;
-		return undef;
-	} ## end if ( !defined($entry) )
+	my $gecos = $entry->get_value('gecos');
 
 	$entry->delete( gecos => $gecos );
 	$entry->add( gecos => $args{gecos} );
@@ -3228,45 +3043,17 @@ sub userShellChange {
 		return undef;
 	}
 
-	#error if the user already exists
-	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gecos, $dir, $shell, $expire ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	#connect to the LDAP server
+	my $ldap = $self->connect();
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exists';
 		$self->warn;
 		return undef;
 	}
-
-	#connect to the LDAP server
-	my $ldap = $self->connect();
-
-	#search and get the first entry
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error} = 32;
-		$self->{errorString}
-			= 'Fetching the entry for the user failed under "'
-			. $self->{ini}->{''}->{groupbase} . '"'
-			. $mesg->{errorMessage} . '"';
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-
-	#if $entry is not defined or does not exist under the specified base
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "'
-			. $args{user}
-			. '" does not exist in specified group base, "'
-			. $self->{ini}->{''}->{userbase} . '", ';
-		$self->warn;
-		return undef;
-	} ## end if ( !defined($entry) )
+	my $shell = $entry->get_value('loginShell');
 
 	$entry->delete( loginShell => $shell );
 	$entry->add( loginShell => $args{shell} );
@@ -3358,45 +3145,17 @@ sub userHomeChange {
 		return undef;
 	}
 
-	#error if the user does not exist
-	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gecos, $dir, $shell, $expire ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	#connect to the LDAP server
+	my $ldap = $self->connect();
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exists';
 		$self->warn;
 		return undef;
 	}
-
-	#connect to the LDAP server
-	my $ldap = $self->connect();
-
-	#search and get the first entry
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error} = 32;
-		$self->{errorString}
-			= 'Fetching the entry for the user failed under "'
-			. $self->{ini}->{''}->{userbase} . '"'
-			. $mesg->{errorMessage} . '"';
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-
-	#if $entry is not defined or does not exist under the specified base
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "'
-			. $args{user}
-			. '" does not exist in specified user base, "'
-			. $self->{ini}->{''}->{userbase} . '", ';
-		$self->warn;
-		return undef;
-	} ## end if ( !defined($entry) )
+	my $dir = $entry->get_value('homeDirectory');
 
 	$entry->delete( homeDirectory => $dir );
 	$entry->add( homeDirectory => $args{home} );
@@ -3471,35 +3230,13 @@ sub userHasPassword {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error} = 32;
-		$self->{errorString}
-			= 'Fetching the entry for the user under "'
-			. $self->{ini}->{''}->{userbase} . '": '
-			. $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -3553,44 +3290,27 @@ sub userSetPass {
 		return undef;
 	}
 
-	#error if the user already exists
-	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gcos, $dir, $shell, $expire ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	#connect to the LDAP server
+	my $ldap = $self->connect();
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exists';
 		$self->warn;
 		return undef;
 	}
 
-	#connect to the LDAP server
-	my $ldap = $self->connect();
-
-	#search and get the first entry
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error} = 32;
-		$self->{errorString}
-			= 'Fetching the entry for the user under "'
-			. $self->{ini}->{''}->{userbase} . '"'
-			. $mesg->{errorMessage} . '"';
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-
 	#get the DN of the entry we will be changing
 	my $dn = $entry->dn;
 
 	my $mesg2 = $ldap->set_password( user => $dn, newpasswd => $args{pass} );
-	if ( $mesg->{errorMessage} ne '' ) {
+	if ( $mesg2->{errorMessage} ne '' ) {
 		$self->{error} = 36;
 		$self->{errorString}
-			= 'Fetching the entry for the user under "'
+			= 'Setting the password for the user under "'
 			. $self->{ini}->{''}->{userbase} . '"'
-			. $mesg->{errorMessage} . '"';
+			. $mesg2->{errorMessage} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -3657,35 +3377,13 @@ sub userRemovePassword {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error} = 32;
-		$self->{errorString}
-			= 'Fetching the entry for the user under "'
-			. $self->{ini}->{''}->{userbase} . '": '
-			. $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -3764,54 +3462,29 @@ sub userGIDchange {
 		return undef;
 	}
 
-	#error if the user already exists
-	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gcos, $dir, $shell, $expire ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	#connect to the LDAP server
+	my $ldap = $self->connect();
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exists';
 		$self->warn;
 		return undef;
 	}
+	my $gid = $entry->get_value('gidNumber');
 
-	#error if the user does not exists
-	my ( $gname, $gpasswd, $ggid, $members ) = getgrgid( $args{gid} );
-	if ( !defined($gname) ) {
+	#check if the target group (by GID) exists in LDAP
+	my $new_grp_mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{groupbase},
+		filter => '(&(objectClass=posixGroup)(gidNumber=' . $args{gid} . '))',
+	);
+	if ( !defined( $new_grp_mesg->pop_entry ) ) {
 		$self->{error}       = 14;
 		$self->{errorString} = 'The group specified by GID "' . $args{gid} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
-
-	#connect to the LDAP server
-	my $ldap = $self->connect();
-
-	#search and get the first entry
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error} = 32;
-		$self->{errorString}
-			= 'Fetching the entry for the user failed under "'
-			. $self->{ini}->{''}->{userbase} . '"'
-			. $mesg->{errorMessage} . '"';
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-
-	#if $entry is not defined or does not exist under the specified base
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "'
-			. $args{user}
-			. '" does not exist in specified group base, "'
-			. $self->{ini}->{''}->{userbase} . '", ';
-		$self->warn;
-		return undef;
-	} ## end if ( !defined($entry) )
 
 	$entry->delete( gidNumber => $gid );
 	$entry->add( gidNumber => $args{gid} );
@@ -3911,45 +3584,17 @@ sub userUIDchange {
 		return undef;
 	}
 
-	#error if the user already exists
-	my ( $name, $passwd, $uid, $gid, $quota, $comment, $gcos, $dir, $shell, $expire ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	#connect to the LDAP server
+	my $ldap = $self->connect();
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exists';
 		$self->warn;
 		return undef;
 	}
-
-	#connect to the LDAP server
-	my $ldap = $self->connect();
-
-	#search and get the first entry
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error} = 32;
-		$self->{errorString}
-			= 'Fetching the entry for the user under "'
-			. $self->{ini}->{''}->{userbase} . '"'
-			. $mesg->{errorMessage} . '"';
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-
-	#if $entry is not defined or does not exist under the specified base
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "'
-			. $args{user}
-			. '" does not exist in specified group base, "'
-			. $self->{ini}->{''}->{userbase} . '", ';
-		$self->warn;
-		return undef;
-	} ## end if ( !defined($entry) )
+	my $uid = $entry->get_value('uidNumber');
 
 	$entry->delete( uidNumber => $uid );
 	$entry->add( uidNumber => $args{uid} );
@@ -4506,30 +4151,13 @@ sub userTitleChange {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -4597,30 +4225,13 @@ sub userRoomNumberChange {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -4693,30 +4304,13 @@ sub userEmployeeNumberChange {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -4789,30 +4383,13 @@ sub userEmployeeTypeChange {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -4885,30 +4462,13 @@ sub userMailAdd {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -4974,30 +4534,13 @@ sub userMailRemove {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5062,30 +4605,13 @@ sub userTelephoneNumberAdd {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5156,30 +4682,13 @@ sub userTelephoneNumberRemove {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5249,30 +4758,13 @@ sub userMobileAdd {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5338,30 +4830,13 @@ sub userMobileRemove {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5426,30 +4901,13 @@ sub userPreferredLanguageAdd {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5520,30 +4978,13 @@ sub userPreferredLanguageRemove {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5613,30 +5054,13 @@ sub userLabeledURIAdd {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5707,30 +5131,13 @@ sub userLabeledURIRemove {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5800,30 +5207,13 @@ sub userSNchange {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5891,30 +5281,13 @@ sub userGivenNameChange {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -5987,30 +5360,13 @@ sub userDisplayNameChange {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -6083,30 +5439,13 @@ sub userHomePostalAddressChange {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -6173,30 +5512,13 @@ sub userDescriptionAdd {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -6261,30 +5583,13 @@ sub userDescriptionRemove {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -6349,30 +5654,13 @@ sub userPostalAddressAdd {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -6437,30 +5725,13 @@ sub userPostalAddressRemove {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -6539,30 +5810,13 @@ sub userConvertToInetOrgPerson {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ') (uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -6689,30 +5943,13 @@ sub userCNadd {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -6778,30 +6015,13 @@ sub userCNremove {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -6895,30 +6115,13 @@ sub userConvertToLdapPublicKey {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -7002,30 +6205,13 @@ sub userSSHPublicKeyAdd {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -7097,30 +6283,13 @@ sub userSSHPublicKeyRemove {
 		return undef;
 	}
 
-	my ( $name, $passwd, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
 		$self->{error}       = 17;
 		$self->{errorString} = 'The user "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
-	my $ldap = $self->connect();
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))'
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for the user failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
-	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'The user "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
 		$self->warn;
 		return undef;
 	}
@@ -7879,32 +7048,13 @@ sub userConvertToTotp {
 		return undef;
 	}
 
-	my ( $name, undef, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	my $ldap = $self->connect();
 	return undef if $self->error;
 
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
@@ -7979,32 +7129,13 @@ sub userTotpInfoGet {
 		return undef;
 	}
 
-	my ( $name, undef, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	my $ldap = $self->connect();
 	return undef if $self->error;
 
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
@@ -8060,32 +7191,13 @@ sub userTotpSecretSet {
 		return undef;
 	}
 
-	my ( $name, undef, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	my $ldap = $self->connect();
 	return undef if $self->error;
 
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
@@ -8132,32 +7244,13 @@ sub userTotpSecretRemove {
 		return undef;
 	}
 
-	my ( $name, undef, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	my $ldap = $self->connect();
 	return undef if $self->error;
 
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
@@ -8218,32 +7311,13 @@ sub userTotpStatusSet {
 		return undef;
 	}
 
-	my ( $name, undef, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	my $ldap = $self->connect();
 	return undef if $self->error;
 
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
@@ -8303,32 +7377,13 @@ sub userTotpAlgorithmSet {
 		return undef;
 	}
 
-	my ( $name, undef, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	my $ldap = $self->connect();
 	return undef if $self->error;
 
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
@@ -8385,32 +7440,13 @@ sub userTotpPeriodSet {
 		return undef;
 	}
 
-	my ( $name, undef, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	my $ldap = $self->connect();
 	return undef if $self->error;
 
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
@@ -8467,32 +7503,13 @@ sub userTotpDigitsSet {
 		return undef;
 	}
 
-	my ( $name, undef, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	my $ldap = $self->connect();
 	return undef if $self->error;
 
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
@@ -8538,32 +7555,13 @@ sub userTotpEnrolledDateSet {
 		return undef;
 	}
 
-	my ( $name, undef, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	my $ldap = $self->connect();
 	return undef if $self->error;
 
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
@@ -8628,32 +7626,13 @@ sub userTotpScratchCodeAdd {
 		return undef;
 	}
 
-	my ( $name, undef, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	my $ldap = $self->connect();
 	return undef if $self->error;
 
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
@@ -8735,32 +7714,13 @@ sub userTotpScratchCodesReplace {
 		return undef;
 	}
 
-	my ( $name, undef, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	my $ldap = $self->connect();
 	return undef if $self->error;
 
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
@@ -8835,32 +7795,13 @@ sub userTotpScratchCodeRemove {
 		return undef;
 	}
 
-	my ( $name, undef, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	my $ldap = $self->connect();
 	return undef if $self->error;
 
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
@@ -9200,32 +8141,13 @@ sub userTotpGenerateSecret {
 		return undef;
 	}
 
-	my ( $name, undef, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	my $ldap = $self->connect();
 	return undef if $self->error;
 
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
@@ -9647,32 +8569,13 @@ sub userConvertToPasskeyUser {
 		return undef;
 	}
 
-	my ( $name, undef, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	my $ldap = $self->connect();
 	return undef if $self->error;
 
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
@@ -9738,32 +8641,13 @@ sub userPasskeyRpIdSet {
 		return undef;
 	}
 
-	my ( $name, undef, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	my $ldap = $self->connect();
 	return undef if $self->error;
 
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
@@ -9823,32 +8707,13 @@ sub userPasskeyUserVerificationSet {
 		return undef;
 	}
 
-	my ( $name, undef, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	my $ldap = $self->connect();
 	return undef if $self->error;
 
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
@@ -9961,32 +8826,13 @@ sub userPasskeyCredentialAdd {
 		return undef;
 	}
 
-	my ( $name, undef, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	my $ldap = $self->connect();
 	return undef if $self->error;
 
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
@@ -10068,32 +8914,13 @@ sub userPasskeyCredentialRemove {
 		return undef;
 	}
 
-	my ( $name, undef, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	my $ldap = $self->connect();
 	return undef if $self->error;
 
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
@@ -10186,32 +9013,13 @@ sub userPasskeyCredentialUpdate {
 		return undef;
 	}
 
-	my ( $name, undef, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	my $ldap = $self->connect();
 	return undef if $self->error;
 
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
@@ -10299,32 +9107,13 @@ sub userPasskeyInfoGet {
 		return undef;
 	}
 
-	my ( $name, undef, $uid ) = getpwnam( $args{user} );
-	if ( !defined($name) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
-		$self->warn;
-		return undef;
-	}
-
 	my $ldap = $self->connect();
 	return undef if $self->error;
 
-	my $mesg = $ldap->search(
-		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(uid=' . $args{user} . ')(uidNumber=' . $uid . '))',
-	);
-	if ( $mesg->{errorMessage} ne '' ) {
-		$self->{error}       = 32;
-		$self->{errorString} = 'Fetching the entry for user "' . $args{user} . '" failed: ' . $mesg->{errorMessage};
-		$self->warn;
-		return undef;
-	}
-	my $entry = $mesg->pop_entry;
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error} = 18;
-		$self->{errorString}
-			= 'User "' . $args{user} . '" does not exist under "' . $self->{ini}->{''}->{userbase} . '"';
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
 		$self->warn;
 		return undef;
 	}
@@ -10339,6 +9128,78 @@ sub userPasskeyInfoGet {
 		credentials             => \@credentials,
 	};
 } ## end sub userPasskeyInfoGet
+
+=head2 userPasskeyFindByCredentialId
+
+Search the LDAP directory for the C<passkeyUser> entry that contains the given
+credential ID and return the owning username plus the decoded credential record.
+
+Returns a hashref C<{ user => $uid, credential => \%cred }> on success, or
+undef (with error set) if the credential is not found or an LDAP error occurs.
+
+=head3 args hash
+
+=head4 credentialId
+
+The base64url-encoded WebAuthn credential ID. Required.
+
+    my $result = $pt->userPasskeyFindByCredentialId({ credentialId => $id });
+    if ($result) {
+        my $user = $result->{user};
+        my %cred = %{ $result->{credential} };
+    }
+
+=cut
+
+sub userPasskeyFindByCredentialId {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{credentialId} ) || $args{credentialId} eq '' ) {
+		$self->{error}       = 92;
+		$self->{errorString} = 'No credential ID specified';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	# Fetch all passkeyUser entries and scan credential values in Perl.
+	# A substring LDAP filter would be more efficient but requires the
+	# passkeyCredential attribute to declare SUBSTR in the schema; scanning
+	# is reliable regardless of the LDAP server's matching-rule support.
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{userbase},
+		filter => '(objectClass=passkeyUser)',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Search for passkeyUser entries failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	while ( my $entry = $mesg->shift_entry ) {
+		my $uid = scalar( $entry->get_value('uid') );
+		for my $raw ( $entry->get_value('passkeyCredential') ) {
+			next unless defined $raw;
+			my ($stored_id) = split /\|/, $raw, 2;
+			if ( defined $stored_id && $stored_id eq $args{credentialId} ) {
+				my %cred = _passkey_decode_credential($raw);
+				return { user => $uid, credential => \%cred };
+			}
+		}
+	} ## end while ( my $entry = $mesg->shift_entry )
+
+	$self->{error}       = 95;
+	$self->{errorString} = 'Credential ID "' . $args{credentialId} . '" not found in directory';
+	$self->warn;
+	return undef;
+} ## end sub userPasskeyFindByCredentialId
 
 1;
 
