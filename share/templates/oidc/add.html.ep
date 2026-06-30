@@ -1,0 +1,92 @@
+% layout 'default';
+% title 'Add OIDC Client';
+
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="/oidc">OIDC Clients</a></li>
+    <li class="breadcrumb-item active">Add</li>
+  </ol>
+</nav>
+
+<div class="card" style="max-width:600px">
+  <div class="card-header"><strong>Register OIDC Client</strong></div>
+  <div class="card-body">
+    <form method="post" action="/oidc">
+      <div class="mb-3">
+        <label class="form-label">Client ID <span class="text-danger">*</span></label>
+        <input type="text" name="clientId" class="form-control" required
+               placeholder="e.g. myapp-web">
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Client Name</label>
+        <input type="text" name="clientName" class="form-control"
+               placeholder="Human-readable name for consent screens">
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Client Secret</label>
+        <input type="text" name="clientSecret" class="form-control"
+               placeholder="Leave blank for public clients">
+      </div>
+      <div class="row mb-3">
+        <div class="col">
+          <label class="form-label">Application Type</label>
+          <select name="applicationType" class="form-select">
+            <option value="web" selected>web</option>
+            <option value="native">native</option>
+          </select>
+        </div>
+        <div class="col">
+          <label class="form-label">Token Auth Method</label>
+          <select name="authMethod" class="form-select">
+            <option value="client_secret_basic" selected>client_secret_basic</option>
+            <option value="client_secret_post">client_secret_post</option>
+            <option value="client_secret_jwt">client_secret_jwt</option>
+            <option value="private_key_jwt">private_key_jwt</option>
+            <option value="none">none</option>
+          </select>
+        </div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Redirect URIs</label>
+        <textarea name="redirectURIs" class="form-control" rows="3"
+                  placeholder="One URI per line"></textarea>
+      </div>
+      <div class="row mb-3">
+        <div class="col">
+          <label class="form-label">Scopes</label>
+          <input type="text" name="scopes" class="form-control"
+                 placeholder="openid profile email" value="openid">
+        </div>
+        <div class="col">
+          <label class="form-label">Grant Types</label>
+          <input type="text" name="grantTypes" class="form-control"
+                 placeholder="authorization_code refresh_token" value="authorization_code">
+        </div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Response Types</label>
+        <textarea name="responseTypes" class="form-control" rows="2"
+                  placeholder="One per line (e.g. code)">code</textarea>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Subject Type</label>
+        <select name="subjectType" class="form-select">
+          <option value="public" selected>public</option>
+          <option value="pairwise">pairwise</option>
+        </select>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Client URI</label>
+        <input type="url" name="clientURI" class="form-control"
+               placeholder="https://myapp.example.com">
+      </div>
+      <div class="mb-4">
+        <label class="form-label">Contacts</label>
+        <textarea name="contacts" class="form-control" rows="2"
+                  placeholder="One email per line"></textarea>
+      </div>
+      <button class="btn btn-primary">Register Client</button>
+      <a href="/oidc" class="btn btn-outline-secondary ms-2">Cancel</a>
+    </form>
+  </div>
+</div>

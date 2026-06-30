@@ -1,0 +1,65 @@
+% title 'Authorize';
+
+<div class="card border-secondary mt-4">
+  <div class="card-header fw-bold">Authorize Application</div>
+  <div class="card-body text-center">
+
+    % if ($logo_uri) {
+    <img src="<%= $logo_uri %>" alt="<%= $client_name %>"
+         style="max-height:64px; max-width:200px;" class="mb-3">
+    % }
+
+    <p class="mb-1">
+      % if ($client_uri) {
+        <a href="<%= $client_uri %>" target="_blank" rel="noopener"><strong><%= $client_name %></strong></a>
+      % } else {
+        <strong><%= $client_name %></strong>
+      % }
+    </p>
+    <p class="text-secondary small">wants to access your account</p>
+
+    <div class="text-start mb-3">
+      <p class="small text-muted mb-1">Signed in as <strong><%= $user %></strong></p>
+      <p class="small text-muted mb-2">This application is requesting access to:</p>
+      <ul class="list-unstyled ms-3">
+        % my %scope_labels = (
+        %   openid  => 'Your identity (user ID)',
+        %   profile => 'Your profile information (name, username)',
+        %   email   => 'Your email address',
+        %   phone   => 'Your phone number',
+        %   address => 'Your postal address',
+        % );
+        % for my $s (@{$scopes}) {
+        <li class="mb-1">
+          <span class="badge bg-secondary me-1"><%= $s %></span>
+          <small class="text-muted"><%= $scope_labels{$s} // '' %></small>
+        </li>
+        % }
+      </ul>
+    </div>
+
+    % if ($policy_uri || $tos_uri) {
+    <div class="small text-muted mb-3">
+      % if ($policy_uri) {
+        <a href="<%= $policy_uri %>" target="_blank" rel="noopener">Privacy Policy</a>
+      % }
+      % if ($policy_uri && $tos_uri) {
+        &middot;
+      % }
+      % if ($tos_uri) {
+        <a href="<%= $tos_uri %>" target="_blank" rel="noopener">Terms of Service</a>
+      % }
+    </div>
+    % }
+
+    <form method="post" action="<%= url_for('sso_consent_post') %>">
+      <div class="d-flex gap-2 justify-content-center">
+        <button type="submit" name="decision" value="deny"
+                class="btn btn-outline-secondary">Deny</button>
+        <button type="submit" name="decision" value="allow"
+                class="btn btn-danger">Allow</button>
+      </div>
+    </form>
+
+  </div>
+</div>

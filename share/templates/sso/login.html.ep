@@ -1,0 +1,110 @@
+% title 'Sign In';
+
+<div class="card border-secondary mt-4">
+  <div class="card-header text-danger fw-bold">Sign In</div>
+  <div class="card-body">
+    <form method="post" action="<%= url_for('sso_login_post') %>">
+      <div class="mb-3">
+        <label class="form-label" for="user">Username</label>
+        <input type="text" class="form-control" id="user" name="user"
+               autocomplete="username" autofocus required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label" for="pass">Password</label>
+        <input type="password" class="form-control" id="pass" name="pass"
+               autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="btn btn-danger w-100">Sign In</button>
+    </form>
+    % if (passkey_login_available) {
+    <div class="text-center my-3 text-secondary small">or</div>
+    <button type="button" class="btn btn-outline-secondary w-100" id="pk-login-btn">
+      Sign in with a Passkey
+    </button>
+    <div id="pk-login-status" class="mt-2 small text-danger d-none"></div>
+    % }
+  </div>
+</div>
+
+% if (passkey_login_available) {
+<script>
+(function () {
+  'use strict';
+
+  function b64uToBuf(b64u) {
+    var b64 = b64u.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    var raw = atob(b64), buf = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i);
+    return buf.buffer;
+  }
+  function bufToB64u(buf) {
+    var bytes = new Uint8Array(buf), raw = '';
+    for (var i = 0; i < bytes.length; i++) raw += String.fromCharCode(bytes[i]);
+    return btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  var btn    = document.getElementById('pk-login-btn');
+  var status = document.getElementById('pk-login-status');
+
+  if (!window.PublicKeyCredential) {
+    btn.disabled = true;
+    btn.title    = 'This browser does not support passkeys.';
+  }
+
+  btn.addEventListener('click', async function () {
+    status.classList.add('d-none');
+    btn.disabled = true;
+    btn.textContent = 'Waiting for passkey\u2026';
+    try {
+      var optResp = await fetch('<%= url_for('sso_passkey_login_start') %>');
+      if (!optResp.ok) throw new Error('Server error fetching options');
+      var opts = await optResp.json();
+      if (opts.error) throw new Error(opts.error);
+
+      var pubKeyOpts = {
+        challenge:        b64uToBuf(opts.challenge),
+        rpId:             opts.rpId,
+        userVerification: opts.userVerification,
+        allowCredentials: [],
+        timeout:          opts.timeout || 60000,
+      };
+
+      var assertion = await navigator.credentials.get({ publicKey: pubKeyOpts });
+
+      var body = {
+        id:   assertion.id,
+        type: assertion.type,
+        response: {
+          clientDataJSON:    bufToB64u(assertion.response.clientDataJSON),
+          authenticatorData: bufToB64u(assertion.response.authenticatorData),
+          signature:         bufToB64u(assertion.response.signature),
+          userHandle: assertion.response.userHandle
+            ? bufToB64u(assertion.response.userHandle)
+            : null,
+        },
+      };
+
+      var finResp = await fetch('<%= url_for('sso_passkey_login_finish') %>', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(body),
+      });
+      var result = await finResp.json();
+      if (!finResp.ok) throw new Error(result.error || 'Login failed');
+
+      if (result.totp_required) {
+        window.location.href = '<%= url_for('sso_totp_challenge') %>';
+      } else {
+        window.location.href = '<%= url_for('sso_consent') %>';
+      }
+    } catch (err) {
+      status.textContent = err.message;
+      status.classList.remove('d-none');
+      btn.disabled    = false;
+      btn.textContent = 'Sign in with a Passkey';
+    }
+  });
+})();
+</script>
+% }

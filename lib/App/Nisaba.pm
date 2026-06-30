@@ -172,6 +172,10 @@ sub new {
 				93 => 'invalidPasskeyCredential',
 				94 => 'invalidPasskeyUserVerification',
 				95 => 'passkeyCredentialNotFound',
+				96 => 'noOidcSchema',
+				97 => 'oidcbaseNotConfigured',
+				98 => 'oidcClientExists',
+				99 => 'noOidcClientId',
 			},
 			fatal_flags      => {},
 			perror_not_fatal => 0,
@@ -2924,6 +2928,18 @@ sub readConfig {
 	}
 	if ( !defined( $ini->{''}->{adminGroup} ) ) {
 		$ini->{''}->{adminGroup} = 'LDAPadmin';
+	}
+	if ( !defined( $ini->{''}->{oidcbase} ) ) {
+		$ini->{''}->{oidcbase} = '';
+	}
+	if ( !defined( $ini->{''}->{ssoIssuer} ) ) {
+		$ini->{''}->{ssoIssuer} = '';
+	}
+	if ( !defined( $ini->{''}->{ssoTokenLifetime} ) ) {
+		$ini->{''}->{ssoTokenLifetime} = 3600;
+	}
+	if ( !defined( $ini->{''}->{ssoCodeLifetime} ) ) {
+		$ini->{''}->{ssoCodeLifetime} = 600;
 	}
 	if ( !defined( $ini->{''}->{smtpserver} ) ) {
 		$ini->{''}->{smtpserver} = '';
@@ -8836,6 +8852,613 @@ sub userPasskeyFindByCredentialId {
 	return undef;
 } ## end sub userPasskeyFindByCredentialId
 
+#
+# ─── OIDC Relying Party management ─────────────────────────────────────────────
+#
+
+=head2 oidcSchemaAvailable
+
+Checks whether the C<oidcRelyingParty> objectClass is present in the LDAP
+schema. Returns 1 if present, undef otherwise.
+
+    my $ok = $pt->oidcSchemaAvailable;
+
+=cut
+
+sub oidcSchemaAvailable {
+	my $self = $_[0];
+
+	$self->errorblank;
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $schema = $ldap->schema;
+	return undef unless defined $schema;
+
+	my $oc = $schema->objectclass('oidcRelyingParty');
+	return ( defined $oc && defined $oc->{name} ) ? 1 : undef;
+} ## end sub oidcSchemaAvailable
+
+=head2 oidcbaseConfigured
+
+Returns 1 if the C<oidcbase> config key is set to a non-empty value,
+0 otherwise.
+
+    if ($pt->oidcbaseConfigured) { ... }
+
+=cut
+
+sub oidcbaseConfigured {
+	my $self = $_[0];
+	return ( defined( $self->{ini}->{''}->{oidcbase} ) && $self->{ini}->{''}->{oidcbase} ne '' )
+		? 1
+		: 0;
+}
+
+=head2 getOIDCClients
+
+Returns an arrayref of L<Net::LDAP::Entry> objects for all
+C<oidcRelyingParty> entries under C<oidcbase>.
+
+    my $clients = $pt->getOIDCClients;
+
+=cut
+
+sub getOIDCClients {
+	my $self = $_[0];
+
+	$self->errorblank;
+
+	if ( !$self->oidcbaseConfigured ) {
+		$self->{error}       = 97;
+		$self->{errorString} = 'oidcbase is not configured';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{oidcbase},
+		filter => '(objectClass=oidcRelyingParty)',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error} = 27;
+		$self->{errorString}
+			= 'Fetching oidcRelyingParty objects under "'
+			. $self->{ini}->{''}->{oidcbase}
+			. '" failed. '
+			. $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	} ## end if ( $mesg->{errorMessage} ne '' )
+
+	my @clients;
+	while ( my $entry = $mesg->shift_entry ) {
+		push @clients, $entry;
+	}
+
+	return \@clients;
+} ## end sub getOIDCClients
+
+=head2 getOIDCClientEntry
+
+Returns the L<Net::LDAP::Entry> for a single OIDC client.
+
+=head3 args hash
+
+=head4 clientId
+
+The oidcClientId. Required.
+
+    my $entry = $pt->getOIDCClientEntry({ clientId => 'myapp' });
+
+=cut
+
+sub getOIDCClientEntry {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{clientId} ) ) {
+		$self->{error}       = 99;
+		$self->{errorString} = 'No OIDC client ID specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !$self->oidcbaseConfigured ) {
+		$self->{error}       = 97;
+		$self->{errorString} = 'oidcbase is not configured';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{oidcbase},
+		filter => '(&(objectClass=oidcRelyingParty)(oidcClientId=' . $args{clientId} . '))',
+		scope  => 'one',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Search for OIDC client "' . $args{clientId} . '" failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return $mesg->pop_entry;
+} ## end sub getOIDCClientEntry
+
+=head2 addOIDCClient
+
+Creates a new C<oidcRelyingParty> entry in LDAP.
+
+=head3 args hash
+
+=head4 clientId
+
+The oidcClientId (RDN). Required.
+
+=head4 clientSecret
+
+Optional client secret.
+
+=head4 redirectURIs
+
+Arrayref of redirect URIs.
+
+=head4 clientName
+
+Optional human-readable client name.
+
+=head4 applicationType
+
+Optional, defaults to "web".
+
+    $pt->addOIDCClient({
+        clientId     => 'myapp',
+        clientSecret => 'secret123',
+        redirectURIs => ['https://myapp.example.com/callback'],
+        clientName   => 'My Application',
+    });
+
+=cut
+
+sub addOIDCClient {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{clientId} ) ) {
+		$self->{error}       = 99;
+		$self->{errorString} = 'No OIDC client ID specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !$self->oidcbaseConfigured ) {
+		$self->{error}       = 97;
+		$self->{errorString} = 'oidcbase is not configured';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	# Check if client already exists
+	my $existing = $self->getOIDCClientEntry( { clientId => $args{clientId} } );
+	if ( defined($existing) ) {
+		$self->{error}       = 98;
+		$self->{errorString} = 'OIDC client "' . $args{clientId} . '" already exists';
+		$self->warn;
+		return undef;
+	}
+	$self->errorblank;
+
+	my $dn = 'oidcClientId=' . $args{clientId} . ',' . $self->{ini}->{''}->{oidcbase};
+
+	my @attrs = (
+		objectClass  => 'oidcRelyingParty',
+		oidcClientId => $args{clientId},
+	);
+
+	push @attrs, oidcClientSecret => $args{clientSecret} if defined $args{clientSecret} && $args{clientSecret} ne '';
+	push @attrs, oidcClientName   => $args{clientName}   if defined $args{clientName}   && $args{clientName} ne '';
+	push @attrs, oidcApplicationType => $args{applicationType}
+		if defined $args{applicationType} && $args{applicationType} ne '';
+	push @attrs, oidcTokenEndpointAuthMethod => $args{authMethod}
+		if defined $args{authMethod} && $args{authMethod} ne '';
+	push @attrs, oidcSubjectType => $args{subjectType} if defined $args{subjectType} && $args{subjectType} ne '';
+	push @attrs, oidcClientURI   => $args{clientURI}   if defined $args{clientURI}   && $args{clientURI} ne '';
+	push @attrs, oidcLogoURI     => $args{logoURI}     if defined $args{logoURI}     && $args{logoURI} ne '';
+	push @attrs, oidcPolicyURI   => $args{policyURI}   if defined $args{policyURI}   && $args{policyURI} ne '';
+	push @attrs, oidcTosURI      => $args{tosURI}      if defined $args{tosURI}      && $args{tosURI} ne '';
+
+	if ( defined $args{redirectURIs} && ref $args{redirectURIs} eq 'ARRAY' && @{ $args{redirectURIs} } ) {
+		push @attrs, oidcRedirectURI => $args{redirectURIs};
+	}
+	if ( defined $args{scopes} && ref $args{scopes} eq 'ARRAY' && @{ $args{scopes} } ) {
+		push @attrs, oidcScope => $args{scopes};
+	}
+	if ( defined $args{grantTypes} && ref $args{grantTypes} eq 'ARRAY' && @{ $args{grantTypes} } ) {
+		push @attrs, oidcGrantType => $args{grantTypes};
+	}
+	if ( defined $args{responseTypes} && ref $args{responseTypes} eq 'ARRAY' && @{ $args{responseTypes} } ) {
+		push @attrs, oidcResponseType => $args{responseTypes};
+	}
+	if ( defined $args{contacts} && ref $args{contacts} eq 'ARRAY' && @{ $args{contacts} } ) {
+		push @attrs, oidcContact => $args{contacts};
+	}
+
+	my $mesg = $ldap->add( $dn, attrs => \@attrs );
+	if ( $mesg->is_error ) {
+		$self->{error}       = 19;
+		$self->{errorString} = 'Adding OIDC client entry failed: ' . $mesg->error_text;
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub addOIDCClient
+
+=head2 deleteOIDCClient
+
+Deletes an OIDC client (oidcRelyingParty) entry from LDAP.
+
+    $pt->deleteOIDCClient('myapp');
+
+=cut
+
+sub deleteOIDCClient {
+	my $self     = $_[0];
+	my $clientId = $_[1];
+
+	$self->errorblank;
+
+	if ( !defined($clientId) ) {
+		$self->{error}       = 99;
+		$self->{errorString} = 'No OIDC client ID specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !$self->oidcbaseConfigured ) {
+		$self->{error}       = 97;
+		$self->{errorString} = 'oidcbase is not configured';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->getOIDCClientEntry( { clientId => $clientId } );
+	if ( !defined($entry) ) {
+		$self->{error}       = 99;
+		$self->{errorString} = 'OIDC client "' . $clientId . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+	$self->errorblank;
+
+	my $mesg = $ldap->delete( $entry->dn );
+	if ( $mesg->is_error ) {
+		$self->{error}       = 16;
+		$self->{errorString} = 'Failed to delete OIDC client: ' . $mesg->error_text;
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub deleteOIDCClient
+
+=head2 oidcClientUpdate
+
+Updates attributes on an existing OIDC client entry.
+
+=head3 args hash
+
+=head4 clientId
+
+The oidcClientId to update. Required.
+
+=head4 attribute
+
+The LDAP attribute to modify. Required.
+
+=head4 value
+
+The new value. For multi-valued attributes, pass an arrayref.
+Pass undef or empty string to delete the attribute.
+
+    $pt->oidcClientUpdate({
+        clientId  => 'myapp',
+        attribute => 'oidcClientName',
+        value     => 'My Updated App',
+    });
+
+=cut
+
+sub oidcClientUpdate {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{clientId} ) ) {
+		$self->{error}       = 99;
+		$self->{errorString} = 'No OIDC client ID specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{attribute} ) ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'No attribute specified for OIDC client update';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !$self->oidcbaseConfigured ) {
+		$self->{error}       = 97;
+		$self->{errorString} = 'oidcbase is not configured';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->getOIDCClientEntry( { clientId => $args{clientId} } );
+	if ( !defined($entry) ) {
+		$self->{error}       = 99;
+		$self->{errorString} = 'OIDC client "' . $args{clientId} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+	$self->errorblank;
+
+	my $mesg;
+	if ( !defined( $args{value} ) || ( !ref( $args{value} ) && $args{value} eq '' ) ) {
+		$mesg = $ldap->modify( $entry->dn, delete => [ $args{attribute} ] );
+	} else {
+		$mesg = $ldap->modify( $entry->dn, replace => { $args{attribute} => $args{value} } );
+	}
+
+	if ( $mesg->is_error ) {
+		$self->{error} = 34;
+		$self->{errorString}
+			= 'Failed to update OIDC client attribute "' . $args{attribute} . '": ' . $mesg->error_text;
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub oidcClientUpdate
+
+=head2 oidcClientAddMultiValue
+
+Adds a value to a multi-valued attribute on an OIDC client.
+
+=head3 args hash
+
+=head4 clientId
+
+The oidcClientId. Required.
+
+=head4 attribute
+
+The multi-valued LDAP attribute. Required.
+
+=head4 value
+
+The value to add. Required.
+
+    $pt->oidcClientAddMultiValue({
+        clientId  => 'myapp',
+        attribute => 'oidcRedirectURI',
+        value     => 'https://myapp.example.com/callback2',
+    });
+
+=cut
+
+sub oidcClientAddMultiValue {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{clientId} ) ) {
+		$self->{error}       = 99;
+		$self->{errorString} = 'No OIDC client ID specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{attribute} ) || !defined( $args{value} ) ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'No attribute or value specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !$self->oidcbaseConfigured ) {
+		$self->{error}       = 97;
+		$self->{errorString} = 'oidcbase is not configured';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->getOIDCClientEntry( { clientId => $args{clientId} } );
+	if ( !defined($entry) ) {
+		$self->{error}       = 99;
+		$self->{errorString} = 'OIDC client "' . $args{clientId} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+	$self->errorblank;
+
+	my $mesg = $ldap->modify( $entry->dn, add => { $args{attribute} => $args{value} } );
+	if ( $mesg->is_error ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Failed to add value to "' . $args{attribute} . '": ' . $mesg->error_text;
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub oidcClientAddMultiValue
+
+=head2 oidcClientRemoveMultiValue
+
+Removes a value from a multi-valued attribute on an OIDC client.
+
+=head3 args hash
+
+=head4 clientId
+
+The oidcClientId. Required.
+
+=head4 attribute
+
+The multi-valued LDAP attribute. Required.
+
+=head4 value
+
+The value to remove. Required.
+
+    $pt->oidcClientRemoveMultiValue({
+        clientId  => 'myapp',
+        attribute => 'oidcRedirectURI',
+        value     => 'https://myapp.example.com/callback2',
+    });
+
+=cut
+
+sub oidcClientRemoveMultiValue {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{clientId} ) ) {
+		$self->{error}       = 99;
+		$self->{errorString} = 'No OIDC client ID specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !defined( $args{attribute} ) || !defined( $args{value} ) ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'No attribute or value specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !$self->oidcbaseConfigured ) {
+		$self->{error}       = 97;
+		$self->{errorString} = 'oidcbase is not configured';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->getOIDCClientEntry( { clientId => $args{clientId} } );
+	if ( !defined($entry) ) {
+		$self->{error}       = 99;
+		$self->{errorString} = 'OIDC client "' . $args{clientId} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+	$self->errorblank;
+
+	my $mesg = $ldap->modify( $entry->dn, delete => { $args{attribute} => $args{value} } );
+	if ( $mesg->is_error ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Failed to remove value from "' . $args{attribute} . '": ' . $mesg->error_text;
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub oidcClientRemoveMultiValue
+
+=head2 userConvertToOidcSubject
+
+Add the C<oidcSubject> auxiliary objectClass to a user entry, enabling
+storage of OIDC claims and consent records.
+
+Returns 1 on success, undef on error.
+
+=head3 args hash
+
+=head4 user
+
+The username (uid). Required.
+
+    $pt->userConvertToOidcSubject({ user => 'jdoe' });
+
+=cut
+
+sub userConvertToOidcSubject {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{user} ) ) {
+		$self->{error}       = 5;
+		$self->{errorString} = 'No user name specified';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
+	if ( !defined($entry) ) {
+		$self->{error}       = 17;
+		$self->{errorString} = 'User "' . $args{user} . '" does not exist';
+		$self->warn;
+		return undef;
+	}
+
+	my %oc = map { lc($_) => 1 } $entry->get_value('objectClass');
+	if ( $oc{oidcsubject} ) {
+		return 1;
+	}
+
+	my $mesg = $ldap->modify( $entry->dn, add => { objectClass => 'oidcSubject' } );
+	if ( $mesg->is_error ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Failed to add oidcSubject objectClass: ' . $mesg->error_text;
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub userConvertToOidcSubject
+
 1;
 
 =head1 ERROR CODES
@@ -9235,6 +9858,24 @@ Invalid passkey user verification value specified.
 The specified passkey credential ID was not found for the user or in the
 directory.
 
+=head2 96, noOidcSchema
+
+The C<oidcRelyingParty> objectClass is not present in the LDAP schema.
+Load C<oidc.schema> into your directory server.
+
+=head2 97, oidcbaseNotConfigured
+
+The C<oidcbase> configuration key is not set or is empty. Set it to the
+LDAP base DN for OIDC client entries (e.g. C<ou=oidc,dc=example,dc=com>).
+
+=head2 98, oidcClientExists
+
+An OIDC client with the specified C<oidcClientId> already exists.
+
+=head2 99, noOidcClientId
+
+No OIDC client ID was specified, or the specified client does not exist.
+
 =head1 CONFIG FILE
 
 The default is xdg_config_home().'/nisabarc', which wraps
@@ -9424,6 +10065,13 @@ A comma seperated list of plugins to run when deleteUser is called.
 =head2 pluginDeleteGroup
 
 A comma seperated list of plugins to run when deleteGroup is called.
+
+=head2 oidcbase
+
+The LDAP base DN for OIDC client (oidcRelyingParty) entries. If not set
+or empty, OIDC client management routes are hidden.
+
+    oidcbase=ou=oidc,dc=foo,dc=bar
 
 =head1 PLUGINS
 

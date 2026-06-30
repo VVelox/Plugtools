@@ -1,0 +1,17 @@
+% title 'TOTP Verification';
+
+<div class="card border-secondary mt-4">
+  <div class="card-header text-danger fw-bold">Two-Factor Authentication</div>
+  <div class="card-body">
+    <p class="text-secondary small">Enter the code from your authenticator app.</p>
+    <form method="post" action="<%= url_for('sso_totp_challenge_post') %>">
+      <div class="mb-3">
+        <label class="form-label" for="code">TOTP Code</label>
+        <input type="text" class="form-control" id="code" name="code"
+               autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]*"
+               autofocus required>
+      </div>
+      <button type="submit" class="btn btn-danger w-100">Verify</button>
+    </form>
+  </div>
+</div>

@@ -1,0 +1,694 @@
+# OpenID Connect (OIDC) Core LDAP Schema
+#
+# Provides object classes and attributes for storing OpenID Connect
+# Relying Party (client) registrations and OIDC-specific user claims
+# in an LDAP directory.  Designed for use by an OpenID Provider (OP)
+# that uses LDAP as its backing store.
+#
+# References:
+#   - OpenID Connect Core 1.0 (Standard Claims, Section 5.1)
+#   - OpenID Connect Dynamic Client Registration 1.0
+#   - RFC 7591 (OAuth 2.0 Dynamic Client Registration Protocol)
+#   - RFC 7636 (PKCE)
+#
+# OID arc:  1.3.6.1.4.1.26481.2.10
+# Structure:
+#   1.3.6.1.4.1.26481.2.10.1.x  = Attribute Types
+#   1.3.6.1.4.1.26481.2.10.2.x  = Object Classes
+#
+# Attribute numbering groups:
+#    1-10   Client identity & core
+#   11-16   Client display metadata
+#   17-28   Client cryptography & signing
+#   29-30   Client subject & sector
+#   31-36   Client behaviour & session
+#   37-42   Client software & management
+#   50-61   User/subject OIDC claims & consent
+#
+# LDAP Syntaxes used:
+#   1.3.6.1.4.1.1466.115.121.1.7   = Boolean
+#   1.3.6.1.4.1.1466.115.121.1.15  = Directory String (UTF-8)
+#   1.3.6.1.4.1.1466.115.121.1.24  = Generalized Time
+#   1.3.6.1.4.1.1466.115.121.1.27  = Integer
+#
+# inetOrgPerson claim mappings (attributes NOT duplicated here):
+#   sub              -> uid
+#   name             -> displayName / cn
+#   given_name       -> givenName
+#   family_name      -> sn
+#   email            -> mail
+#   phone_number     -> telephoneNumber
+#   locale           -> preferredLanguage
+#   address.street   -> street
+#   address.locality -> l
+#   address.region   -> st
+#   address.postal   -> postalCode
+#   address.country  -> c
+
+
+# =========================================================================
+# 1. Client identity & core  (1.3.6.1.4.1.26481.2.10.1.1 – .1.8)
+# =========================================================================
+
+# oidcClientId — unique client identifier assigned by the OP.
+# Used as the RDN for oidcRelyingParty entries.
+# Ref: RFC 7591 Section 3.2.1
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.1
+  NAME 'oidcClientId'
+  DESC 'OAuth 2.0 / OIDC client identifier (case-sensitive, assigned by the OP)'
+  EQUALITY caseExactMatch
+  SUBSTR caseExactSubstringsMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcClientSecret — client secret for confidential clients.
+# Ref: RFC 7591 Section 3.2.1
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.2
+  NAME 'oidcClientSecret'
+  DESC 'OAuth 2.0 / OIDC client secret (confidential clients only)'
+  EQUALITY caseExactMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcRedirectURI — registered redirect URIs.
+# The OIDC spec requires exact-match comparison on redirect_uri values.
+# Ref: RFC 7591 Section 2, OIDC Core Section 3.1.2.1
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.3
+  NAME 'oidcRedirectURI'
+  DESC 'Registered OAuth 2.0 redirect URI (one value per URI, exact-match compared)'
+  EQUALITY caseExactMatch
+  SUBSTR caseExactSubstringsMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+
+# oidcResponseType — OAuth 2.0 response types the client may use.
+# Values: "code", "token", "id_token", or space-separated combinations.
+# Default: "code"
+# Ref: RFC 7591 Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.4
+  NAME 'oidcResponseType'
+  DESC 'OAuth 2.0 response_type value the client may use (e.g. code, id_token token)'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+
+# oidcGrantType — OAuth 2.0 grant types the client may use.
+# Values: authorization_code, implicit, client_credentials, refresh_token, etc.
+# Default: "authorization_code"
+# Ref: RFC 7591 Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.5
+  NAME 'oidcGrantType'
+  DESC 'OAuth 2.0 grant_type the client may use (e.g. authorization_code, refresh_token)'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+
+# oidcApplicationType — whether the client is a "web" or "native" application.
+# Default: "web"
+# Ref: OIDC Registration Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.6
+  NAME 'oidcApplicationType'
+  DESC 'OIDC client application type: web or native (default: web)'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcTokenEndpointAuthMethod — method used to authenticate at the token endpoint.
+# Values: client_secret_basic, client_secret_post, client_secret_jwt,
+#         private_key_jwt, none
+# Default: "client_secret_basic"
+# Ref: RFC 7591 Section 2, OIDC Registration Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.7
+  NAME 'oidcTokenEndpointAuthMethod'
+  DESC 'Authentication method for the token endpoint (default: client_secret_basic)'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcScope — scopes the client is permitted to request.
+# One scope name per value (e.g. "openid", "profile", "email").
+# Ref: RFC 7591 Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.8
+  NAME 'oidcScope'
+  DESC 'OAuth 2.0 scope the client is permitted to request (one scope per value)'
+  EQUALITY caseIgnoreMatch
+  SUBSTR caseIgnoreSubstringsMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+
+
+# =========================================================================
+# 2. Client display metadata  (1.3.6.1.4.1.26481.2.10.1.11 – .1.16)
+# =========================================================================
+
+# oidcClientName — human-readable client name shown on consent screens.
+# Ref: RFC 7591 Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.11
+  NAME 'oidcClientName'
+  DESC 'Human-readable name of the OIDC client (for consent screens)'
+  EQUALITY caseIgnoreMatch
+  SUBSTR caseIgnoreSubstringsMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcClientURI — URL of the client home page (shown on consent screens).
+# Ref: RFC 7591 Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.12
+  NAME 'oidcClientURI'
+  DESC 'URL of the client home page (displayed on consent screens)'
+  EQUALITY caseExactMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcLogoURI — URL of the client logo image.
+# Ref: RFC 7591 Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.13
+  NAME 'oidcLogoURI'
+  DESC 'URL of the client logo image'
+  EQUALITY caseExactMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcPolicyURI — URL of the client privacy policy.
+# Ref: RFC 7591 Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.14
+  NAME 'oidcPolicyURI'
+  DESC 'URL of the client privacy policy'
+  EQUALITY caseExactMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcTosURI — URL of the client terms of service.
+# Ref: RFC 7591 Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.15
+  NAME 'oidcTosURI'
+  DESC 'URL of the client terms of service'
+  EQUALITY caseExactMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcContact — e-mail addresses of people responsible for this client.
+# Ref: RFC 7591 Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.16
+  NAME 'oidcContact'
+  DESC 'E-mail address of a person responsible for this client'
+  EQUALITY caseIgnoreMatch
+  SUBSTR caseIgnoreSubstringsMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+
+
+# =========================================================================
+# 3. Client cryptography & signing  (1.3.6.1.4.1.26481.2.10.1.17 – .1.28)
+# =========================================================================
+
+# oidcJwksURI — URL of the client JWK Set document.
+# Mutually exclusive with oidcJwks.
+# Ref: OIDC Registration Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.17
+  NAME 'oidcJwksURI'
+  DESC 'URL of the client JSON Web Key Set (mutually exclusive with oidcJwks)'
+  EQUALITY caseExactMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcJwks — inline client JWK Set (JSON object).
+# Mutually exclusive with oidcJwksURI.
+# Ref: OIDC Registration Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.18
+  NAME 'oidcJwks'
+  DESC 'Inline client JSON Web Key Set as a JSON string (mutually exclusive with oidcJwksURI)'
+  EQUALITY caseExactMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcIdTokenSignedResponseAlg — JWS algorithm for signing ID Tokens.
+# Default: "RS256"
+# Ref: OIDC Registration Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.19
+  NAME 'oidcIdTokenSignedResponseAlg'
+  DESC 'JWS algorithm for ID Token signing (default: RS256)'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcIdTokenEncryptedResponseAlg — JWE key management algorithm for ID Tokens.
+# Ref: OIDC Registration Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.20
+  NAME 'oidcIdTokenEncryptedResponseAlg'
+  DESC 'JWE key management algorithm for ID Token encryption'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcIdTokenEncryptedResponseEnc — JWE content encryption algorithm for ID Tokens.
+# Default when alg is set: "A128CBC-HS256"
+# Ref: OIDC Registration Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.21
+  NAME 'oidcIdTokenEncryptedResponseEnc'
+  DESC 'JWE content encryption algorithm for ID Tokens (default: A128CBC-HS256)'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcUserInfoSignedResponseAlg — JWS algorithm for UserInfo responses.
+# Ref: OIDC Registration Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.22
+  NAME 'oidcUserInfoSignedResponseAlg'
+  DESC 'JWS algorithm for signed UserInfo responses'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcUserInfoEncryptedResponseAlg — JWE key management algorithm for UserInfo.
+# Ref: OIDC Registration Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.23
+  NAME 'oidcUserInfoEncryptedResponseAlg'
+  DESC 'JWE key management algorithm for UserInfo encryption'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcUserInfoEncryptedResponseEnc — JWE content encryption for UserInfo.
+# Default when alg is set: "A128CBC-HS256"
+# Ref: OIDC Registration Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.24
+  NAME 'oidcUserInfoEncryptedResponseEnc'
+  DESC 'JWE content encryption algorithm for UserInfo (default: A128CBC-HS256)'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcRequestObjectSigningAlg — JWS algorithm for Request Objects.
+# Ref: OIDC Registration Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.25
+  NAME 'oidcRequestObjectSigningAlg'
+  DESC 'JWS algorithm for Request Object signing'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcRequestObjectEncryptionAlg — JWE key management for Request Objects.
+# Ref: OIDC Registration Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.26
+  NAME 'oidcRequestObjectEncryptionAlg'
+  DESC 'JWE key management algorithm for Request Object encryption'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcRequestObjectEncryptionEnc — JWE content encryption for Request Objects.
+# Default when alg is set: "A128CBC-HS256"
+# Ref: OIDC Registration Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.27
+  NAME 'oidcRequestObjectEncryptionEnc'
+  DESC 'JWE content encryption algorithm for Request Objects (default: A128CBC-HS256)'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcTokenEndpointAuthSigningAlg — JWS algorithm for JWT-based client auth.
+# Used with client_secret_jwt and private_key_jwt auth methods.
+# Ref: OIDC Registration Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.28
+  NAME 'oidcTokenEndpointAuthSigningAlg'
+  DESC 'JWS algorithm for JWT-based client authentication at the token endpoint'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+
+# =========================================================================
+# 4. Client subject & sector  (1.3.6.1.4.1.26481.2.10.1.29 – .1.30)
+# =========================================================================
+
+# oidcSubjectType — subject identifier type: "public" or "pairwise".
+# Controls how the sub claim is calculated for this client.
+# Ref: OIDC Registration Section 2, OIDC Core Section 8
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.29
+  NAME 'oidcSubjectType'
+  DESC 'Subject identifier type: public or pairwise'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcSectorIdentifierURI — HTTPS URL for pairwise subject calculation.
+# When subject_type is "pairwise", the host component of this URI (or of
+# the redirect_uri if absent) determines the sector for sub computation.
+# Ref: OIDC Registration Section 2, OIDC Core Section 8.1
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.30
+  NAME 'oidcSectorIdentifierURI'
+  DESC 'HTTPS URL whose host component determines the pairwise sector identifier'
+  EQUALITY caseExactMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+
+# =========================================================================
+# 5. Client behaviour & session  (1.3.6.1.4.1.26481.2.10.1.31 – .1.36)
+# =========================================================================
+
+# oidcDefaultMaxAge — default maximum authentication age in seconds.
+# If set and auth_time exceeds this, re-authentication is required.
+# Ref: OIDC Registration Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.31
+  NAME 'oidcDefaultMaxAge'
+  DESC 'Default maximum authentication age in seconds'
+  EQUALITY integerMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.27
+  SINGLE-VALUE )
+
+# oidcRequireAuthTime — whether auth_time is required in the ID Token.
+# Default: FALSE
+# Ref: OIDC Registration Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.32
+  NAME 'oidcRequireAuthTime'
+  DESC 'Whether auth_time claim is required in the ID Token (default: FALSE)'
+  EQUALITY booleanMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.7
+  SINGLE-VALUE )
+
+# oidcDefaultAcrValues — default Authentication Context Class References.
+# Ref: OIDC Registration Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.33
+  NAME 'oidcDefaultAcrValues'
+  DESC 'Default authentication context class reference value'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+
+# oidcInitiateLoginURI — HTTPS URI for third-party initiated login.
+# Ref: OIDC Registration Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.34
+  NAME 'oidcInitiateLoginURI'
+  DESC 'HTTPS URI the OP may use to initiate login at the client'
+  EQUALITY caseExactMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcRequestURI — pre-registered Request Object URIs.
+# Ref: OIDC Registration Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.35
+  NAME 'oidcRequestURI'
+  DESC 'Pre-registered request_uri value for Request Objects'
+  EQUALITY caseExactMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+
+# oidcPostLogoutRedirectURI — URIs the OP may redirect to after logout.
+# Ref: OIDC Session Management / RP-Initiated Logout
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.36
+  NAME 'oidcPostLogoutRedirectURI'
+  DESC 'URI the OP may redirect to after logout (one value per URI)'
+  EQUALITY caseExactMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+
+
+# =========================================================================
+# 6. Client software & management  (1.3.6.1.4.1.26481.2.10.1.37 – .1.42)
+# =========================================================================
+
+# oidcSoftwareId — UUID identifying the client software.
+# Ref: RFC 7591 Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.37
+  NAME 'oidcSoftwareId'
+  DESC 'UUID identifying the client software package'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcSoftwareVersion — version string of the client software.
+# Ref: RFC 7591 Section 2
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.38
+  NAME 'oidcSoftwareVersion'
+  DESC 'Version string of the client software'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcRegistrationAccessToken — bearer token for the client configuration
+# endpoint (returned on dynamic registration).
+# Ref: RFC 7592 Section 1.1
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.39
+  NAME 'oidcRegistrationAccessToken'
+  DESC 'Bearer token for accessing the client configuration endpoint'
+  EQUALITY caseExactMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcRegistrationClientURI — client configuration endpoint URL.
+# Ref: RFC 7592 Section 1.1
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.40
+  NAME 'oidcRegistrationClientURI'
+  DESC 'URL of the client configuration endpoint for this registration'
+  EQUALITY caseExactMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcClientIdIssuedAt — timestamp when client_id was issued.
+# Ref: RFC 7591 Section 3.2.1
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.41
+  NAME 'oidcClientIdIssuedAt'
+  DESC 'Date and time when the client_id was issued'
+  EQUALITY generalizedTimeMatch
+  ORDERING generalizedTimeOrderingMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.24
+  SINGLE-VALUE )
+
+# oidcClientSecretExpiresAt — timestamp when client_secret expires.
+# Absent or GeneralizedTime far in the future means the secret does not expire.
+# Ref: RFC 7591 Section 3.2.1
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.42
+  NAME 'oidcClientSecretExpiresAt'
+  DESC 'Date and time when the client_secret expires (absent = no expiry)'
+  EQUALITY generalizedTimeMatch
+  ORDERING generalizedTimeOrderingMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.24
+  SINGLE-VALUE )
+
+
+# =========================================================================
+# 7. User/subject OIDC claims  (1.3.6.1.4.1.26481.2.10.1.50 – .1.61)
+#
+# These attributes cover standard OIDC claims (Core Section 5.1) that
+# have NO equivalent in inetOrgPerson / organizationalPerson / person.
+# Claims that already map to existing LDAP attributes are NOT duplicated:
+#
+#   sub              -> uid
+#   name             -> displayName / cn
+#   given_name       -> givenName
+#   family_name      -> sn
+#   email            -> mail
+#   phone_number     -> telephoneNumber
+#   locale           -> preferredLanguage
+#   address.street   -> street
+#   address.locality -> l  (localityName)
+#   address.region   -> st (stateOrProvinceName)
+#   address.postal   -> postalCode
+#   address.country  -> c  (countryName)
+# =========================================================================
+
+# oidcEmailVerified — whether the user's email address has been verified.
+# Ref: OIDC Core Section 5.1 (email scope)
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.50
+  NAME 'oidcEmailVerified'
+  DESC 'Whether the user e-mail address has been verified by the OP'
+  EQUALITY booleanMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.7
+  SINGLE-VALUE )
+
+# oidcPhoneNumberVerified — whether the user's phone number has been verified.
+# Ref: OIDC Core Section 5.1 (phone scope)
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.51
+  NAME 'oidcPhoneNumberVerified'
+  DESC 'Whether the user phone number has been verified by the OP'
+  EQUALITY booleanMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.7
+  SINGLE-VALUE )
+
+# oidcGender — user's gender.
+# Values: "female", "male", or other free-form values.
+# Ref: OIDC Core Section 5.1 (profile scope)
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.52
+  NAME 'oidcGender'
+  DESC 'User gender (e.g. female, male, or other value)'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcBirthdate — user's date of birth in ISO 8601 YYYY-MM-DD format.
+# Year 0000 indicates the year is omitted.
+# Ref: OIDC Core Section 5.1 (profile scope)
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.53
+  NAME 'oidcBirthdate'
+  DESC 'User date of birth in ISO 8601 YYYY-MM-DD format (0000 = year omitted)'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcZoneinfo — IANA Time Zone Database identifier for the user.
+# Example: "America/New_York", "Europe/London"
+# Ref: OIDC Core Section 5.1 (profile scope)
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.54
+  NAME 'oidcZoneinfo'
+  DESC 'User time zone from the IANA Time Zone Database (e.g. America/New_York)'
+  EQUALITY caseExactMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcNickname — casual name the user may wish to be known by.
+# May or may not be the same as given_name.
+# Ref: OIDC Core Section 5.1 (profile scope)
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.55
+  NAME 'oidcNickname'
+  DESC 'Casual name the user wishes to be known by'
+  EQUALITY caseIgnoreMatch
+  SUBSTR caseIgnoreSubstringsMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcMiddleName — user's middle name(s).
+# inetOrgPerson "initials" is not a suitable substitute.
+# Ref: OIDC Core Section 5.1 (profile scope)
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.56
+  NAME 'oidcMiddleName'
+  DESC 'User middle name(s)'
+  EQUALITY caseIgnoreMatch
+  SUBSTR caseIgnoreSubstringsMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcPicture — URL of the user's profile photo.
+# Must reference an image file, not a page containing an image.
+# inetOrgPerson jpegPhoto stores binary data; this is a URL instead.
+# Ref: OIDC Core Section 5.1 (profile scope)
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.57
+  NAME 'oidcPicture'
+  DESC 'URL of the user profile photo (image file, not a web page)'
+  EQUALITY caseExactMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcProfile — URL of the user's profile page.
+# Ref: OIDC Core Section 5.1 (profile scope)
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.58
+  NAME 'oidcProfile'
+  DESC 'URL of the user profile page'
+  EQUALITY caseExactMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcWebsite — URL of the user's web page or blog.
+# Ref: OIDC Core Section 5.1 (profile scope)
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.59
+  NAME 'oidcWebsite'
+  DESC 'URL of the user web page or blog'
+  EQUALITY caseExactMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+# oidcUpdatedAt — timestamp of the last update to the user's OIDC profile.
+# The OIDC spec uses a JSON number (Unix epoch), but GeneralizedTime is
+# the natural LDAP representation.
+# Ref: OIDC Core Section 5.1 (profile scope)
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.60
+  NAME 'oidcUpdatedAt'
+  DESC 'Date and time the user profile information was last updated'
+  EQUALITY generalizedTimeMatch
+  ORDERING generalizedTimeOrderingMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.24
+  SINGLE-VALUE )
+
+# oidcConsentRecord — encoded consent grant; one value per client.
+#
+# Record format (fields delimited by '|'):
+#   clientId | scope1,scope2,... | grantedAt | expiresAt
+#
+# Field descriptions:
+#   clientId    oidcClientId of the relying party
+#   scopes      comma-separated scope names the user approved
+#   grantedAt   ISO 8601 UTC timestamp when consent was given
+#   expiresAt   ISO 8601 UTC timestamp when consent expires,
+#               or empty for no expiry
+#
+# Example:
+#   myapp-web|openid,profile,email|2025-06-28T12:00:00Z|
+#
+# Ref: no OIDC spec — implementation-specific consent storage
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.61
+  NAME 'oidcConsentRecord'
+  DESC 'Encoded OIDC consent grant record (clientId|scopes|grantedAt|expiresAt)'
+  EQUALITY caseExactMatch
+  SUBSTR caseExactSubstringsMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+
+
+# =========================================================================
+# Object Classes  (1.3.6.1.4.1.26481.2.10.2.x)
+# =========================================================================
+
+# oidcRelyingParty — an OpenID Connect client (Relying Party) registration.
+# One entry per registered client, keyed by oidcClientId.
+#
+# Typical DN: oidcClientId=<id>,ou=oidc,dc=example,dc=com
+objectclass ( 1.3.6.1.4.1.26481.2.10.2.1
+  NAME 'oidcRelyingParty'
+  DESC 'OpenID Connect Relying Party (client) registration'
+  SUP top
+  STRUCTURAL
+  MUST ( oidcClientId )
+  MAY ( oidcClientSecret $
+        oidcRedirectURI $
+        oidcResponseType $
+        oidcGrantType $
+        oidcApplicationType $
+        oidcTokenEndpointAuthMethod $
+        oidcScope $
+        oidcClientName $
+        oidcClientURI $
+        oidcLogoURI $
+        oidcPolicyURI $
+        oidcTosURI $
+        oidcContact $
+        oidcJwksURI $
+        oidcJwks $
+        oidcIdTokenSignedResponseAlg $
+        oidcIdTokenEncryptedResponseAlg $
+        oidcIdTokenEncryptedResponseEnc $
+        oidcUserInfoSignedResponseAlg $
+        oidcUserInfoEncryptedResponseAlg $
+        oidcUserInfoEncryptedResponseEnc $
+        oidcRequestObjectSigningAlg $
+        oidcRequestObjectEncryptionAlg $
+        oidcRequestObjectEncryptionEnc $
+        oidcTokenEndpointAuthSigningAlg $
+        oidcSubjectType $
+        oidcSectorIdentifierURI $
+        oidcDefaultMaxAge $
+        oidcRequireAuthTime $
+        oidcDefaultAcrValues $
+        oidcInitiateLoginURI $
+        oidcRequestURI $
+        oidcPostLogoutRedirectURI $
+        oidcSoftwareId $
+        oidcSoftwareVersion $
+        oidcRegistrationAccessToken $
+        oidcRegistrationClientURI $
+        oidcClientIdIssuedAt $
+        oidcClientSecretExpiresAt $
+        description ) )
+
+# oidcSubject — auxiliary class for LDAP users that participate in OIDC.
+# Adds standard OIDC claims that inetOrgPerson does not provide, plus
+# per-user consent records.  Attach to existing posixAccount /
+# inetOrgPerson entries.
+objectclass ( 1.3.6.1.4.1.26481.2.10.2.2
+  NAME 'oidcSubject'
+  DESC 'User with OpenID Connect claims and consent records'
+  SUP top
+  AUXILIARY
+  MAY ( oidcEmailVerified $
+        oidcPhoneNumberVerified $
+        oidcGender $
+        oidcBirthdate $
+        oidcZoneinfo $
+        oidcNickname $
+        oidcMiddleName $
+        oidcPicture $
+        oidcProfile $
+        oidcWebsite $
+        oidcUpdatedAt $
+        oidcConsentRecord ) )

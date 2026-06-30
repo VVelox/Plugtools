@@ -38,6 +38,12 @@
              href="/netgroups">Netgroups</a>
         </li>
         % }
+        % if (pt->oidcbaseConfigured) {
+        <li class="nav-item">
+          <a class="nav-link<%= $self->req->url->path =~ m{^/oidc} ? ' active' : '' %>"
+             href="/oidc">OIDC Clients</a>
+        </li>
+        % }
       </ul>
       <ul class="navbar-nav ms-auto">
         <li class="nav-item">

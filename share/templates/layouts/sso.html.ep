@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><%= title %> — Nisaba SSO</title>
+  <link rel="stylesheet" href="/bootstrap/css/bootstrap.min.css">
+  <style>
+    body { padding-top: 56px; font-size: 0.9rem; }
+    .navbar-brand { color: #dc3545 !important; font-weight: 700; letter-spacing: 2px; font-size: 1.1rem; }
+    .form-label { font-size: 0.78rem; color: #adb5bd; margin-bottom: 2px; }
+  </style>
+</head>
+<body>
+
+<nav class="navbar navbar-dark bg-dark fixed-top border-bottom border-danger border-opacity-25">
+  <div class="container-fluid justify-content-center">
+    <span class="navbar-brand">&#128296; Nisaba SSO</span>
+  </div>
+</nav>
+
+<div class="container mt-4" style="max-width: 480px;">
+
+  % if (my $err = flash('error')) {
+  <div class="alert alert-danger alert-dismissible fade show" role="alert">
+    <strong>Error:</strong> <%= $err %>
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  % }
+
+  <%= content %>
+
+</div>
+
+<script src="/bootstrap/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

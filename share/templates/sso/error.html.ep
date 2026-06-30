@@ -1,0 +1,8 @@
+% title 'Error';
+
+<div class="card border-danger mt-4">
+  <div class="card-header text-danger fw-bold"><%= $error_title %></div>
+  <div class="card-body">
+    <p><%= $error_description %></p>
+  </div>
+</div>

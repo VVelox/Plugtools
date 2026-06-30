@@ -67,6 +67,7 @@ sub _install_stubs {
 		error                     => sub { 0 },
 		errorString               => sub { '' },
 		netgroupbaseConfigured    => sub { 1 },
+		oidcbaseConfigured        => sub { 0 },
 		getNetgroups              => sub { [ $ng_alpha, $ng_beta ] },
 		getNetgroupEntry          => sub { $ng_alpha },
 		addNetgroup               => sub { },
