@@ -16,25 +16,39 @@
         <th data-col="0" data-type="text"   class="sortable">Client ID <span class="sort-icon"></span></th>
         <th data-col="1" data-type="text"   class="sortable">Name <span class="sort-icon"></span></th>
         <th data-col="2" data-type="text"   class="sortable">Type <span class="sort-icon"></span></th>
-        <th data-col="3" data-type="number" class="sortable">Redirect URIs <span class="sort-icon"></span></th>
-        <th data-col="4" data-type="text"   class="sortable">Scopes <span class="sort-icon"></span></th>
+        <th data-col="3" data-type="text"   class="sortable">Auth Method <span class="sort-icon"></span></th>
+        <th data-col="4" data-type="number" class="sortable">Redirect URIs <span class="sort-icon"></span></th>
+        <th data-col="5" data-type="text"   class="sortable">Scopes <span class="sort-icon"></span></th>
+        <th data-col="6" data-type="text"   class="sortable">Grant Types <span class="sort-icon"></span></th>
       </tr>
     </thead>
     <tbody>
       % for my $entry (@{$clients}) {
-      % my $id   = $entry->get_value('oidcClientId')   // '';
-      % my $name = $entry->get_value('oidcClientName')  // '';
-      % my $type = $entry->get_value('oidcApplicationType') // 'web';
-      % my @uris = $entry->get_value('oidcRedirectURI');
+      % my $id     = $entry->get_value('oidcClientId')                 // '';
+      % my $name   = $entry->get_value('oidcClientName')               // '';
+      % my $type   = $entry->get_value('oidcApplicationType')          // 'web';
+      % my $auth   = $entry->get_value('oidcTokenEndpointAuthMethod')  // 'client_secret_basic';
+      % my %am_labels = ('client_secret_basic'=>'HTTP Basic', 'client_secret_post'=>'POST Body',
+      %   'client_secret_jwt'=>'JWT (Shared Secret)', 'private_key_jwt'=>'JWT (Private Key)', 'none'=>'None (Public)');
+      % my @uris   = $entry->get_value('oidcRedirectURI');
       % my @scopes = $entry->get_value('oidcScope');
+      % my @grants = $entry->get_value('oidcGrantType');
       <tr>
         <td><a href="/oidc/<%= $id %>"><%= $id %></a></td>
         <td><%= $name %></td>
         <td><span class="badge bg-<%= $type eq 'native' ? 'info' : 'secondary' %>"><%= $type %></span></td>
+        <td><small><%= $am_labels{$auth} // $auth %></small></td>
         <td data-sort="<%= scalar @uris %>"><%= scalar @uris %></td>
         <td>
           % if (@scopes) {
             <small class="text-muted"><%= join(', ', sort @scopes) %></small>
+          % } else {
+            <span class="text-muted">-</span>
+          % }
+        </td>
+        <td>
+          % if (@grants) {
+            <small class="text-muted"><%= join(', ', sort @grants) %></small>
           % } else {
             <span class="text-muted">-</span>
           % }

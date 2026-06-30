@@ -9083,6 +9083,8 @@ sub addOIDCClient {
 	push @attrs, oidcLogoURI     => $args{logoURI}     if defined $args{logoURI}     && $args{logoURI} ne '';
 	push @attrs, oidcPolicyURI   => $args{policyURI}   if defined $args{policyURI}   && $args{policyURI} ne '';
 	push @attrs, oidcTosURI      => $args{tosURI}      if defined $args{tosURI}      && $args{tosURI} ne '';
+	push @attrs, oidcIdTokenSignedResponseAlg => $args{idTokenSignedResponseAlg}
+		if defined $args{idTokenSignedResponseAlg} && $args{idTokenSignedResponseAlg} ne '';
 
 	if ( defined $args{redirectURIs} && ref $args{redirectURIs} eq 'ARRAY' && @{ $args{redirectURIs} } ) {
 		push @attrs, oidcRedirectURI => $args{redirectURIs};

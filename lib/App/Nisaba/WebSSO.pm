@@ -120,6 +120,9 @@ sub startup {
 	# OIDC discovery
 	$r->get('/.well-known/openid-configuration')->to('s_s_o#discovery')->name('sso_discovery');
 
+	# JWKS endpoint (public keys for token verification)
+	$r->get('/jwks')->to('s_s_o#jwks')->name('sso_jwks');
+
 	# Authorization endpoint
 	$r->get('/authorize')->to('s_s_o#authorize')->name('sso_authorize');
 

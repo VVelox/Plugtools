@@ -11,6 +11,8 @@ $ENV{NISABA_CONFIG} = $pt_config if defined $pt_config;
 use Mojolicious::Commands;
 Mojolicious::Commands->start_app('App::Nisaba::WebSSO');
 
+=encoding UTF-8
+
 =head1 NAME
 
 mojo_nisaba_sso - OpenID Connect SSO provider for App::Nisaba
@@ -70,6 +72,257 @@ for the SSO provider to start.
 The issuer identifier for this OpenID Provider. This should be the
 base URL of the SSO provider (e.g. C<https://sso.example.com>).
 Defaults to the request URL origin if not set.
+
+=head1 ENDPOINTS
+
+    /.well-known/openid-configuration   OIDC Discovery document
+    /jwks                               JSON Web Key Set (public keys)
+    /authorize                          Authorization endpoint
+    /token                              Token endpoint
+    /userinfo                           UserInfo endpoint
+    /sso/login                          Login form (GET) and submission (POST)
+    /sso/totp                           TOTP challenge (GET/POST)
+    /sso/consent                        Consent screen (GET/POST)
+    /sso/passkeys/login/start           Passkey authentication start (GET)
+    /sso/passkeys/login/finish          Passkey authentication finish (POST)
+
+=head1 SCOPES AND CLAIMS
+
+The SSO provider supports the standard OIDC scopes.  Each scope controls
+which claims (user attributes) are included in the C</userinfo> response
+and, for a subset, in the ID token JWT itself.
+
+Claim values are read from the authenticated user's LDAP entry.  Standard
+claims come from common C<inetOrgPerson> attributes that are available on
+any user entry.  Several OIDC-specific claims require the user entry to
+carry the B<oidcSubject> auxiliary objectClass (defined in
+F<schemas/oidc.schema>); these are marked with an asterisk (*) below and
+are silently omitted when the objectClass is absent.
+
+=head2 openid (required)
+
+Always required by the OIDC specification.  Provides only the subject
+identifier.
+
+    Claim   LDAP attribute
+    -----   --------------
+    sub     uid
+
+=head2 profile
+
+Identity and preference information.
+
+    Claim                LDAP attribute          Notes
+    -----                --------------          -----
+    name                 displayName (or cn)     Falls back to cn
+    given_name           givenName
+    family_name          sn
+    preferred_username   (same as sub)
+    locale               preferredLanguage
+    nickname           * oidcNickname
+    middle_name        * oidcMiddleName
+    picture            * oidcPicture
+    profile            * oidcProfile
+    website            * oidcWebsite
+    gender             * oidcGender
+    birthdate          * oidcBirthdate            ISO 8601 (YYYY-MM-DD)
+    zoneinfo           * oidcZoneinfo             IANA time-zone ID
+
+=head2 email
+
+    Claim            LDAP attribute          Notes
+    -----            --------------          -----
+    email            mail
+    email_verified * oidcEmailVerified       LDAP TRUE/FALSE -> JSON boolean
+
+=head2 phone
+
+    Claim                    LDAP attribute              Notes
+    -----                    --------------              -----
+    phone_number             telephoneNumber
+    phone_number_verified  * oidcPhoneNumberVerified     LDAP TRUE/FALSE -> JSON boolean
+
+=head2 address
+
+Returns a single JSON object with the following sub-fields:
+
+    Claim               LDAP attribute
+    -----               --------------
+    street_address      street
+    locality            l
+    region              st
+    postal_code         postalCode
+    country             c
+
+=head2 ID token vs UserInfo
+
+The ID token JWT (returned from C</token>) includes only a small subset
+of claims: C<sub>, C<name>, C<given_name>, C<family_name>, and C<email>
+(when the corresponding scopes are granted).  The full set of claims for
+all granted scopes is available from the C</userinfo> endpoint.
+
+=head2 Conditional inclusion
+
+Every claim except C<sub> is only included in the response when the
+underlying LDAP attribute has a value.  No empty strings or null values
+are emitted.
+
+=head1 APACHE mod_auth_openidc CONFIGURATION
+
+C<mod_auth_openidc> is an Apache module that implements an OIDC Relying
+Party. Below is a complete example of configuring it to authenticate
+against a Nisaba SSO provider.
+
+=head2 Prerequisites
+
+=over 4
+
+=item *
+
+Install C<mod_auth_openidc> (e.g. C<pkg install ap24-mod_auth_openidc>
+on FreeBSD, C<apt install libapache2-mod-auth-openidc> on Debian/Ubuntu).
+
+=item *
+
+Register an OIDC client in the Nisaba admin UI (L<App::Nisaba::Web>).
+The admin UI will auto-generate a B<Client ID> and B<Client Secret> —
+copy both. Set the redirect URI to
+C<https://your-app.example.com/redirect_uri> (or whatever
+C<OIDCRedirectURI> you configure below).
+
+=back
+
+=head2 Minimal Apache configuration
+
+    # Load the module
+    LoadModule auth_openidc_module libexec/apache24/mod_auth_openidc.so
+
+    # Point to the Nisaba SSO discovery document.
+    # mod_auth_openidc will fetch all endpoint URLs from here.
+    OIDCProviderMetadataURL https://sso.example.com/.well-known/openid-configuration
+
+    # Client credentials from the Nisaba admin UI
+    OIDCClientID        <your-client-id>
+    OIDCClientSecret    <your-client-secret>
+
+    # Where mod_auth_openidc receives the authorization response.
+    # This URI must be registered as a redirect URI on the OIDC client.
+    OIDCRedirectURI     https://your-app.example.com/redirect_uri
+
+    # A random passphrase used to encrypt the session cookie.
+    # Generate one with:  openssl rand -hex 32
+    OIDCCryptoPassphrase <random-passphrase>
+
+    # Protect a location
+    <Location /protected>
+        AuthType openid-connect
+        Require valid-user
+    </Location>
+
+=head2 Common options
+
+    # Scopes to request (space-separated).
+    # "openid" is always required; add profile, email, phone, address
+    # as needed.
+    OIDCScope "openid profile email"
+
+    # How long (seconds) before re-checking the user's session.
+    OIDCSessionInactivityTimeout 3600
+
+    # Pass OIDC claims as environment variables / request headers
+    # so the backend application can use them.
+    OIDCRemoteUserClaim sub
+    # or use "email" to set REMOTE_USER to the user's email:
+    # OIDCRemoteUserClaim email
+
+=head2 Passing claims to a backend
+
+When C<AuthType openid-connect> is active, mod_auth_openidc sets
+several environment variables and headers that a backend (CGI, FCGI,
+reverse proxy, etc.) can read:
+
+    REMOTE_USER                — the claim configured by OIDCRemoteUserClaim
+    OIDC_CLAIM_sub             — subject identifier
+    OIDC_CLAIM_name            — full display name
+    OIDC_CLAIM_email           — email address
+    OIDC_CLAIM_given_name      — first name
+    OIDC_CLAIM_family_name     — last name
+    OIDC_CLAIM_preferred_username — username
+
+To forward these as HTTP headers to a proxied application:
+
+    OIDCPassClaimsAs headers
+
+    <Location /app>
+        AuthType openid-connect
+        Require valid-user
+        ProxyPass        http://127.0.0.1:8080/app
+        ProxyPassReverse http://127.0.0.1:8080/app
+    </Location>
+
+The backend will receive headers like C<OIDC_CLAIM_email>,
+C<OIDC_CLAIM_name>, etc.
+
+=head2 Restricting access by claim
+
+    # Only allow users whose email ends in @example.com
+    <Location /staff-only>
+        AuthType openid-connect
+        Require claim email:~@example\.com$
+    </Location>
+
+    # Only allow a specific user
+    <Location /admin>
+        AuthType openid-connect
+        Require claim sub:jdoe
+    </Location>
+
+=head2 Logout
+
+To enable RP-initiated logout, configure a logout URL:
+
+    OIDCProviderEndSessionEndpoint https://sso.example.com/sso/logout
+
+    # Users visiting this URL will be logged out of both
+    # mod_auth_openidc and the Nisaba SSO session.
+    <Location /logout>
+        AuthType openid-connect
+        Require valid-user
+        # The redirect= parameter controls where the user lands after logout
+        OIDCUnAuthAction 302:/logged-out.html
+    </Location>
+
+=head2 Full example with reverse proxy
+
+    <VirtualHost *:443>
+        ServerName app.example.com
+
+        SSLEngine on
+        SSLCertificateFile    /etc/ssl/certs/app.pem
+        SSLCertificateKeyFile /etc/ssl/private/app.key
+
+        OIDCProviderMetadataURL https://sso.example.com/.well-known/openid-configuration
+        OIDCClientID            a1b2c3d4e5f6g7h8i9j0k1l2
+        OIDCClientSecret        AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_ABCDEFGH
+        OIDCRedirectURI         https://app.example.com/redirect_uri
+        OIDCCryptoPassphrase    a7f2e91d...
+        OIDCScope               "openid profile email"
+        OIDCRemoteUserClaim     email
+        OIDCPassClaimsAs        headers
+
+        <Location />
+            AuthType openid-connect
+            Require valid-user
+            ProxyPass        http://127.0.0.1:3000/
+            ProxyPassReverse http://127.0.0.1:3000/
+        </Location>
+
+        # The redirect_uri must NOT be proxied
+        <Location /redirect_uri>
+            AuthType openid-connect
+            Require valid-user
+        </Location>
+    </VirtualHost>
 
 =head1 SEE ALSO
 

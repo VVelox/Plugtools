@@ -3,8 +3,10 @@ package App::Nisaba::WebSSO::Controller::SSO;
 use Mojo::Base 'Mojolicious::Controller';
 use Mojo::URL;
 use Mojo::Util   qw(b64_encode b64_decode);
+use Mojo::JSON   qw(decode_json);
 use MIME::Base64 ();
 use Digest::SHA  qw(sha256);
+use Crypt::PK::RSA;
 
 # --------------------------------------------------------------------------- #
 # Helpers
@@ -68,8 +70,9 @@ sub discovery {
 			response_types_supported              => ['code'],
 			grant_types_supported                 => ['authorization_code'],
 			subject_types_supported               => [ 'public', 'pairwise' ],
-			id_token_signing_alg_values_supported => ['none'],
-			scopes_supported                      => [ 'openid', 'profile', 'email', 'phone', 'address' ],
+			jwks_uri                              => "$issuer/jwks",
+			id_token_signing_alg_values_supported => [ 'RS256',               'HS256',   'none' ],
+			scopes_supported                      => [ 'openid',              'profile', 'email', 'phone', 'address' ],
 			token_endpoint_auth_methods_supported => [ 'client_secret_basic', 'client_secret_post', 'none', ],
 			claims_supported                      => [
 				'sub',          'name',                  'given_name',         'family_name',
@@ -82,6 +85,38 @@ sub discovery {
 		}
 	);
 } ## end sub discovery
+
+# --------------------------------------------------------------------------- #
+# JWKS endpoint — serves public keys for all clients that have oidcJwks set
+# --------------------------------------------------------------------------- #
+
+sub jwks {
+	my $self = shift;
+
+	my @all_keys;
+	my $clients;
+	eval { $clients = $self->pt->getOIDCClients };
+	$clients //= [];
+
+	for my $entry (@$clients) {
+		my $jwks_json = $entry->get_value('oidcJwks');
+		next unless $jwks_json;
+		eval {
+			my $jwks = decode_json($jwks_json);
+			if ( $jwks->{keys} && ref $jwks->{keys} eq 'ARRAY' ) {
+				for my $key ( @{ $jwks->{keys} } ) {
+					# Only expose public components
+					my %pub = map { $_ => $key->{$_} }
+						grep { defined $key->{$_} } qw(kty n e kid use alg key_ops);
+					$pub{use} //= 'sig';
+					push @all_keys, \%pub;
+				}
+			}
+		};
+	} ## end for my $entry (@$clients)
+
+	$self->render( json => { keys => \@all_keys } );
+} ## end sub jwks
 
 # --------------------------------------------------------------------------- #
 # Authorization endpoint
@@ -655,9 +690,6 @@ sub _build_id_token {
 	my $now      = time();
 	my $lifetime = $self->pt->{ini}->{''}->{ssoTokenLifetime} // 3600;
 
-	# JWT header (alg=none)
-	my $header = _b64url_encode('{"alg":"none","typ":"JWT"}');
-
 	# JWT payload
 	my %payload = (
 		iss => $issuer,
@@ -689,7 +721,51 @@ sub _build_id_token {
 	my $json_payload = Mojo::JSON::encode_json( \%payload );
 	my $body         = _b64url_encode($json_payload);
 
-	# alg=none: header.payload.
+	# Determine signing algorithm from client entry
+	my $client_entry;
+	eval { $client_entry = $self->pt->getOIDCClientEntry( { clientId => $client_id } ) };
+
+	my $alg = 'none';
+	my $jwks_json;
+	if ($client_entry) {
+		$alg       = $client_entry->get_value('oidcIdTokenSignedResponseAlg') // 'none';
+		$jwks_json = $client_entry->get_value('oidcJwks');
+	}
+
+	if ( $alg eq 'RS256' && $jwks_json ) {
+		# Sign with the client's RSA private key
+		my $jwks = eval { decode_json($jwks_json) };
+		if ( $jwks && $jwks->{keys} && @{ $jwks->{keys} } ) {
+			my $jwk    = $jwks->{keys}[0];
+			my $kid    = $jwk->{kid} // '';
+			my $header = _b64url_encode( Mojo::JSON::encode_json( { alg => 'RS256', typ => 'JWT', kid => $kid } ) );
+			my $signing_input = "$header.$body";
+
+			my $rsa = Crypt::PK::RSA->new;
+			eval { $rsa->import_key($jwk) };
+			if ( !$@ ) {
+				my $sig     = $rsa->sign_message( $signing_input, 'SHA256', 'v1.5' );
+				my $sig_b64 = _b64url_encode($sig);
+				return "$signing_input.$sig_b64";
+			}
+		} ## end if ( $jwks && $jwks->{keys} && @{ $jwks->{...}})
+		# Fall through to alg=none if signing fails
+	} elsif ( $alg eq 'HS256' && $client_entry ) {
+		# Sign with the client secret using HMAC-SHA256
+		my $secret = $client_entry->get_value('oidcClientSecret') // '';
+		if ( $secret ne '' ) {
+			my $header        = _b64url_encode('{"alg":"HS256","typ":"JWT"}');
+			my $signing_input = "$header.$body";
+			require Digest::SHA;
+			my $sig     = Digest::SHA::hmac_sha256( $signing_input, $secret );
+			my $sig_b64 = _b64url_encode($sig);
+			return "$signing_input.$sig_b64";
+		}
+		# Fall through to alg=none if no secret
+	} ## end elsif ( $alg eq 'HS256' && $client_entry )
+
+	# alg=none fallback: header.payload.
+	my $header = _b64url_encode('{"alg":"none","typ":"JWT"}');
 	return "$header.$body.";
 } ## end sub _build_id_token
 

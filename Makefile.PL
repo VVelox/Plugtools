@@ -19,6 +19,7 @@ my %WriteMakefileArgs = (
 		'src_bin/plgadd', 'src_bin/plgclean', 'src_bin/plgmod',  'src_bin/plgrm',
 		'src_bin/pluadd', 'src_bin/plumod',   'src_bin/plupass', 'src_bin/plurm',
 		'src_bin/mojo_nisaba',
+		'src_bin/mojo_nisaba_sso',
 	],
 	CONFIGURE_REQUIRES => {
 		'ExtUtils::MakeMaker'     => '0',
@@ -44,6 +45,7 @@ my %WriteMakefileArgs = (
 		'File::ShareDir::Install'           => '0.13',
 		'Authen::TOTP'                      => 0,
 		'Imager::QRCode'                    => 0,
+		'CryptX'                            => 0,
 	},
 	dist  => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
 	clean => { FILES    => 'App-Nisaba-*' },

@@ -8,9 +8,115 @@
   </ol>
 </nav>
 
+<%
+  # ── Modal specification arrays ──
+  # Each entry: [action, ldap_attr, label, type, options_arrayref_or_undef]
+  #   type: 'text', 'url', 'select', 'number', 'bool'
+
+  my @core_fields = (
+    ['clientName',   'oidcClientName',   'Client Name',   'text',   undef],
+    ['clientSecret', 'oidcClientSecret', 'Client Secret', 'secret', undef],
+  );
+
+  my @core_select_fields = (
+    ['applicationType', 'oidcApplicationType',          'Application Type',   'select', [qw(web native)]],
+    ['subjectType',     'oidcSubjectType',              'Subject Type',       'select', [qw(public pairwise)]],
+  );
+
+  # Auth method options: [value, short_label, description]
+  my @auth_methods = (
+    ['client_secret_basic', 'HTTP Basic',           'Client sends ID and secret via HTTP Basic Authorization header'],
+    ['client_secret_post',  'POST Body',            'Client sends ID and secret as POST form parameters'],
+    ['client_secret_jwt',   'JWT (Shared Secret)',   'Client authenticates with a JWT signed using the client secret (HMAC)'],
+    ['private_key_jwt',     'JWT (Private Key)',     'Client authenticates with a JWT signed using its own private key (RSA/EC)'],
+    ['none',                'None (Public Client)',  'No client authentication — for public/native clients that have no secret'],
+  );
+
+  my @uri_fields = (
+    ['clientURI',           'oidcClientURI',           'Client URI'],
+    ['logoURI',             'oidcLogoURI',             'Logo URI'],
+    ['policyURI',           'oidcPolicyURI',           'Policy URI'],
+    ['tosURI',              'oidcTosURI',              'ToS URI'],
+    ['jwksURI',             'oidcJwksURI',             'JWKS URI'],
+    ['initiateLoginURI',    'oidcInitiateLoginURI',    'Initiate Login URI'],
+    ['sectorIdentifierURI', 'oidcSectorIdentifierURI', 'Sector Identifier URI'],
+  );
+
+  my @crypto_fields = (
+    ['idTokenSignedResponseAlg',     'oidcIdTokenSignedResponseAlg',     'ID Token Signing Alg'],
+    ['idTokenEncryptedResponseAlg',  'oidcIdTokenEncryptedResponseAlg',  'ID Token Encryption Alg'],
+    ['idTokenEncryptedResponseEnc',  'oidcIdTokenEncryptedResponseEnc',  'ID Token Encryption Enc'],
+    ['userInfoSignedResponseAlg',    'oidcUserInfoSignedResponseAlg',    'UserInfo Signing Alg'],
+    ['userInfoEncryptedResponseAlg', 'oidcUserInfoEncryptedResponseAlg', 'UserInfo Encryption Alg'],
+    ['userInfoEncryptedResponseEnc', 'oidcUserInfoEncryptedResponseEnc', 'UserInfo Encryption Enc'],
+    ['requestObjectSigningAlg',      'oidcRequestObjectSigningAlg',      'Request Object Signing Alg'],
+    ['requestObjectEncryptionAlg',   'oidcRequestObjectEncryptionAlg',   'Request Object Encryption Alg'],
+    ['requestObjectEncryptionEnc',   'oidcRequestObjectEncryptionEnc',   'Request Object Encryption Enc'],
+    ['tokenEndpointAuthSigningAlg',  'oidcTokenEndpointAuthSigningAlg',  'Token Endpoint Auth Signing Alg'],
+  );
+
+  my @meta_fields = (
+    ['defaultMaxAge',  'oidcDefaultMaxAge',  'Default Max Age',    'number'],
+    ['requireAuthTime','oidcRequireAuthTime', 'Require Auth Time',  'text'],
+    ['softwareId',     'oidcSoftwareId',      'Software ID',        'text'],
+    ['softwareVersion','oidcSoftwareVersion', 'Software Version',   'text'],
+  );
+
+  # Multi-value sections: [action_prefix, ldap_attr, label, input_type, placeholder, confirm_msg]
+  my @multi_sections = (
+    ['redirectURI',           'oidcRedirectURI',           'Redirect URIs',              'url',   'https://...', 'Remove this redirect URI?'],
+    ['postLogoutRedirectURI', 'oidcPostLogoutRedirectURI', 'Post-Logout Redirect URIs',  'url',   'https://...', 'Remove this post-logout redirect URI?'],
+  );
+
+  my @multi_tag_sections = (
+    ['scope',        'oidcScope',        'Scopes',         'text', 'scope name',           'Remove this scope?'],
+    ['grantType',    'oidcGrantType',    'Grant Types',    'text', 'grant type',           'Remove this grant type?'],
+    ['responseType', 'oidcResponseType', 'Response Types', 'text', 'e.g. code',            'Remove this response type?'],
+  );
+%>
+
+<!-- Generated credentials (shown once after creation or regeneration) -->
+% my $new_id     = flash('new_client_id');
+% my $new_secret = flash('new_client_secret');
+% if ($new_id || $new_secret) {
+<div class="alert alert-success alert-dismissible mb-4" role="alert">
+  % if ($new_id) {
+  <h5 class="alert-heading mb-3">Client registered — copy these credentials now</h5>
+  % } else {
+  <h5 class="alert-heading mb-3">New client secret generated — copy it now</h5>
+  % }
+  <div class="row g-3">
+    % if ($new_id) {
+    <div class="col-md-6">
+      <label class="form-label fw-bold">Client ID</label>
+      <div class="input-group">
+        <input type="text" class="form-control font-monospace" id="new-client-id"
+               value="<%= $new_id %>" readonly>
+        <button class="btn btn-outline-secondary oidc-copy-btn" type="button"
+                data-copy="<%= $new_id %>">Copy</button>
+      </div>
+    </div>
+    % }
+    % if ($new_secret) {
+    <div class="col-md-6">
+      <label class="form-label fw-bold">Client Secret</label>
+      <div class="input-group">
+        <input type="text" class="form-control font-monospace" id="new-client-secret"
+               value="<%= $new_secret %>" readonly>
+        <button class="btn btn-outline-secondary oidc-copy-btn" type="button"
+                data-copy="<%= $new_secret %>">Copy</button>
+      </div>
+      <div class="form-text text-danger">Save this secret now — it will not be shown again.</div>
+    </div>
+    % }
+  </div>
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+% }
+
 <div class="row g-4">
 
-  <!-- Identity & Core -->
+  <!-- ═══ Identity & Core ═══ -->
   <div class="col-md-6">
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
@@ -23,7 +129,12 @@
           <tbody>
             <tr>
               <th class="ps-3" style="width:40%">Client ID</th>
-              <td><code><%= $entry->get_value('oidcClientId') %></code></td>
+              <td>
+                <code><%= $entry->get_value('oidcClientId') %></code>
+                <button class="btn btn-sm btn-link py-0 px-1 oidc-copy-btn"
+                        title="Copy to clipboard"
+                        data-copy="<%= $entry->get_value('oidcClientId') %>">&#x1f4cb;</button>
+              </td>
               <td></td>
             </tr>
             <tr>
@@ -48,28 +159,36 @@
                         data-bs-toggle="modal" data-bs-target="#modal-clientSecret">&#9998;</button>
               </td>
             </tr>
+            % for my $sf (@core_select_fields) {
             <tr>
-              <th class="ps-3">Application Type</th>
-              <td><%= $entry->get_value('oidcApplicationType') // 'web' %></td>
+              <th class="ps-3"><%= $sf->[2] %></th>
+              <td>
+                % my $sv = $entry->get_value($sf->[1]);
+                % if (defined $sv && $sv ne '') {
+                  <%= $sv %>
+                % } else {
+                  <span class="text-muted">-</span>
+                % }
+              </td>
               <td class="text-end pe-3">
                 <button class="btn btn-sm btn-outline-secondary py-0"
-                        data-bs-toggle="modal" data-bs-target="#modal-applicationType">&#9998;</button>
+                        data-bs-toggle="modal" data-bs-target="#modal-<%= $sf->[0] %>">&#9998;</button>
               </td>
             </tr>
+            % }
+            <%
+              my $cur_am = $entry->get_value('oidcTokenEndpointAuthMethod') // 'client_secret_basic';
+              my $am_label = $cur_am;
+              for my $am (@auth_methods) {
+                if ($am->[0] eq $cur_am) { $am_label = "$am->[1] ($am->[0])"; last; }
+              }
+            %>
             <tr>
               <th class="ps-3">Auth Method</th>
-              <td><%= $entry->get_value('oidcTokenEndpointAuthMethod') // 'client_secret_basic' %></td>
+              <td><%= $am_label %></td>
               <td class="text-end pe-3">
                 <button class="btn btn-sm btn-outline-secondary py-0"
                         data-bs-toggle="modal" data-bs-target="#modal-authMethod">&#9998;</button>
-              </td>
-            </tr>
-            <tr>
-              <th class="ps-3">Subject Type</th>
-              <td><%= $entry->get_value('oidcSubjectType') // 'public' %></td>
-              <td class="text-end pe-3">
-                <button class="btn btn-sm btn-outline-secondary py-0"
-                        data-bs-toggle="modal" data-bs-target="#modal-subjectType">&#9998;</button>
               </td>
             </tr>
             <tr>
@@ -82,22 +201,13 @@
     </div>
   </div>
 
-  <!-- URIs -->
+  <!-- ═══ URIs ═══ -->
   <div class="col-md-6">
     <div class="card">
       <div class="card-header"><strong>URIs</strong></div>
       <div class="card-body p-0">
         <table class="table table-sm mb-0">
           <tbody>
-            % my @uri_fields = (
-            %   ['clientURI',            'oidcClientURI',            'Client URI'],
-            %   ['logoURI',              'oidcLogoURI',              'Logo URI'],
-            %   ['policyURI',            'oidcPolicyURI',            'Policy URI'],
-            %   ['tosURI',               'oidcTosURI',               'ToS URI'],
-            %   ['jwksURI',              'oidcJwksURI',              'JWKS URI'],
-            %   ['initiateLoginURI',     'oidcInitiateLoginURI',     'Initiate Login URI'],
-            %   ['sectorIdentifierURI',  'oidcSectorIdentifierURI',  'Sector Identifier URI'],
-            % );
             % for my $uf (@uri_fields) {
             <tr>
               <th class="ps-3" style="width:40%"><%= $uf->[2] %></th>
@@ -121,135 +231,100 @@
     </div>
   </div>
 
-  <!-- Redirect URIs (multi-value) -->
+  <!-- ═══ Redirect URIs & Post-Logout Redirect URIs ═══ -->
+  % for my $ms (@multi_sections) {
   <div class="col-md-6">
     <div class="card">
-      <div class="card-header"><strong>Redirect URIs</strong></div>
+      <div class="card-header"><strong><%= $ms->[2] %></strong></div>
       <div class="card-body">
-        % my @redirect_uris = $entry->get_value('oidcRedirectURI');
-        % if (@redirect_uris) {
+        % my @vals = $entry->get_value($ms->[1]);
+        % if (@vals) {
         <ul class="list-group list-group-flush mb-3">
-          % for my $uri (sort @redirect_uris) {
+          % for my $v (sort @vals) {
           <li class="list-group-item d-flex justify-content-between align-items-center px-0">
-            <code style="font-size:0.8rem"><%= $uri %></code>
+            <code style="font-size:0.8rem"><%= $v %></code>
             <form method="post" action="/oidc/<%= $clientId %>"
-                  data-confirm="Remove this redirect URI?">
-              <input type="hidden" name="action" value="redirectURI_remove">
-              <input type="hidden" name="value" value="<%= $uri %>">
+                  data-confirm="<%= $ms->[5] %>">
+              <input type="hidden" name="action" value="<%= $ms->[0] %>_remove">
+              <input type="hidden" name="value" value="<%= $v %>">
               <button class="btn btn-outline-danger btn-sm">Remove</button>
             </form>
           </li>
           % }
         </ul>
         % } else {
-        <p class="text-muted">No redirect URIs configured.</p>
+        <p class="text-muted">None configured.</p>
         % }
         <form method="post" action="/oidc/<%= $clientId %>" class="d-flex gap-2">
-          <input type="hidden" name="action" value="redirectURI_add">
-          <input type="url" name="value" class="form-control form-control-sm" placeholder="https://..." required>
-          <button class="btn btn-primary btn-sm text-nowrap">Add URI</button>
-        </form>
-      </div>
-    </div>
-  </div>
-
-  <!-- Scopes (multi-value) -->
-  <div class="col-md-6">
-    <div class="card">
-      <div class="card-header"><strong>Scopes</strong></div>
-      <div class="card-body">
-        % my @scopes = $entry->get_value('oidcScope');
-        % if (@scopes) {
-        <div class="mb-3">
-          % for my $scope (sort @scopes) {
-          <form method="post" action="/oidc/<%= $clientId %>" class="d-inline me-1 mb-1">
-            <input type="hidden" name="action" value="scope_remove">
-            <input type="hidden" name="value" value="<%= $scope %>">
-            <button class="btn btn-sm btn-outline-secondary" title="Click to remove">
-              <%= $scope %> &times;
-            </button>
-          </form>
-          % }
-        </div>
-        % } else {
-        <p class="text-muted">No scopes configured.</p>
-        % }
-        <form method="post" action="/oidc/<%= $clientId %>" class="d-flex gap-2">
-          <input type="hidden" name="action" value="scope_add">
-          <input type="text" name="value" class="form-control form-control-sm" placeholder="scope name" required>
-          <button class="btn btn-primary btn-sm text-nowrap">Add Scope</button>
-        </form>
-      </div>
-    </div>
-  </div>
-
-  <!-- Grant Types (multi-value) -->
-  <div class="col-md-6">
-    <div class="card">
-      <div class="card-header"><strong>Grant Types</strong></div>
-      <div class="card-body">
-        % my @grants = $entry->get_value('oidcGrantType');
-        % if (@grants) {
-        <div class="mb-3">
-          % for my $g (sort @grants) {
-          <form method="post" action="/oidc/<%= $clientId %>" class="d-inline me-1 mb-1">
-            <input type="hidden" name="action" value="grantType_remove">
-            <input type="hidden" name="value" value="<%= $g %>">
-            <button class="btn btn-sm btn-outline-secondary" title="Click to remove">
-              <%= $g %> &times;
-            </button>
-          </form>
-          % }
-        </div>
-        % } else {
-        <p class="text-muted">No grant types configured.</p>
-        % }
-        <form method="post" action="/oidc/<%= $clientId %>" class="d-flex gap-2">
-          <input type="hidden" name="action" value="grantType_add">
-          <select name="value" class="form-select form-select-sm">
-            <option value="authorization_code">authorization_code</option>
-            <option value="implicit">implicit</option>
-            <option value="client_credentials">client_credentials</option>
-            <option value="refresh_token">refresh_token</option>
-          </select>
+          <input type="hidden" name="action" value="<%= $ms->[0] %>_add">
+          <input type="<%= $ms->[3] %>" name="value" class="form-control form-control-sm"
+                 placeholder="<%= $ms->[4] %>" required>
           <button class="btn btn-primary btn-sm text-nowrap">Add</button>
         </form>
       </div>
     </div>
   </div>
+  % }
 
-  <!-- Response Types (multi-value) -->
-  <div class="col-md-6">
+  <!-- ═══ Authorization (Scopes, Grant Types, Response Types) ═══ -->
+  <div class="col-12">
     <div class="card">
-      <div class="card-header"><strong>Response Types</strong></div>
+      <div class="card-header"><strong>Authorization</strong></div>
       <div class="card-body">
-        % my @rtypes = $entry->get_value('oidcResponseType');
-        % if (@rtypes) {
-        <div class="mb-3">
-          % for my $rt (sort @rtypes) {
-          <form method="post" action="/oidc/<%= $clientId %>" class="d-inline me-1 mb-1">
-            <input type="hidden" name="action" value="responseType_remove">
-            <input type="hidden" name="value" value="<%= $rt %>">
-            <button class="btn btn-sm btn-outline-secondary" title="Click to remove">
-              <%= $rt %> &times;
-            </button>
-          </form>
+        <div class="row g-4">
+          % for my $ts (@multi_tag_sections) {
+          <div class="col-md-4">
+            <h6><%= $ts->[2] %></h6>
+            % my @tvals = $entry->get_value($ts->[1]);
+            % if (@tvals) {
+            <div class="mb-3">
+              % for my $tv (sort @tvals) {
+              <form method="post" action="/oidc/<%= $clientId %>" class="d-inline me-1 mb-1"
+                    data-confirm="<%= $ts->[5] %>">
+                <input type="hidden" name="action" value="<%= $ts->[0] %>_remove">
+                <input type="hidden" name="value" value="<%= $tv %>">
+                <button class="btn btn-sm btn-outline-secondary" title="Click to remove">
+                  <%= $tv %> &times;
+                </button>
+              </form>
+              % }
+            </div>
+            % } else {
+            <p class="text-muted mb-3">None configured.</p>
+            % }
+            <form method="post" action="/oidc/<%= $clientId %>" class="d-flex gap-2">
+              <input type="hidden" name="action" value="<%= $ts->[0] %>_add">
+              % if ($ts->[0] eq 'grantType') {
+              <select name="value" class="form-select form-select-sm">
+                <option value="authorization_code">authorization_code</option>
+                <option value="implicit">implicit</option>
+                <option value="client_credentials">client_credentials</option>
+                <option value="refresh_token">refresh_token</option>
+              </select>
+              % } elsif ($ts->[0] eq 'responseType') {
+              <select name="value" class="form-select form-select-sm">
+                <option value="code">code</option>
+                <option value="id_token">id_token</option>
+                <option value="token">token</option>
+                <option value="code id_token">code id_token</option>
+                <option value="code token">code token</option>
+                <option value="id_token token">id_token token</option>
+                <option value="code id_token token">code id_token token</option>
+              </select>
+              % } else {
+              <input type="<%= $ts->[3] %>" name="value" class="form-control form-control-sm"
+                     placeholder="<%= $ts->[4] %>" required>
+              % }
+              <button class="btn btn-primary btn-sm text-nowrap">Add</button>
+            </form>
+          </div>
           % }
         </div>
-        % } else {
-        <p class="text-muted">No response types configured.</p>
-        % }
-        <form method="post" action="/oidc/<%= $clientId %>" class="d-flex gap-2">
-          <input type="hidden" name="action" value="responseType_add">
-          <input type="text" name="value" class="form-control form-control-sm"
-                 placeholder="e.g. code" required>
-          <button class="btn btn-primary btn-sm text-nowrap">Add</button>
-        </form>
       </div>
     </div>
   </div>
 
-  <!-- Contacts (multi-value) -->
+  <!-- ═══ Contacts ═══ -->
   <div class="col-md-6">
     <div class="card">
       <div class="card-header"><strong>Contacts</strong></div>
@@ -260,7 +335,8 @@
           % for my $c (sort @contacts) {
           <li class="list-group-item d-flex justify-content-between align-items-center px-0">
             <%= $c %>
-            <form method="post" action="/oidc/<%= $clientId %>">
+            <form method="post" action="/oidc/<%= $clientId %>"
+                  data-confirm="Remove this contact?">
               <input type="hidden" name="action" value="contact_remove">
               <input type="hidden" name="value" value="<%= $c %>">
               <button class="btn btn-outline-danger btn-sm">Remove</button>
@@ -280,40 +356,107 @@
     </div>
   </div>
 
-  <!-- Post-Logout Redirect URIs (multi-value) -->
+  <!-- ═══ Crypto & Signing ═══ -->
   <div class="col-md-6">
     <div class="card">
-      <div class="card-header"><strong>Post-Logout Redirect URIs</strong></div>
-      <div class="card-body">
-        % my @logout_uris = $entry->get_value('oidcPostLogoutRedirectURI');
-        % if (@logout_uris) {
-        <ul class="list-group list-group-flush mb-3">
-          % for my $uri (sort @logout_uris) {
-          <li class="list-group-item d-flex justify-content-between align-items-center px-0">
-            <code style="font-size:0.8rem"><%= $uri %></code>
-            <form method="post" action="/oidc/<%= $clientId %>">
-              <input type="hidden" name="action" value="postLogoutRedirectURI_remove">
-              <input type="hidden" name="value" value="<%= $uri %>">
-              <button class="btn btn-outline-danger btn-sm">Remove</button>
-            </form>
-          </li>
-          % }
-        </ul>
+      <div class="card-header"><strong>Crypto &amp; Signing</strong></div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <tbody>
+            % for my $cf (@crypto_fields) {
+            <tr>
+              <th class="ps-3" style="width:55%"><%= $cf->[2] %></th>
+              <td>
+                % my $cv = $entry->get_value($cf->[1]) // '';
+                % if ($cv ne '') {
+                  <code><%= $cv %></code>
+                % } else {
+                  <span class="text-muted">-</span>
+                % }
+              </td>
+              <td class="text-end pe-3">
+                <button class="btn btn-sm btn-outline-secondary py-0"
+                        data-bs-toggle="modal" data-bs-target="#modal-<%= $cf->[0] %>">&#9998;</button>
+              </td>
+            </tr>
+            % }
+          </tbody>
+        </table>
+      </div>
+      <%
+        my $jwks_json = $entry->get_value('oidcJwks') // '';
+        my $pub_jwks_json = '';
+        if ($jwks_json ne '') {
+          eval {
+            my $jwks = Mojo::JSON::decode_json($jwks_json);
+            if ($jwks->{keys} && ref $jwks->{keys} eq 'ARRAY') {
+              my @pub_keys;
+              for my $key (@{$jwks->{keys}}) {
+                my %pub;
+                for my $f (qw(kty n e kid use alg key_ops)) {
+                  $pub{$f} = $key->{$f} if defined $key->{$f};
+                }
+                $pub{use} //= 'sig';
+                push @pub_keys, \%pub;
+              }
+              $pub_jwks_json = Mojo::JSON::encode_json({keys => \@pub_keys});
+            }
+          };
+        }
+      %>
+      <div class="card-footer">
+        % if ($pub_jwks_json ne '') {
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <small class="fw-bold">Public Key (JWK Set)</small>
+          <button class="btn btn-sm btn-outline-secondary py-0 oidc-copy-btn"
+                  data-copy="<%= $pub_jwks_json %>">Copy</button>
+        </div>
+        <pre class="mb-2 small" style="max-height:200px;overflow:auto;font-size:0.75rem"><%= $pub_jwks_json %></pre>
         % } else {
-        <p class="text-muted">No post-logout redirect URIs.</p>
+        <p class="text-muted mb-2">No signing key configured.</p>
         % }
-        <form method="post" action="/oidc/<%= $clientId %>" class="d-flex gap-2">
-          <input type="hidden" name="action" value="postLogoutRedirectURI_add">
-          <input type="url" name="value" class="form-control form-control-sm" placeholder="https://..." required>
-          <button class="btn btn-primary btn-sm text-nowrap">Add URI</button>
+        <form method="post" action="/oidc/<%= $clientId %>"
+              data-confirm="Regenerate the signing key pair? Existing tokens signed with the old key will no longer verify.">
+          <input type="hidden" name="action" value="regenerateKeys">
+          <button class="btn btn-sm btn-outline-warning"><%= $pub_jwks_json ne '' ? 'Regenerate Keys' : 'Generate Keys' %></button>
         </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Metadata ═══ -->
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header"><strong>Metadata</strong></div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <tbody>
+            % for my $mf (@meta_fields) {
+            <tr>
+              <th class="ps-3" style="width:45%"><%= $mf->[2] %></th>
+              <td>
+                % my $mv = $entry->get_value($mf->[1]) // '';
+                % if ($mv ne '') {
+                  <%= $mv %>
+                % } else {
+                  <span class="text-muted">-</span>
+                % }
+              </td>
+              <td class="text-end pe-3">
+                <button class="btn btn-sm btn-outline-secondary py-0"
+                        data-bs-toggle="modal" data-bs-target="#modal-<%= $mf->[0] %>">&#9998;</button>
+              </td>
+            </tr>
+            % }
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
 
 </div>
 
-<!-- Danger zone -->
+<!-- ═══ Danger Zone ═══ -->
 <div class="card border-danger mt-4" style="max-width:400px">
   <div class="card-header text-danger"><strong>Danger Zone</strong></div>
   <div class="card-body">
@@ -323,6 +466,10 @@
     </form>
   </div>
 </div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     Modals — generated from specification arrays
+     ═══════════════════════════════════════════════════════════════ -->
 
 <!-- LDAP entry viewer -->
 % my %sensitive = map { lc($_) => 1 } qw(oidcClientSecret oidcRegistrationAccessToken);
@@ -351,20 +498,20 @@
   </div></div>
 </div>
 
-<!-- Edit modals for single-value text/url fields -->
-% for my $mf (@uri_fields) {
-<div class="modal fade" id="modal-<%= $mf->[0] %>" tabindex="-1">
+<!-- URI edit modals (all type=url) -->
+% for my $uf (@uri_fields) {
+<div class="modal fade" id="modal-<%= $uf->[0] %>" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/oidc/<%= $clientId %>">
-      <input type="hidden" name="action" value="<%= $mf->[0] %>">
+      <input type="hidden" name="action" value="<%= $uf->[0] %>">
       <div class="modal-header">
-        <h5 class="modal-title">Edit <%= $mf->[2] %></h5>
+        <h5 class="modal-title">Edit <%= $uf->[2] %></h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
-        <label class="form-label"><%= $mf->[2] %></label>
+        <label class="form-label"><%= $uf->[2] %></label>
         <input type="url" name="value" class="form-control"
-               value="<%= $entry->get_value($mf->[1]) // '' %>">
+               value="<%= $entry->get_value($uf->[1]) // '' %>">
         <div class="form-text">Leave blank to clear.</div>
       </div>
       <div class="modal-footer">
@@ -376,7 +523,7 @@
 </div>
 % }
 
-<!-- Edit Client Name modal -->
+<!-- Client Name modal -->
 <div class="modal fade" id="modal-clientName" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/oidc/<%= $clientId %>">
@@ -389,7 +536,7 @@
         <label class="form-label">Client Name</label>
         <input type="text" name="value" class="form-control"
                value="<%= $entry->get_value('oidcClientName') // '' %>">
-        <div class="form-text">Leave blank to clear.</div>
+        <div class="form-text">Human-readable name shown on consent screens.</div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -399,66 +546,44 @@
   </div></div>
 </div>
 
-<!-- Edit Client Secret modal -->
+<!-- Client Secret modal -->
 <div class="modal fade" id="modal-clientSecret" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
-    <form method="post" action="/oidc/<%= $clientId %>">
-      <input type="hidden" name="action" value="clientSecret">
-      <div class="modal-header">
-        <h5 class="modal-title">Edit Client Secret</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+    <div class="modal-header">
+      <h5 class="modal-title">Client Secret</h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+    </div>
+    <div class="modal-body">
+      <p class="text-muted small">Generate a new random secret. The new secret will be shown once so you can copy it.</p>
+      <div class="d-flex gap-2">
+        <form method="post" action="/oidc/<%= $clientId %>">
+          <input type="hidden" name="action" value="regenerateSecret">
+          <button class="btn btn-primary">Regenerate Secret</button>
+        </form>
       </div>
-      <div class="modal-body">
-        <label class="form-label">Client Secret</label>
-        <input type="text" name="value" class="form-control"
-               placeholder="Enter new secret or leave blank to remove">
-        <div class="form-text">Leave blank to remove (make client public).</div>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-        <button type="submit" class="btn btn-primary">Save</button>
-      </div>
-    </form>
+      <div class="form-text mt-2">The new secret will be shown once after regeneration so you can copy it.</div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+    </div>
   </div></div>
 </div>
 
-<!-- Application Type modal -->
-<div class="modal fade" id="modal-applicationType" tabindex="-1">
+<!-- Select-based modals (application type, subject type) -->
+% for my $sf (@core_select_fields) {
+%   my $cur = $entry->get_value($sf->[1]) // '';
+<div class="modal fade" id="modal-<%= $sf->[0] %>" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/oidc/<%= $clientId %>">
-      <input type="hidden" name="action" value="applicationType">
+      <input type="hidden" name="action" value="<%= $sf->[0] %>">
       <div class="modal-header">
-        <h5 class="modal-title">Edit Application Type</h5>
+        <h5 class="modal-title">Edit <%= $sf->[2] %></h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
         <select name="value" class="form-select">
-          <option value="web"    <%= ($entry->get_value('oidcApplicationType') // 'web') eq 'web'    ? 'selected' : '' %>>web</option>
-          <option value="native" <%= ($entry->get_value('oidcApplicationType') // 'web') eq 'native' ? 'selected' : '' %>>native</option>
-        </select>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-        <button type="submit" class="btn btn-primary">Save</button>
-      </div>
-    </form>
-  </div></div>
-</div>
-
-<!-- Auth Method modal -->
-<div class="modal fade" id="modal-authMethod" tabindex="-1">
-  <div class="modal-dialog"><div class="modal-content">
-    <form method="post" action="/oidc/<%= $clientId %>">
-      <input type="hidden" name="action" value="authMethod">
-      <div class="modal-header">
-        <h5 class="modal-title">Edit Token Endpoint Auth Method</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-      </div>
-      <div class="modal-body">
-        % my $cur_am = $entry->get_value('oidcTokenEndpointAuthMethod') // 'client_secret_basic';
-        <select name="value" class="form-select">
-          % for my $m (qw(client_secret_basic client_secret_post client_secret_jwt private_key_jwt none)) {
-          <option value="<%= $m %>" <%= $cur_am eq $m ? 'selected' : '' %>><%= $m %></option>
+          % for my $opt (@{$sf->[4]}) {
+          <option value="<%= $opt %>" <%= $cur eq $opt ? 'selected' : '' %>><%= $opt %></option>
           % }
         </select>
       </div>
@@ -469,22 +594,31 @@
     </form>
   </div></div>
 </div>
+% }
 
-<!-- Subject Type modal -->
-<div class="modal fade" id="modal-subjectType" tabindex="-1">
+<!-- Auth Method modal with human-readable descriptions -->
+<div class="modal fade" id="modal-authMethod" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/oidc/<%= $clientId %>">
-      <input type="hidden" name="action" value="subjectType">
+      <input type="hidden" name="action" value="authMethod">
       <div class="modal-header">
-        <h5 class="modal-title">Edit Subject Type</h5>
+        <h5 class="modal-title">Edit Token Endpoint Auth Method</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
-        % my $cur_st = $entry->get_value('oidcSubjectType') // 'public';
-        <select name="value" class="form-select">
-          <option value="public"   <%= $cur_st eq 'public'   ? 'selected' : '' %>>public</option>
-          <option value="pairwise" <%= $cur_st eq 'pairwise' ? 'selected' : '' %>>pairwise</option>
-        </select>
+        <p class="text-muted small mb-3">How this client proves its identity when exchanging an authorization code for tokens.</p>
+        % for my $am (@auth_methods) {
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="radio" name="value"
+                 id="am-<%= $am->[0] %>" value="<%= $am->[0] %>"
+                 <%= $cur_am eq $am->[0] ? 'checked' : '' %>>
+          <label class="form-check-label" for="am-<%= $am->[0] %>">
+            <strong><%= $am->[1] %></strong>
+            <code class="ms-1 small"><%= $am->[0] %></code>
+            <br><small class="text-muted"><%= $am->[2] %></small>
+          </label>
+        </div>
+        % }
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -493,3 +627,78 @@
     </form>
   </div></div>
 </div>
+
+<!-- Crypto field modals (all type=text) -->
+% for my $cf (@crypto_fields) {
+<div class="modal fade" id="modal-<%= $cf->[0] %>" tabindex="-1">
+  <div class="modal-dialog"><div class="modal-content">
+    <form method="post" action="/oidc/<%= $clientId %>">
+      <input type="hidden" name="action" value="<%= $cf->[0] %>">
+      <div class="modal-header">
+        <h5 class="modal-title">Edit <%= $cf->[2] %></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label"><%= $cf->[2] %></label>
+        <input type="text" name="value" class="form-control"
+               value="<%= $entry->get_value($cf->[1]) // '' %>"
+               placeholder="e.g. RS256, A128CBC-HS256">
+        <div class="form-text">Leave blank to clear. Common values: RS256, ES256, A128CBC-HS256, A256GCM.</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </div></div>
+</div>
+% }
+
+<!-- Metadata field modals -->
+% for my $mf (@meta_fields) {
+<div class="modal fade" id="modal-<%= $mf->[0] %>" tabindex="-1">
+  <div class="modal-dialog"><div class="modal-content">
+    <form method="post" action="/oidc/<%= $clientId %>">
+      <input type="hidden" name="action" value="<%= $mf->[0] %>">
+      <div class="modal-header">
+        <h5 class="modal-title">Edit <%= $mf->[2] %></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label"><%= $mf->[2] %></label>
+        <input type="<%= $mf->[3] %>" name="value" class="form-control"
+               value="<%= $entry->get_value($mf->[1]) // '' %>">
+        % if ($mf->[0] eq 'defaultMaxAge') {
+        <div class="form-text">Maximum authentication age in seconds. Leave blank to clear.</div>
+        % } elsif ($mf->[0] eq 'requireAuthTime') {
+        <div class="form-text">Whether the auth_time claim is required. Values: true / false. Leave blank to clear.</div>
+        % } else {
+        <div class="form-text">Leave blank to clear.</div>
+        % }
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </div></div>
+</div>
+% }
+
+<!-- ═══ Copy-to-clipboard script ═══ -->
+<script>
+(function () {
+  document.querySelectorAll('.oidc-copy-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var text = btn.getAttribute('data-copy');
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(function () {
+          var orig = btn.innerHTML;
+          btn.innerHTML = '&#10003;';
+          setTimeout(function () { btn.innerHTML = orig; }, 1200);
+        });
+      }
+    });
+  });
+})();
+</script>
