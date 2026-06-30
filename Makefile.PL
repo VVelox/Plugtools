@@ -46,6 +46,8 @@ my %WriteMakefileArgs = (
 		'Authen::TOTP'                      => 0,
 		'Imager::QRCode'                    => 0,
 		'CryptX'                            => 0,
+		'DBI'                               => 0,
+		'DBD::SQLite'                       => '1.50',
 	},
 	dist  => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
 	clean => { FILES    => 'App-Nisaba-*' },

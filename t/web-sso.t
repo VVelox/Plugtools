@@ -26,6 +26,21 @@ if ($@) {
 	plan skip_all => "App::Nisaba::WebSSO failed to load: $@";
 }
 
+# Shared in-memory grant store for the whole run. Codes/tokens now live in a
+# server-side store (not the session cookie), so this stands in for the real
+# SQLite store. A single instance is shared across every test app via the
+# sso_storage helper installed in _install_stubs, mirroring how a real store is
+# shared across worker processes — and proving the flow works without relying
+# on the browser session.
+my $TEST_STORAGE;
+eval {
+	require App::Nisaba::WebSSO::Storage;
+	$TEST_STORAGE = App::Nisaba::WebSSO::Storage->new( { backend => 'SQLite', path => ':memory:' } );
+	1;
+} or do {
+	plan skip_all => "App::Nisaba::WebSSO::Storage unavailable (DBD::SQLite?): $@";
+};
+
 # ── Fake Net::LDAP::Entry ─────────────────────────────────────────────────────
 
 {
@@ -161,6 +176,12 @@ sub _install_stubs {
 	}
 
 	$app->helper( pt => sub { $fake_pt } );
+
+	# Use the shared in-memory grant store rather than the default on-disk
+	# SQLite path. A single instance is reused so codes/tokens persist across
+	# requests within the run, the way a real shared store would.
+	no warnings 'redefine';
+	$app->helper( sso_storage => sub { $TEST_STORAGE } );
 }
 
 # Add a same-host Referer to every POST so the middleware check passes.
@@ -833,6 +854,7 @@ my $client_rs256 = FakeEntry->new(
 	oidcTokenEndpointAuthMethod  => 'none',
 	oidcIdTokenSignedResponseAlg => 'RS256',
 	oidcJwks                     => $rs256_jwks_json,
+	oidcPostLogoutRedirectURI    => ['https://rs256app.example.com/loggedout'],
 );
 
 $t->reset_session;
@@ -1407,5 +1429,226 @@ $t->post_ok( '/token', form => {
 })
   ->status_is(500)
   ->json_is( '/error' => 'server_error', 'RS256 without key fails closed, no alg=none downgrade' );
+
+# ── Shared store enables true server-to-server redemption (no shared cookie) ──
+# This is the whole point of the external store: the relying party's back end
+# redeems the code and calls UserInfo from separate processes that have no
+# access to the browser's session cookie. Each Test::Mojo below is an
+# independent UA/app sharing only the grant store.
+
+{
+	# Browser UA: authenticate and obtain an authorization code.
+	my $t_browser = Test::Mojo->new('App::Nisaba::WebSSO');
+	_install_stubs( $t_browser->app );
+	_add_referer_hook($t_browser);
+
+	$t_browser->get_ok('/authorize?client_id=secretapp&redirect_uri=https://secretapp.example.com/callback&response_type=code&scope=openid+profile&state=s2s1')
+	  ->status_is(302);
+	$t_browser->post_ok( '/sso/login', form => { user => 'alice', pass => 'correct' } )->status_is(302);
+	$t_browser->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+	my $s2s_code = Mojo::URL->new( $t_browser->tx->res->headers->location )->query->param('code');
+	ok( $s2s_code, 's2s: browser obtained an authorization code' );
+
+	# RP back end: a completely separate UA/app with no cookies from the browser.
+	my $t_rp = Test::Mojo->new('App::Nisaba::WebSSO');
+	_install_stubs( $t_rp->app );
+
+	my $rp_basic = 'Basic ' . MIME::Base64::encode_base64( 'secretapp:s3cret', '' );
+	$t_rp->post_ok( '/token',
+		{ Authorization => $rp_basic },
+		form => {
+			grant_type   => 'authorization_code',
+			code         => $s2s_code,
+			redirect_uri => 'https://secretapp.example.com/callback',
+		}
+	)
+	  ->status_is(200)
+	  ->json_has( '/access_token', 's2s: RP redeemed code with no browser cookie' );
+	my $s2s_token = $t_rp->tx->res->json->{access_token};
+
+	# UserInfo from yet another cookieless request.
+	my $t_rp2 = Test::Mojo->new('App::Nisaba::WebSSO');
+	_install_stubs( $t_rp2->app );
+	$t_rp2->get_ok( '/userinfo', { Authorization => "Bearer $s2s_token" } )
+	  ->status_is(200)
+	  ->json_is( '/sub' => 'alice', 's2s: UserInfo resolved token with no browser cookie' );
+
+	# The code is single-use: a replay (even by the RP) is rejected.
+	$t_rp->post_ok( '/token',
+		{ Authorization => $rp_basic },
+		form => {
+			grant_type   => 'authorization_code',
+			code         => $s2s_code,
+			redirect_uri => 'https://secretapp.example.com/callback',
+		}
+	)
+	  ->status_is(400)
+	  ->json_is( '/error' => 'invalid_grant', 's2s: code replay rejected (one-time use)' );
+}
+
+# ── Storage module contract (white box) ─────────────────────────────────────
+
+{
+	my $s = App::Nisaba::WebSSO::Storage->new( { backend => 'SQLite', path => ':memory:' } );
+
+	# put / get round-trip
+	$s->put( 'code', 'abc', { user => 'bob', n => 1 }, 600 );
+	my $got = $s->get( 'code', 'abc' );
+	is( ref $got,      'HASH', 'storage get returns a hashref' );
+	is( $got->{user},  'bob',  'storage round-trips data' );
+	is( $got->{n},     1,      'storage round-trips numbers' );
+	ok( $s->get( 'code', 'abc' ), 'storage get is non-destructive' );
+
+	# consume is single-use
+	my $c = $s->consume( 'code', 'abc' );
+	is( $c->{user},                  'bob',  'storage consume returns data' );
+	is( $s->consume( 'code', 'abc' ), undef, 'storage consume is single-use' );
+	is( $s->get( 'code', 'abc' ),     undef, 'storage consume deleted the entry' );
+
+	# kind namespacing: same raw key, different kinds
+	$s->put( 'code',  'k', { which => 'code' },  600 );
+	$s->put( 'token', 'k', { which => 'token' }, 600 );
+	is( $s->get( 'code',  'k' )->{which}, 'code',  'storage namespaces by kind (code)' );
+	is( $s->get( 'token', 'k' )->{which}, 'token', 'storage namespaces by kind (token)' );
+
+	# delete
+	$s->delete( 'token', 'k' );
+	is( $s->get( 'token', 'k' ), undef, 'storage delete removes the entry' );
+
+	# keys are hashed at rest, never stored in the clear
+	$s->put( 'code', 'plaintext-secret-code', { x => 1 }, 600 );
+	my ($leak) = $s->{backend}{dbh}
+		->selectrow_array(q{SELECT COUNT(*) FROM oidc_store WHERE skey LIKE '%plaintext-secret-code%'});
+	is( $leak, 0, 'storage does not persist the raw key' );
+	ok( defined $s->get( 'code', 'plaintext-secret-code' ), 'hashed key still resolves' );
+
+	# backend honors absolute expiry and cleanup (tested directly, no sleeps)
+	my $b = $s->{backend};
+	$b->put( 'expkey', 'blob', time() - 1 );
+	is( $b->get('expkey'), undef, 'backend honors past expiry on get' );
+
+	$b->put( 'gc-expired', 'x', time() - 5 );
+	$b->put( 'gc-live',    'y', time() + 600 );
+	my $removed = $b->cleanup;
+	ok( $removed >= 1,            'backend cleanup removes expired rows' );
+	ok( defined $b->get('gc-live'), 'backend cleanup keeps live rows' );
+}
+
+# ── Logout / end-session (OIDC RP-Initiated Logout) ─────────────────────────
+
+# Discovery advertises the end-session endpoint
+$t->reset_session;
+_install_stubs( $t->app );
+$t->get_ok('/.well-known/openid-configuration')
+  ->status_is(200)
+  ->json_is( '/end_session_endpoint' => 'http://localhost/sso/logout', 'discovery advertises end_session_endpoint' );
+
+# GET /sso/logout with no id_token_hint → confirmation page (anti logout-CSRF)
+$t->get_ok('/sso/logout')
+  ->status_is(200)
+  ->content_like( qr/Sign Out/i, 'logout without hint shows a confirmation page' );
+
+# POST /sso/logout clears the SSO session
+$t->reset_session;
+_install_stubs( $t->app );
+
+# Establish an SSO session.
+$t->get_ok('/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=lo1')
+  ->status_is(302);
+$t->post_ok( '/sso/login', form => { user => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+
+# Session is active: a second authorize skips login.
+$t->get_ok('/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=lo2')
+  ->status_is(302)
+  ->header_like( Location => qr{/sso/consent}, 'logout: session active before logout' );
+
+# Log out.
+$t->post_ok('/sso/logout')
+  ->status_is(200)
+  ->content_like( qr/signed out/i, 'logout: logged-out page shown' );
+
+# Session gone: a fresh authorize now requires login again.
+$t->get_ok('/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=lo3')
+  ->status_is(302)
+  ->header_like( Location => qr{/sso/login}, 'logout cleared the SSO session' );
+
+# RP-initiated logout with a verifiable id_token_hint. First mint a real RS256
+# ID token to use as the hint.
+$t->reset_session;
+_install_stubs(
+	$t->app,
+	getOIDCClientEntry => sub {
+		my ( $self, $args ) = @_;
+		return $client_rs256  if ( $args->{clientId} // '' ) eq 'rs256app';
+		return $client_public if ( $args->{clientId} // '' ) eq 'testapp';
+		return undef;
+	},
+);
+
+$t->get_ok('/authorize?client_id=rs256app&redirect_uri=https://rs256app.example.com/callback&response_type=code&scope=openid&state=lo4')
+  ->status_is(302);
+$t->post_ok( '/sso/login', form => { user => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $lo_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+$t->post_ok( '/token', form => {
+	grant_type   => 'authorization_code',
+	code         => $lo_code,
+	client_id    => 'rs256app',
+	redirect_uri => 'https://rs256app.example.com/callback',
+})->status_is(200);
+my $lo_id_token = $t->tx->res->json->{id_token};
+ok( $lo_id_token, 'logout: obtained an RS256 id_token for the hint' );
+
+# Verified hint + registered post_logout_redirect_uri → 302 with state, no prompt.
+$t->get_ok("/sso/logout?id_token_hint=$lo_id_token&post_logout_redirect_uri=https://rs256app.example.com/loggedout&state=xyz789")
+  ->status_is(302)
+  ->header_is( Location => 'https://rs256app.example.com/loggedout?state=xyz789',
+	'verified hint redirects to registered post_logout_redirect_uri with state' );
+
+# Verified hint + UNREGISTERED post_logout_redirect_uri → no redirect (open-redirect defense).
+$t->reset_session;
+_install_stubs(
+	$t->app,
+	getOIDCClientEntry => sub {
+		my ( $self, $args ) = @_;
+		return $client_rs256  if ( $args->{clientId} // '' ) eq 'rs256app';
+		return $client_public if ( $args->{clientId} // '' ) eq 'testapp';
+		return undef;
+	},
+);
+$t->get_ok("/sso/logout?id_token_hint=$lo_id_token&post_logout_redirect_uri=https://evil.example.com/steal")
+  ->status_is(200)
+  ->content_like( qr/signed out/i, 'unregistered post_logout_redirect_uri is not honored' );
+
+# POST with client_id (no hint) + registered URI → 302 after confirmation.
+$t->reset_session;
+_install_stubs(
+	$t->app,
+	getOIDCClientEntry => sub {
+		my ( $self, $args ) = @_;
+		return $client_rs256  if ( $args->{clientId} // '' ) eq 'rs256app';
+		return $client_public if ( $args->{clientId} // '' ) eq 'testapp';
+		return undef;
+	},
+);
+$t->post_ok( '/sso/logout', form => {
+	client_id                => 'rs256app',
+	post_logout_redirect_uri => 'https://rs256app.example.com/loggedout',
+	state                    => 'st42',
+})
+  ->status_is(302)
+  ->header_is( Location => 'https://rs256app.example.com/loggedout?state=st42',
+	'POST logout with client_id redirects to registered URI' );
+
+# A forged/unsigned hint is not treated as verified: GET falls back to the
+# confirmation page rather than logging out silently.
+$t->reset_session;
+_install_stubs( $t->app );
+my $forged = _b64url_encode('{"alg":"none","typ":"JWT"}') . '.'
+	. _b64url_encode('{"iss":"http://localhost","aud":"testapp","sub":"alice"}') . '.';
+$t->get_ok("/sso/logout?id_token_hint=$forged&post_logout_redirect_uri=https://testapp.example.com/callback")
+  ->status_is(200)
+  ->content_like( qr/Sign Out/i, 'unsigned id_token_hint requires confirmation' );
 
 done_testing;

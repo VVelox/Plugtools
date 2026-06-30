@@ -1,0 +1,8 @@
+% title 'Signed Out';
+
+<div class="card border-secondary mt-4">
+  <div class="card-header fw-bold">Signed Out</div>
+  <div class="card-body text-center">
+    <p class="mb-0">You have been signed out of Nisaba SSO.</p>
+  </div>
+</div>

@@ -67,6 +67,7 @@ sub discovery {
 			authorization_endpoint                => "$issuer/authorize",
 			token_endpoint                        => "$issuer/token",
 			userinfo_endpoint                     => "$issuer/userinfo",
+			end_session_endpoint                  => "$issuer/sso/logout",
 			response_types_supported              => ['code'],
 			grant_types_supported                 => ['authorization_code'],
 			subject_types_supported               => ['public'],
@@ -480,20 +481,25 @@ sub consent {
 	# Generate authorization code
 	my $code = _random_b64url(32);
 
-	# Store code details in session (in production, use a shared store)
-	$self->session(
-		'sso_code_'
-			. $code => {
-				client_id             => $authz->{client_id},
-				redirect_uri          => $authz->{redirect_uri},
-				scope                 => $authz->{scope},
-				nonce                 => $authz->{nonce},
-				user                  => $user,
-				issued_at             => time(),
-				auth_time             => ( $self->session('sso_auth_time') // time() ),
-				code_challenge        => $authz->{code_challenge},
-				code_challenge_method => $authz->{code_challenge_method},
-			}
+	# Store code details in the shared server-side store so the token endpoint
+	# (called server-to-server by the relying party, with no browser cookie)
+	# can redeem it. The TTL here is a GC backstop; the token endpoint enforces
+	# the protocol expiry from issued_at against the current configured lifetime.
+	my $code_lifetime = $self->pt->{ini}->{''}->{ssoCodeLifetime} // 600;
+	$self->sso_storage->put(
+		'code', $code,
+		{
+			client_id             => $authz->{client_id},
+			redirect_uri          => $authz->{redirect_uri},
+			scope                 => $authz->{scope},
+			nonce                 => $authz->{nonce},
+			user                  => $user,
+			issued_at             => time(),
+			auth_time             => ( $self->session('sso_auth_time') // time() ),
+			code_challenge        => $authz->{code_challenge},
+			code_challenge_method => $authz->{code_challenge_method},
+		},
+		$code_lifetime,
 	);
 
 	# Clean up authorization session
@@ -505,6 +511,47 @@ sub consent {
 	$url->query->merge( state => $authz->{state} ) if $authz->{state} ne '';
 	$self->redirect_to($url);
 } ## end sub consent
+
+# --------------------------------------------------------------------------- #
+# Logout / end-session (OIDC RP-Initiated Logout 1.0)
+# --------------------------------------------------------------------------- #
+
+sub logout {
+	my $self = shift;
+
+	my $hint  = $self->param('id_token_hint')            // '';
+	my $post  = $self->param('post_logout_redirect_uri') // '';
+	my $state = $self->param('state')                    // '';
+	my $cid   = $self->param('client_id')                // '';
+
+	# A request authenticated by a verifiable id_token_hint can be logged out
+	# without prompting. Otherwise we must confirm with the user to prevent a
+	# malicious third party from forcing a logout via a crafted link.
+	my $info = $self->_verify_id_token_hint($hint);
+	if ( $info && $info->{verified} ) {
+		return $self->_perform_logout( $post, $state, $info, $cid );
+	}
+
+	$self->render(
+		template                 => 'sso/logout_confirm',
+		layout                   => 'sso',
+		post_logout_redirect_uri => $post,
+		state                    => $state,
+		client_id                => $cid,
+	);
+} ## end sub logout
+
+sub logout_post {
+	my $self = shift;
+
+	my $hint  = $self->param('id_token_hint')            // '';
+	my $post  = $self->param('post_logout_redirect_uri') // '';
+	my $state = $self->param('state')                    // '';
+	my $cid   = $self->param('client_id')                // '';
+
+	my $info = $self->_verify_id_token_hint($hint);
+	return $self->_perform_logout( $post, $state, $info, $cid );
+} ## end sub logout_post
 
 # --------------------------------------------------------------------------- #
 # Token endpoint
@@ -546,17 +593,15 @@ sub token {
 		$client_secret = $hdr_secret // $client_secret;
 	} ## end if ( $auth_header =~ /^Basic\s+(.+)$/i )
 
-	# Look up authorization code
-	my $code_data = $self->session( 'sso_code_' . $code );
+	# Look up the authorization code in the shared store and atomically delete
+	# it: consume() enforces one-time use across concurrent worker processes.
+	my $code_data = $self->sso_storage->consume( 'code', $code );
 	unless ($code_data) {
 		return $self->render(
 			json   => { error => 'invalid_grant', error_description => 'Authorization code not found or expired.' },
 			status => 400,
 		);
 	}
-
-	# Delete the code (one-time use)
-	delete $self->session->{ 'sso_code_' . $code };
 
 	# Validate code hasn't expired
 	my $code_lifetime = $self->pt->{ini}->{''}->{ssoCodeLifetime} // 600;
@@ -638,15 +683,19 @@ sub token {
 	my $access_token   = _random_b64url(32);
 	my $token_lifetime = $self->pt->{ini}->{''}->{ssoTokenLifetime} // 3600;
 
-	# Store token in session for userinfo lookup
-	$self->session(
-		'sso_token_'
-			. $access_token => {
-				user      => $code_data->{user},
-				scope     => $code_data->{scope},
-				client_id => $client_id,
-				issued_at => time(),
-			}
+	# Store the access token in the shared store so the UserInfo endpoint (also
+	# called server-to-server) can resolve it. TTL is a GC backstop; UserInfo
+	# enforces the protocol expiry from issued_at.
+	$self->sso_storage->put(
+		'token',
+		$access_token,
+		{
+			user      => $code_data->{user},
+			scope     => $code_data->{scope},
+			client_id => $client_id,
+			issued_at => time(),
+		},
+		$token_lifetime,
 	);
 
 	# Build ID token. Returns undef if the client is configured for a signing
@@ -699,7 +748,7 @@ sub userinfo {
 		return $self->render( json => { error => 'invalid_token' }, status => 401 );
 	}
 
-	my $token_data = $self->session( 'sso_token_' . $token );
+	my $token_data = $self->sso_storage->get( 'token', $token );
 	unless ($token_data) {
 		$self->res->headers->www_authenticate('Bearer error="invalid_token"');
 		return $self->render( json => { error => 'invalid_token' }, status => 401 );
@@ -708,7 +757,7 @@ sub userinfo {
 	# Check token expiry
 	my $token_lifetime = $self->pt->{ini}->{''}->{ssoTokenLifetime} // 3600;
 	if ( ( time() - $token_data->{issued_at} ) > $token_lifetime ) {
-		delete $self->session->{ 'sso_token_' . $token };
+		$self->sso_storage->delete( 'token', $token );
 		$self->res->headers->www_authenticate('Bearer error="invalid_token"');
 		return $self->render( json => { error => 'invalid_token' }, status => 401 );
 	}
@@ -745,6 +794,97 @@ sub _authz_error {
 	$url->query->merge( state             => $state )       if $state && $state ne '';
 	$self->redirect_to($url);
 } ## end sub _authz_error
+
+# Parse and (where possible) cryptographically verify an id_token_hint. Returns
+# a hashref { client_id, client_entry, verified, payload } or undef if the hint
+# is absent/unparseable or was not issued by us. The token's expiry is
+# intentionally ignored: logout commonly happens after the ID token has expired.
+sub _verify_id_token_hint {
+	my ( $self, $hint ) = @_;
+	return undef unless defined $hint && $hint ne '';
+
+	my @parts = split /\./, $hint;
+	return undef unless @parts >= 2;
+
+	my $header  = eval { decode_json( _b64url_decode( $parts[0] ) ) };
+	my $payload = eval { decode_json( _b64url_decode( $parts[1] ) ) };
+	return undef unless $payload && ref $payload eq 'HASH';
+
+	# Must be one of our own ID tokens.
+	return undef unless ( $payload->{iss} // '' ) eq $self->sso_issuer;
+
+	my $aud = $payload->{aud};
+	$aud = $aud->[0] if ref $aud eq 'ARRAY';
+	return undef unless defined $aud && $aud ne '';
+
+	my $client_entry;
+	eval { $client_entry = $self->pt->getOIDCClientEntry( { clientId => $aud } ) };
+	return undef unless $client_entry;
+
+	# Verify the signature with the client's configured algorithm. An unsigned
+	# (alg=none) hint can identify the client but is never treated as verified.
+	my $alg           = $header->{alg} // 'none';
+	my $signing_input = $parts[0] . '.' . $parts[1];
+	my $sig           = @parts >= 3 ? _b64url_decode( $parts[2] ) : '';
+	my $verified      = 0;
+
+	if ( $alg eq 'RS256' ) {
+		my $jwks_json = $client_entry->get_value('oidcJwks');
+		if ($jwks_json) {
+			my $jwks = eval { decode_json($jwks_json) };
+			if ( $jwks && $jwks->{keys} && @{ $jwks->{keys} } ) {
+				my $rsa = Crypt::PK::RSA->new;
+				eval { $rsa->import_key( $jwks->{keys}[0] ) };
+				$verified = 1 if !$@ && eval { $rsa->verify_message( $sig, $signing_input, 'SHA256', 'v1.5' ) };
+			}
+		}
+	} elsif ( $alg eq 'HS256' ) {
+		my $secret = $client_entry->get_value('oidcClientSecret') // '';
+		if ( $secret ne '' ) {
+			require Digest::SHA;
+			$verified = 1 if $sig eq Digest::SHA::hmac_sha256( $signing_input, $secret );
+		}
+	}
+
+	return {
+		client_id    => $aud,
+		client_entry => $client_entry,
+		verified     => $verified,
+		payload      => $payload,
+	};
+} ## end sub _verify_id_token_hint
+
+# Clear the SSO session and, when a post_logout_redirect_uri is supplied and is
+# registered for the resolved client, redirect there (with state). Otherwise
+# render the logged-out page. The redirect target is always validated against
+# the client's registered oidcPostLogoutRedirectURI values to prevent an open
+# redirect.
+sub _perform_logout {
+	my ( $self, $post, $state, $info, $client_id_param ) = @_;
+
+	# Drop the entire SSO session cookie (login state, auth_time, etc.).
+	$self->session( expires => 1 );
+
+	# Resolve the client for redirect-URI validation: a verified id_token_hint
+	# is authoritative; otherwise fall back to the client_id parameter.
+	my $client_entry;
+	if ( $info && $info->{verified} ) {
+		$client_entry = $info->{client_entry};
+	} elsif ( defined $client_id_param && $client_id_param ne '' ) {
+		eval { $client_entry = $self->pt->getOIDCClientEntry( { clientId => $client_id_param } ) };
+	}
+
+	if ( defined $post && $post ne '' && $client_entry ) {
+		my @registered = $client_entry->get_value('oidcPostLogoutRedirectURI');
+		if ( grep { $_ eq $post } @registered ) {
+			my $url = Mojo::URL->new($post);
+			$url->query->merge( state => $state ) if defined $state && $state ne '';
+			return $self->redirect_to($url);
+		}
+	}
+
+	return $self->render( template => 'sso/logout', layout => 'sso' );
+} ## end sub _perform_logout
 
 sub _build_id_token {
 	my ( $self, $user, $client_id, $nonce, $scope, $auth_time ) = @_;

@@ -43,6 +43,7 @@ Standard OIDC endpoints:
     /authorize                          Authorization endpoint
     /token                              Token endpoint
     /userinfo                           UserInfo endpoint
+    /sso/logout                         End-session (RP-initiated logout)
 
 All standard Mojolicious server commands (C<daemon>, C<prefork>, etc.)
 are supported after any C<--pt-config> argument.
@@ -73,6 +74,41 @@ The issuer identifier for this OpenID Provider. This should be the
 base URL of the SSO provider (e.g. C<https://sso.example.com>).
 Defaults to the request URL origin if not set.
 
+=head2 ssoCodeLifetime
+
+Lifetime in seconds of an authorization code. Defaults to C<600>.
+
+=head2 ssoTokenLifetime
+
+Lifetime in seconds of an access token and ID token. Defaults to C<3600>.
+
+=head2 Grant store
+
+Authorization codes and access tokens are redeemed by relying-party back
+ends over server-to-server requests that carry no browser session cookie.
+They are therefore held in a shared, server-side store
+(L<App::Nisaba::WebSSO::Storage>) rather than in the user session, so that
+they work across prefork worker processes and survive restarts. Codes and
+tokens are stored hashed (SHA-256), never in the clear.
+
+=head3 ssoStorageBackend
+
+Storage backend name, resolved under
+C<App::Nisaba::WebSSO::Storage::backends>. Defaults to C<SQLite>.
+
+=head3 ssoStoragePath
+
+Backend-specific location. For the SQLite backend this is the database
+file path; it defaults to F</var/db/nisaba/websso.sqlite>. The parent
+directory is created (mode 0700) if missing and the database file is
+restricted to mode 0600. The login UI session itself remains in the
+browser cookie and is not stored here.
+
+=head3 ssoStorageCleanupInterval
+
+Minimum seconds between opportunistic sweeps of expired grants. Defaults
+to C<300>. Set to C<0> to disable.
+
 =head1 ENDPOINTS
 
     /.well-known/openid-configuration   OIDC Discovery document
@@ -83,6 +119,7 @@ Defaults to the request URL origin if not set.
     /sso/login                          Login form (GET) and submission (POST)
     /sso/totp                           TOTP challenge (GET/POST)
     /sso/consent                        Consent screen (GET/POST)
+    /sso/logout                         End-session / RP-initiated logout (GET/POST)
     /sso/passkeys/login/start           Passkey authentication start (GET)
     /sso/passkeys/login/finish          Passkey authentication finish (POST)
 
@@ -219,12 +256,29 @@ C<OIDCRedirectURI> you configure below).
         Require valid-user
     </Location>
 
+mod_auth_openidc validates the SSO provider's TLS certificate when it
+fetches the discovery and JWKS documents, so the provider must be served
+over HTTPS with a certificate the Apache host trusts. For a development
+provider using a self-signed certificate, validation can be disabled with
+C<OIDCSSLValidateServer Off> — never do this in production. The reverse
+proxy example below additionally requires C<mod_proxy> and
+C<mod_proxy_http> to be loaded.
+
 =head2 Common options
+
+    # The provider supports only the authorization code flow. This is also
+    # mod_auth_openidc's default, so OIDCResponseType need not be changed;
+    # it is shown here only for clarity.
+    OIDCResponseType code
 
     # Scopes to request (space-separated).
     # "openid" is always required; add profile, email, phone, address
     # as needed.
     OIDCScope "openid profile email"
+
+    # Use PKCE to harden the authorization code exchange. The provider
+    # advertises the S256 method.
+    OIDCPKCEMethod S256
 
     # How long (seconds) before re-checking the user's session.
     OIDCSessionInactivityTimeout 3600
@@ -265,10 +319,12 @@ C<OIDC_CLAIM_name>, etc.
 
 =head2 Restricting access by claim
 
-    # Only allow users whose email ends in @example.com
+    # Only allow users whose email ends in @example.com.
+    # The regex form of Require claim uses "name~regex" (tilde); the
+    # exact-match form uses "name:value" as with sub:jdoe below.
     <Location /staff-only>
         AuthType openid-connect
-        Require claim email:~@example\.com$
+        Require claim email~@example\.com$
     </Location>
 
     # Only allow a specific user
@@ -279,18 +335,36 @@ C<OIDC_CLAIM_name>, etc.
 
 =head2 Logout
 
-To enable RP-initiated logout, configure a logout URL:
+The Nisaba SSO provider implements OpenID Connect RP-Initiated Logout: it
+advertises an C<end_session_endpoint> in the discovery document, so
+mod_auth_openidc can log the user out of the Nisaba SSO session (not just
+the local mod_auth_openidc session).
 
-    OIDCProviderEndSessionEndpoint https://sso.example.com/sso/logout
+First, register the post-logout destination as a B<post-logout redirect
+URI> on the OIDC client in the Nisaba admin UI (this is validated by the
+provider to prevent open redirects). Then trigger logout by sending the
+browser to the redirect URI with a C<logout> query parameter whose value
+is the URL-encoded post-logout destination:
 
-    # Users visiting this URL will be logged out of both
-    # mod_auth_openidc and the Nisaba SSO session.
-    <Location /logout>
-        AuthType openid-connect
-        Require valid-user
-        # The redirect= parameter controls where the user lands after logout
-        OIDCUnAuthAction 302:/logged-out.html
-    </Location>
+    https://app.example.com/redirect_uri?logout=https%3A%2F%2Fapp.example.com%2Floggedout
+
+mod_auth_openidc clears its local session and, because the provider
+advertises C<end_session_endpoint>, redirects the browser to it with an
+C<id_token_hint>. The provider verifies the hint, clears the Nisaba SSO
+session, and redirects back to the post-logout URL (which must be one of
+the client's registered post-logout redirect URIs; otherwise the provider
+ends the session but shows its own signed-out page instead of redirecting).
+
+A default landing page can be set so the C<logout> parameter need not be
+passed every time:
+
+    OIDCDefaultLoggedOutURL https://app.example.com/loggedout
+
+Note that logout ends the Nisaba SSO session itself, so the user must
+re-authenticate on their next sign-in. Logout is B<not> propagated to other
+relying parties that already have active sessions; those persist until they
+next re-check with the provider (front-channel and back-channel logout are
+not implemented).
 
 =head2 Full example with reverse proxy
 
@@ -317,10 +391,14 @@ To enable RP-initiated logout, configure a logout URL:
             ProxyPassReverse http://127.0.0.1:3000/
         </Location>
 
-        # The redirect_uri must NOT be proxied
+        # The redirect_uri is handled locally by mod_auth_openidc and must
+        # NOT be proxied to the backend. The catch-all ProxyPass in
+        # <Location /> above would otherwise capture it, so exclude it with
+        # "ProxyPass !".
         <Location /redirect_uri>
             AuthType openid-connect
             Require valid-user
+            ProxyPass !
         </Location>
     </VirtualHost>
 
