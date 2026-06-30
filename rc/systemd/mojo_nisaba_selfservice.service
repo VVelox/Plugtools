@@ -1,0 +1,67 @@
+[Unit]
+Description=App::Nisaba self-service web portal (mojo_nisaba_selfservice)
+Documentation=man:mojo_nisaba_selfservice
+After=network-online.target
+Wants=network-online.target
+# If your LDAP server runs on this host, also order after it:
+# After=slapd.service
+
+[Service]
+Type=simple
+User=nisaba
+Group=nisaba
+
+# Built-in defaults; override them in the optional environment file below.
+Environment=LISTEN=http://*:8081
+# To terminate TLS in the app itself (instead of a reverse proxy), use an https
+# listen URL with cert/key query parameters (requires IO::Socket::SSL). The
+# cert and key must live on a readable system path (not under a home directory,
+# which ProtectHome= hides) and be readable by the service user. systemd treats
+# ${LISTEN} as a single argument, so the "&" needs no escaping here:
+# Environment=LISTEN=https://*:8443?cert=/usr/local/etc/nisaba/tls/server.crt&key=/usr/local/etc/nisaba/tls/server.key
+Environment=NISABA_CONFIG=/usr/local/etc/nisabarc
+# When running behind a trusted, TLS-terminating reverse proxy, uncomment so
+# Mojolicious honors X-Forwarded-* and generates correct absolute URLs. Do NOT
+# enable if the app is reachable by clients directly.
+# Environment=MOJO_REVERSE_PROXY=1
+
+# Optional overrides: LISTEN, NISABA_CONFIG, NISABA_SECRET, MOJO_REVERSE_PROXY.
+# Password-reset email (SMTP) is configured via the nisabarc file, not here.
+EnvironmentFile=-/usr/local/etc/nisaba/mojo_nisaba_selfservice.env
+
+ExecStart=/usr/local/bin/mojo_nisaba_selfservice prefork -l ${LISTEN}
+
+Restart=on-failure
+RestartSec=5
+
+# --- Hardening ------------------------------------------------------------
+# This service keeps no local state (it talks to LDAP and, optionally, an SMTP
+# relay over the network), so the whole filesystem can be read-only.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+# To bind a privileged port (e.g. :443) directly instead of via a proxy:
+# AmbientCapabilities=CAP_NET_BIND_SERVICE
+# CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
