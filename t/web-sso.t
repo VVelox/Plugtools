@@ -163,8 +163,10 @@ sub _install_stubs {
 	$app->helper( pt => sub { $fake_pt } );
 }
 
-# Add a same-host Referer to every POST so the middleware check passes
-# (except for /token which is exempt)
+# Add a same-host Referer to every POST so the middleware check passes.
+# The OIDC protocol endpoints (/token and /userinfo) are exempt from the
+# Referer check and are called by RPs without a browser Referer, so we do not
+# add one for them — exercising the real server-to-server request shape.
 sub _add_referer_hook {
 	my $t = shift;
 	$t->ua->on(
@@ -172,6 +174,7 @@ sub _add_referer_hook {
 			my ( $ua, $tx ) = @_;
 			return unless $tx->req->method eq 'POST';
 			return if $tx->req->url->path eq '/token';
+			return if $tx->req->url->path eq '/userinfo';
 			my $host = $tx->req->url->to_abs->host_port // 'localhost';
 			$tx->req->headers->referrer("http://$host/");
 		}
@@ -185,6 +188,13 @@ sub _b64url_encode {
 	$b64 =~ tr|+/|-_|;
 	$b64 =~ s/=+$//;
 	return $b64;
+}
+
+sub _b64url_decode {
+	my ($b64u) = @_;
+	$b64u =~ tr|-_|+/|;
+	while ( length($b64u) % 4 ) { $b64u .= '=' }
+	return MIME::Base64::decode_base64($b64u);
 }
 
 my $t = Test::Mojo->new('App::Nisaba::WebSSO');
@@ -401,6 +411,7 @@ $t->post_ok( '/token', form => {
 	grant_type   => 'authorization_code',
 	code         => $code2,
 	client_id    => 'wrong_client',
+	redirect_uri => 'https://testapp.example.com/callback',
 })
   ->status_is(400)
   ->json_is( '/error' => 'invalid_grant', 'wrong client_id returns invalid_grant' );
@@ -421,6 +432,7 @@ $t->post_ok( '/token', form => {
 	code          => $code3,
 	client_id     => 'secretapp',
 	client_secret => 'wrongsecret',
+	redirect_uri  => 'https://secretapp.example.com/callback',
 })
   ->status_is(401)
   ->json_is( '/error' => 'invalid_client', 'wrong secret returns invalid_client' );
@@ -441,6 +453,7 @@ $t->post_ok( '/token', form => {
 	code          => $code4,
 	client_id     => 'secretapp',
 	client_secret => 's3cret',
+	redirect_uri  => 'https://secretapp.example.com/callback',
 })
   ->status_is(200)
   ->json_has('/access_token', 'correct secret gets access_token');
@@ -462,6 +475,7 @@ $t->post_ok( '/token',
 	form => {
 		grant_type   => 'authorization_code',
 		code         => $code5,
+		redirect_uri => 'https://secretapp.example.com/callback',
 	}
 )
   ->status_is(200)
@@ -507,6 +521,7 @@ $t->post_ok( '/token', form => {
 	grant_type    => 'authorization_code',
 	code          => $pkce_code2,
 	client_id     => 'testapp',
+	redirect_uri  => 'https://testapp.example.com/callback',
 	code_verifier => 'wrong-verifier-value',
 })
   ->status_is(400)
@@ -524,9 +539,10 @@ $t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
 my $pkce_code3 = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
 
 $t->post_ok( '/token', form => {
-	grant_type => 'authorization_code',
-	code       => $pkce_code3,
-	client_id  => 'testapp',
+	grant_type   => 'authorization_code',
+	code         => $pkce_code3,
+	client_id    => 'testapp',
+	redirect_uri => 'https://testapp.example.com/callback',
 })
   ->status_is(400)
   ->json_like( '/error_description' => qr/code_verifier/, 'missing code_verifier fails' );
@@ -548,6 +564,7 @@ $t->post_ok( '/token', form => {
 	grant_type    => 'authorization_code',
 	code          => $pkce_code4,
 	client_id     => 'testapp',
+	redirect_uri  => 'https://testapp.example.com/callback',
 	code_verifier => $plain_verifier,
 })
   ->status_is(200)
@@ -580,9 +597,10 @@ $t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
 my $phone_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
 
 $t->post_ok( '/token', form => {
-	grant_type => 'authorization_code',
-	code       => $phone_code,
-	client_id  => 'testapp',
+	grant_type   => 'authorization_code',
+	code         => $phone_code,
+	client_id    => 'testapp',
+	redirect_uri => 'https://testapp.example.com/callback',
 })
   ->status_is(200);
 my $phone_token = $t->tx->res->json->{access_token};
@@ -609,9 +627,10 @@ $t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
 my $addr_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
 
 $t->post_ok( '/token', form => {
-	grant_type => 'authorization_code',
-	code       => $addr_code,
-	client_id  => 'testapp',
+	grant_type   => 'authorization_code',
+	code         => $addr_code,
+	client_id    => 'testapp',
+	redirect_uri => 'https://testapp.example.com/callback',
 })
   ->status_is(200);
 my $addr_token = $t->tx->res->json->{access_token};
@@ -772,9 +791,10 @@ $t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
 my $min_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
 
 $t->post_ok( '/token', form => {
-	grant_type => 'authorization_code',
-	code       => $min_code,
-	client_id  => 'testapp',
+	grant_type   => 'authorization_code',
+	code         => $min_code,
+	client_id    => 'testapp',
+	redirect_uri => 'https://testapp.example.com/callback',
 })->status_is(200);
 my $min_token = $t->tx->res->json->{access_token};
 
@@ -787,5 +807,605 @@ ok( !exists $min_info->{name},         'openid-only: no name' );
 ok( !exists $min_info->{email},        'openid-only: no email' );
 ok( !exists $min_info->{phone_number}, 'openid-only: no phone' );
 ok( !exists $min_info->{address},      'openid-only: no address' );
+
+# ── RS256 ID token signing ──────────────────────────────────────────────────
+
+# Generate a real RSA key pair for the test client
+use Crypt::PK::RSA;
+my $test_rsa = Crypt::PK::RSA->new;
+$test_rsa->generate_key( 256, 65537 );    # 2048-bit
+
+my $priv_jwk = Mojo::JSON::decode_json( $test_rsa->export_key_jwk('private') );
+$priv_jwk->{kid} = 'test-rs256-kid';
+$priv_jwk->{use} = 'sig';
+$priv_jwk->{alg} = 'RS256';
+my $rs256_jwks_json = Mojo::JSON::encode_json( { keys => [$priv_jwk] } );
+
+my $client_rs256 = FakeEntry->new(
+	_dn                          => 'oidcClientId=rs256app,ou=oidc,dc=example,dc=com',
+	oidcClientId                 => 'rs256app',
+	oidcClientName               => 'RS256 App',
+	oidcRedirectURI              => ['https://rs256app.example.com/callback'],
+	oidcScope                    => [ 'openid', 'profile', 'email' ],
+	oidcGrantType                => ['authorization_code'],
+	oidcResponseType             => ['code'],
+	oidcApplicationType          => 'web',
+	oidcTokenEndpointAuthMethod  => 'none',
+	oidcIdTokenSignedResponseAlg => 'RS256',
+	oidcJwks                     => $rs256_jwks_json,
+);
+
+$t->reset_session;
+_install_stubs(
+	$t->app,
+	getOIDCClientEntry => sub {
+		my ( $self, $args ) = @_;
+		return $client_rs256       if ( $args->{clientId} // '' ) eq 'rs256app';
+		return $client_public      if ( $args->{clientId} // '' ) eq 'testapp';
+		return $client_confidential if ( $args->{clientId} // '' ) eq 'secretapp';
+		return undef;
+	},
+);
+
+$t->get_ok('/authorize?client_id=rs256app&redirect_uri=https://rs256app.example.com/callback&response_type=code&scope=openid+profile+email&state=rs1&nonce=rsnonce1')
+  ->status_is(302);
+$t->post_ok( '/sso/login', form => { user => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $rs256_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+$t->post_ok( '/token', form => {
+	grant_type   => 'authorization_code',
+	code         => $rs256_code,
+	redirect_uri => 'https://rs256app.example.com/callback',
+	client_id    => 'rs256app',
+})
+  ->status_is(200)
+  ->json_has('/id_token');
+
+my $rs256_id_token = $t->tx->res->json->{id_token};
+
+# RS256 JWT must have three non-empty parts (header.payload.signature)
+my @rs256_parts = split /\./, $rs256_id_token;
+is( scalar @rs256_parts, 3, 'RS256 id_token has 3 parts' );
+ok( length( $rs256_parts[2] ) > 0, 'RS256 id_token has non-empty signature' );
+
+# Verify header
+my $rs256_header = Mojo::JSON::decode_json( MIME::Base64::decode_base64( $rs256_parts[0] ) );
+is( $rs256_header->{alg}, 'RS256',         'RS256 header alg is RS256' );
+is( $rs256_header->{typ}, 'JWT',           'RS256 header typ is JWT' );
+is( $rs256_header->{kid}, 'test-rs256-kid', 'RS256 header has correct kid' );
+
+# Verify payload claims
+my $rs256_payload = Mojo::JSON::decode_json( MIME::Base64::decode_base64( $rs256_parts[1] ) );
+is( $rs256_payload->{iss},   'http://localhost',   'RS256 id_token iss correct' );
+is( $rs256_payload->{sub},   'alice',              'RS256 id_token sub correct' );
+is( $rs256_payload->{aud},   'rs256app',           'RS256 id_token aud correct' );
+is( $rs256_payload->{nonce}, 'rsnonce1',           'RS256 id_token nonce correct' );
+is( $rs256_payload->{name},  'Alice Wonderland',   'RS256 id_token has profile name' );
+is( $rs256_payload->{email}, 'alice@example.com',  'RS256 id_token has email' );
+ok( defined $rs256_payload->{iat},                 'RS256 id_token has iat' );
+ok( defined $rs256_payload->{exp},                 'RS256 id_token has exp' );
+ok( $rs256_payload->{exp} > $rs256_payload->{iat}, 'RS256 id_token exp > iat' );
+
+# Verify the RSA signature using the public key
+my $rs256_signing_input = "$rs256_parts[0].$rs256_parts[1]";
+my $rs256_sig_bytes     = _b64url_decode( $rs256_parts[2] );
+my $verify_rsa          = Crypt::PK::RSA->new;
+$verify_rsa->import_key( \( $test_rsa->export_key_pem('public') ) );
+ok( $verify_rsa->verify_message( $rs256_sig_bytes, $rs256_signing_input, 'SHA256', 'v1.5' ),
+	'RS256 signature verifies with public key' );
+
+# ── RS256 JWKS endpoint serves public key ───────────────────────────────────
+
+# Override getOIDCClients to return the RS256 client for /jwks
+_install_stubs(
+	$t->app,
+	getOIDCClientEntry => sub {
+		my ( $self, $args ) = @_;
+		return $client_rs256       if ( $args->{clientId} // '' ) eq 'rs256app';
+		return $client_public      if ( $args->{clientId} // '' ) eq 'testapp';
+		return $client_confidential if ( $args->{clientId} // '' ) eq 'secretapp';
+		return undef;
+	},
+	getOIDCClients => sub { return [$client_rs256] },
+);
+
+$t->get_ok('/jwks')
+  ->status_is(200)
+  ->json_has('/keys');
+
+my $jwks_resp = $t->tx->res->json;
+ok( @{ $jwks_resp->{keys} } >= 1, 'JWKS has at least one key' );
+my $pub_jwk = $jwks_resp->{keys}[0];
+is( $pub_jwk->{kty}, 'RSA',              'JWKS key type is RSA' );
+is( $pub_jwk->{kid}, 'test-rs256-kid',   'JWKS key has correct kid' );
+is( $pub_jwk->{use}, 'sig',              'JWKS key use is sig' );
+is( $pub_jwk->{alg}, 'RS256',            'JWKS key alg is RS256' );
+ok( defined $pub_jwk->{n},               'JWKS key has modulus n' );
+ok( defined $pub_jwk->{e},               'JWKS key has exponent e' );
+ok( !defined $pub_jwk->{d},              'JWKS key does NOT expose private exponent d' );
+ok( !defined $pub_jwk->{p},              'JWKS key does NOT expose prime p' );
+ok( !defined $pub_jwk->{q},              'JWKS key does NOT expose prime q' );
+
+# Verify the ID token signature using the key from the JWKS endpoint
+my $jwks_verify_rsa = Crypt::PK::RSA->new;
+$jwks_verify_rsa->import_key($pub_jwk);
+ok( $jwks_verify_rsa->verify_message( $rs256_sig_bytes, $rs256_signing_input, 'SHA256', 'v1.5' ),
+	'RS256 signature verifies with JWKS endpoint public key' );
+
+# ── HS256 ID token signing ──────────────────────────────────────────────────
+
+my $hs256_secret = 'super-secret-hmac-key-for-testing-hs256';
+
+my $client_hs256 = FakeEntry->new(
+	_dn                          => 'oidcClientId=hs256app,ou=oidc,dc=example,dc=com',
+	oidcClientId                 => 'hs256app',
+	oidcClientName               => 'HS256 App',
+	oidcClientSecret             => $hs256_secret,
+	oidcRedirectURI              => ['https://hs256app.example.com/callback'],
+	oidcScope                    => [ 'openid', 'profile', 'email' ],
+	oidcGrantType                => ['authorization_code'],
+	oidcResponseType             => ['code'],
+	oidcApplicationType          => 'web',
+	oidcTokenEndpointAuthMethod  => 'client_secret_basic',
+	oidcIdTokenSignedResponseAlg => 'HS256',
+);
+
+$t->reset_session;
+_install_stubs(
+	$t->app,
+	getOIDCClientEntry => sub {
+		my ( $self, $args ) = @_;
+		return $client_hs256       if ( $args->{clientId} // '' ) eq 'hs256app';
+		return $client_public      if ( $args->{clientId} // '' ) eq 'testapp';
+		return $client_confidential if ( $args->{clientId} // '' ) eq 'secretapp';
+		return undef;
+	},
+);
+
+$t->get_ok('/authorize?client_id=hs256app&redirect_uri=https://hs256app.example.com/callback&response_type=code&scope=openid+profile+email&state=hs1&nonce=hsnonce1')
+  ->status_is(302);
+$t->post_ok( '/sso/login', form => { user => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $hs256_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+my $hs256_basic = 'Basic ' . MIME::Base64::encode_base64( "hs256app:$hs256_secret", '' );
+$t->post_ok( '/token',
+	{ Authorization => $hs256_basic },
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $hs256_code,
+		redirect_uri => 'https://hs256app.example.com/callback',
+	}
+)
+  ->status_is(200)
+  ->json_has('/id_token');
+
+my $hs256_id_token = $t->tx->res->json->{id_token};
+
+# HS256 JWT must have three non-empty parts
+my @hs256_parts = split /\./, $hs256_id_token;
+is( scalar @hs256_parts, 3, 'HS256 id_token has 3 parts' );
+ok( length( $hs256_parts[2] ) > 0, 'HS256 id_token has non-empty signature' );
+
+# Verify header
+my $hs256_header = Mojo::JSON::decode_json( MIME::Base64::decode_base64( $hs256_parts[0] ) );
+is( $hs256_header->{alg}, 'HS256', 'HS256 header alg is HS256' );
+is( $hs256_header->{typ}, 'JWT',   'HS256 header typ is JWT' );
+
+# Verify payload claims
+my $hs256_payload = Mojo::JSON::decode_json( MIME::Base64::decode_base64( $hs256_parts[1] ) );
+is( $hs256_payload->{iss},   'http://localhost',   'HS256 id_token iss correct' );
+is( $hs256_payload->{sub},   'alice',              'HS256 id_token sub correct' );
+is( $hs256_payload->{aud},   'hs256app',           'HS256 id_token aud correct' );
+is( $hs256_payload->{nonce}, 'hsnonce1',           'HS256 id_token nonce correct' );
+is( $hs256_payload->{name},  'Alice Wonderland',   'HS256 id_token has profile name' );
+is( $hs256_payload->{email}, 'alice@example.com',  'HS256 id_token has email' );
+
+# Verify the HMAC-SHA256 signature using the client secret
+my $hs256_signing_input = "$hs256_parts[0].$hs256_parts[1]";
+my $hs256_expected_sig  = Digest::SHA::hmac_sha256( $hs256_signing_input, $hs256_secret );
+my $hs256_actual_sig    = _b64url_decode( $hs256_parts[2] );
+is( $hs256_actual_sig, $hs256_expected_sig, 'HS256 signature matches HMAC-SHA256 with client secret' );
+
+# ── HS256: wrong secret does not verify ─────────────────────────────────────
+
+my $hs256_wrong_sig = Digest::SHA::hmac_sha256( $hs256_signing_input, 'wrong-secret' );
+isnt( $hs256_actual_sig, $hs256_wrong_sig, 'HS256 signature does not match with wrong secret' );
+
+# ── Authorization code expiration ───────────────────────────────────────────
+
+# Get a code with normal lifetime, then shrink ssoCodeLifetime to 0 before
+# exchanging it so the server considers it immediately expired.
+$t->reset_session;
+_install_stubs( $t->app );
+
+$t->get_ok('/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=exp1')
+  ->status_is(302);
+$t->post_ok( '/sso/login', form => { user => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $exp_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+# Set ssoCodeLifetime to -1 so any code age exceeds it
+$t->app->helper( pt => sub {
+	my $fake_pt = bless {
+		ini => {
+			'' => {
+				ssoIssuer        => 'http://localhost',
+				ssoTokenLifetime => 3600,
+				ssoCodeLifetime  => -1,
+				passkeyRpId      => '',
+				passkeyUserVerification => 'preferred',
+			},
+		},
+	}, 'FakePT';
+	return $fake_pt;
+});
+
+$t->post_ok( '/token', form => {
+	grant_type   => 'authorization_code',
+	code         => $exp_code,
+	client_id    => 'testapp',
+	redirect_uri => 'https://testapp.example.com/callback',
+})
+  ->status_is(400)
+  ->json_is( '/error' => 'invalid_grant' )
+  ->json_like( '/error_description' => qr/expired/i, 'expired code returns invalid_grant with expiry message' );
+
+# ── Access token expiration ─────────────────────────────────────────────────
+
+$t->reset_session;
+_install_stubs( $t->app );
+
+$t->get_ok('/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=tokexp1')
+  ->status_is(302);
+$t->post_ok( '/sso/login', form => { user => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $tokexp_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+$t->post_ok( '/token', form => {
+	grant_type   => 'authorization_code',
+	code         => $tokexp_code,
+	client_id    => 'testapp',
+	redirect_uri => 'https://testapp.example.com/callback',
+})
+  ->status_is(200);
+my $tokexp_token = $t->tx->res->json->{access_token};
+
+# Verify the token works first
+$t->get_ok( '/userinfo', { Authorization => "Bearer $tokexp_token" } )
+  ->status_is(200)
+  ->json_is( '/sub' => 'alice', 'token works before expiry' );
+
+# Set ssoTokenLifetime to -1 so any token age exceeds it
+$t->app->helper( pt => sub {
+	my $fake_pt = bless {
+		ini => {
+			'' => {
+				ssoIssuer        => 'http://localhost',
+				ssoTokenLifetime => -1,
+				ssoCodeLifetime  => 600,
+				passkeyRpId      => '',
+				passkeyUserVerification => 'preferred',
+			},
+		},
+	}, 'FakePT';
+	return $fake_pt;
+});
+
+$t->get_ok( '/userinfo', { Authorization => "Bearer $tokexp_token" } )
+  ->status_is(401)
+  ->json_is( '/error' => 'invalid_token', 'expired token returns invalid_token' );
+
+# Verify the token was cleaned up from the session (subsequent request also 401)
+$t->get_ok( '/userinfo', { Authorization => "Bearer $tokexp_token" } )
+  ->status_is(401)
+  ->json_is( '/error' => 'invalid_token', 'expired token cleaned from session' );
+
+# ── client_secret_post in isolation ─────────────────────────────────────────
+# Test form-based client_secret (not Authorization header) for confidential client
+
+$t->reset_session;
+_install_stubs( $t->app );
+
+$t->get_ok('/authorize?client_id=secretapp&redirect_uri=https://secretapp.example.com/callback&response_type=code&scope=openid&state=csp1')
+  ->status_is(302);
+$t->post_ok( '/sso/login', form => { user => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $csp_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+# Wrong secret via form parameter
+$t->post_ok( '/token', form => {
+	grant_type    => 'authorization_code',
+	code          => $csp_code,
+	client_id     => 'secretapp',
+	client_secret => 'wrongsecret',
+	redirect_uri  => 'https://secretapp.example.com/callback',
+})
+  ->status_is(401)
+  ->json_is( '/error' => 'invalid_client', 'client_secret_post: wrong secret rejected' );
+
+# Correct secret via form parameter (need a new code since previous was consumed)
+$t->reset_session;
+_install_stubs( $t->app );
+
+$t->get_ok('/authorize?client_id=secretapp&redirect_uri=https://secretapp.example.com/callback&response_type=code&scope=openid&state=csp2')
+  ->status_is(302);
+$t->post_ok( '/sso/login', form => { user => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $csp_code2 = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+$t->post_ok( '/token', form => {
+	grant_type    => 'authorization_code',
+	code          => $csp_code2,
+	client_id     => 'secretapp',
+	client_secret => 's3cret',
+	redirect_uri  => 'https://secretapp.example.com/callback',
+})
+  ->status_is(200)
+  ->json_has('/access_token', 'client_secret_post: correct secret accepted via form param' )
+  ->json_is( '/token_type' => 'Bearer' );
+
+# ── client_secret_basic: malformed Authorization header ─────────────────────
+
+$t->reset_session;
+_install_stubs( $t->app );
+
+$t->get_ok('/authorize?client_id=secretapp&redirect_uri=https://secretapp.example.com/callback&response_type=code&scope=openid&state=malauth1')
+  ->status_is(302);
+$t->post_ok( '/sso/login', form => { user => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $malauth_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+# Send a Basic auth header with wrong credentials
+my $bad_basic = 'Basic ' . MIME::Base64::encode_base64( 'secretapp:wrongpassword', '' );
+$t->post_ok( '/token',
+	{ Authorization => $bad_basic },
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $malauth_code,
+		redirect_uri => 'https://secretapp.example.com/callback',
+	}
+)
+  ->status_is(401)
+  ->json_is( '/error' => 'invalid_client', 'client_secret_basic: wrong secret in header rejected' );
+
+# ── Discovery: JWKS URI ────────────────────────────────────────────────────
+
+$t->get_ok('/.well-known/openid-configuration')
+  ->status_is(200)
+  ->json_is( '/jwks_uri' => 'http://localhost/jwks', 'discovery includes jwks_uri' )
+  ->json_has('/id_token_signing_alg_values_supported');
+
+my $disc = $t->tx->res->json;
+my $alg_list = $disc->{id_token_signing_alg_values_supported};
+ok( ( grep { $_ eq 'RS256' } @$alg_list ), 'discovery advertises RS256' );
+ok( ( grep { $_ eq 'HS256' } @$alg_list ), 'discovery advertises HS256' );
+ok( ( grep { $_ eq 'none' }  @$alg_list ), 'discovery advertises none' );
+
+# ── UserInfo via POST ───────────────────────────────────────────────────────
+
+$t->reset_session;
+_install_stubs( $t->app );
+
+$t->get_ok('/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid+profile&state=uipost1')
+  ->status_is(302);
+$t->post_ok( '/sso/login', form => { user => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $uipost_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+$t->post_ok( '/token', form => {
+	grant_type   => 'authorization_code',
+	code         => $uipost_code,
+	client_id    => 'testapp',
+	redirect_uri => 'https://testapp.example.com/callback',
+})
+  ->status_is(200);
+my $uipost_token = $t->tx->res->json->{access_token};
+
+# POST to /userinfo with Bearer token (OIDC Core 5.3.1 allows GET and POST).
+# The referer hook does NOT add a Referer for /userinfo, so this also proves
+# the endpoint is exempt from the CSRF Referer check (RP server-to-server call).
+$t->post_ok( '/userinfo', { Authorization => "Bearer $uipost_token" } )
+  ->status_is(200)
+  ->json_is( '/sub'  => 'alice',             'UserInfo POST: sub correct' )
+  ->json_is( '/name' => 'Alice Wonderland',  'UserInfo POST: name correct' );
+
+# ── UserInfo POST without Referer is allowed even with no referer hook ───────
+# A fresh client with no referer hook at all must still reach POST /userinfo.
+
+{
+	my $t_api = Test::Mojo->new('App::Nisaba::WebSSO');
+	_install_stubs( $t_api->app );
+
+	# Browser steps need a Referer; add it only for the login/consent POSTs.
+	$t_api->ua->on(
+		start => sub {
+			my ( $ua, $tx ) = @_;
+			return unless $tx->req->method eq 'POST';
+			return if $tx->req->url->path eq '/token';
+			return if $tx->req->url->path eq '/userinfo';
+			my $host = $tx->req->url->to_abs->host_port // 'localhost';
+			$tx->req->headers->referrer("http://$host/");
+		}
+	);
+
+	$t_api->get_ok('/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid+profile&state=apiui1')
+	  ->status_is(302);
+	$t_api->post_ok( '/sso/login', form => { user => 'alice', pass => 'correct' } )->status_is(302);
+	$t_api->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+	my $api_code = Mojo::URL->new( $t_api->tx->res->headers->location )->query->param('code');
+
+	$t_api->post_ok( '/token', form => {
+		grant_type   => 'authorization_code',
+		code         => $api_code,
+		client_id    => 'testapp',
+		redirect_uri => 'https://testapp.example.com/callback',
+	})->status_is(200);
+	my $api_token = $t_api->tx->res->json->{access_token};
+
+	# No Referer on this POST — must NOT be 403
+	$t_api->post_ok( '/userinfo', { Authorization => "Bearer $api_token" } )
+	  ->status_is(200)
+	  ->json_is( '/sub' => 'alice', 'POST /userinfo works without a Referer header' );
+}
+
+# ── expires_in is a JSON number even when config provides a string ──────────
+# Config::IniHash yields strings; RFC 6749 5.1 requires expires_in to be a number.
+
+$t->reset_session;
+_install_stubs( $t->app );
+$t->app->helper( pt => sub {
+	my $fake_pt = bless {
+		ini => {
+			'' => {
+				ssoIssuer        => 'http://localhost',
+				ssoTokenLifetime => '1800',    # string, as it would come from INI
+				ssoCodeLifetime  => '600',
+				passkeyRpId      => '',
+				passkeyUserVerification => 'preferred',
+			},
+		},
+	}, 'FakePT';
+	return $fake_pt;
+});
+
+$t->get_ok('/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=numexp1')
+  ->status_is(302);
+$t->post_ok( '/sso/login', form => { user => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $numexp_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+$t->post_ok( '/token', form => {
+	grant_type   => 'authorization_code',
+	code         => $numexp_code,
+	client_id    => 'testapp',
+	redirect_uri => 'https://testapp.example.com/callback',
+})->status_is(200);
+like( $t->tx->res->body, qr/"expires_in":1800(?:[,}])/, 'expires_in serialized as a JSON number, not a string' );
+
+# ── Authorize: missing response_type → invalid_request (RFC 6749 4.1.2.1) ───
+
+$t->reset_session;
+_install_stubs( $t->app );
+
+$t->get_ok('/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&scope=openid&state=nort1')
+  ->status_is(302)
+  ->header_like( Location => qr/error=invalid_request/, 'missing response_type is invalid_request' )
+  ->header_like( Location => qr/state=nort1/,           'state preserved on missing response_type' );
+
+# ── auth_time reflects actual login, not token issuance (OIDC Core 2) ────────
+# Log in once, wait, then run a second authorize that skips login (already
+# authenticated). The ID token's auth_time must be the original login time,
+# strictly earlier than the token's iat.
+
+$t->reset_session;
+_install_stubs( $t->app );
+
+# First cycle: authenticate (sets sso_user + sso_auth_time)
+$t->get_ok('/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=at1')
+  ->status_is(302);
+$t->post_ok( '/sso/login', form => { user => 'alice', pass => 'correct' } )
+  ->status_is(302)
+  ->header_like( Location => qr{/sso/consent}, 'auth_time: first login reaches consent' );
+
+sleep 1;    # ensure token issuance lands in a later second than login
+
+# Second cycle: already authenticated → straight to consent, then issue a token
+$t->get_ok('/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=at2')
+  ->status_is(302)
+  ->header_like( Location => qr{/sso/consent}, 'auth_time: second authorize skips login' );
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $at_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+$t->post_ok( '/token', form => {
+	grant_type   => 'authorization_code',
+	code         => $at_code,
+	client_id    => 'testapp',
+	redirect_uri => 'https://testapp.example.com/callback',
+})->status_is(200);
+my $at_id_token = $t->tx->res->json->{id_token};
+my @at_parts    = split /\./, $at_id_token;
+my $at_payload  = decode_json( MIME::Base64::decode_base64( $at_parts[1] ) );
+
+ok( defined $at_payload->{auth_time}, 'auth_time present' );
+ok( $at_payload->{auth_time} < $at_payload->{iat},
+	'auth_time is the original login time, strictly earlier than token iat' );
+
+# ── Token endpoint: 401 via Basic auth carries WWW-Authenticate (RFC 6749 5.2) ──
+
+$t->reset_session;
+_install_stubs( $t->app );
+
+$t->get_ok('/authorize?client_id=secretapp&redirect_uri=https://secretapp.example.com/callback&response_type=code&scope=openid&state=wwwauth1')
+  ->status_is(302);
+$t->post_ok( '/sso/login', form => { user => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $wwwauth_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+my $wwwauth_bad = 'Basic ' . MIME::Base64::encode_base64( 'secretapp:wrongsecret', '' );
+$t->post_ok( '/token',
+	{ Authorization => $wwwauth_bad },
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $wwwauth_code,
+		redirect_uri => 'https://secretapp.example.com/callback',
+	}
+)
+  ->status_is(401)
+  ->json_is( '/error' => 'invalid_client' )
+  ->header_like( 'WWW-Authenticate' => qr/^Basic/, 'failed Basic auth carries WWW-Authenticate' );
+
+# ── Authorize: unsupported code_challenge_method rejected (RFC 7636 4.3) ─────
+
+$t->reset_session;
+_install_stubs( $t->app );
+
+$t->get_ok('/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=ccm1&code_challenge=abc123&code_challenge_method=BOGUS')
+  ->status_is(302)
+  ->header_like( Location => qr/error=invalid_request/, 'unsupported code_challenge_method rejected' )
+  ->header_like( Location => qr/state=ccm1/,            'state preserved on ccm error' );
+
+# ── ID token: RS256 client with no key fails closed (no alg=none downgrade) ──
+
+my $client_rs256_nokey = FakeEntry->new(
+	_dn                          => 'oidcClientId=rs256nokey,ou=oidc,dc=example,dc=com',
+	oidcClientId                 => 'rs256nokey',
+	oidcClientName               => 'RS256 No Key App',
+	oidcRedirectURI              => ['https://rs256nokey.example.com/callback'],
+	oidcScope                    => [ 'openid', 'profile' ],
+	oidcGrantType                => ['authorization_code'],
+	oidcResponseType             => ['code'],
+	oidcApplicationType          => 'web',
+	oidcTokenEndpointAuthMethod  => 'none',
+	oidcIdTokenSignedResponseAlg => 'RS256',
+	# deliberately no oidcJwks
+);
+
+$t->reset_session;
+_install_stubs(
+	$t->app,
+	getOIDCClientEntry => sub {
+		my ( $self, $args ) = @_;
+		return $client_rs256_nokey if ( $args->{clientId} // '' ) eq 'rs256nokey';
+		return $client_public      if ( $args->{clientId} // '' ) eq 'testapp';
+		return undef;
+	},
+);
+
+$t->get_ok('/authorize?client_id=rs256nokey&redirect_uri=https://rs256nokey.example.com/callback&response_type=code&scope=openid+profile&state=nokey1')
+  ->status_is(302);
+$t->post_ok( '/sso/login', form => { user => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $nokey_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+$t->post_ok( '/token', form => {
+	grant_type   => 'authorization_code',
+	code         => $nokey_code,
+	client_id    => 'rs256nokey',
+	redirect_uri => 'https://rs256nokey.example.com/callback',
+})
+  ->status_is(500)
+  ->json_is( '/error' => 'server_error', 'RS256 without key fails closed, no alg=none downgrade' );
 
 done_testing;

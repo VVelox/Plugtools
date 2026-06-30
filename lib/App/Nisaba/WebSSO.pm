@@ -97,8 +97,13 @@ sub startup {
 			my $c = shift;
 			return unless $c->req->method eq 'POST';
 
-			# Exempt the token endpoint — clients POST to it without a browser Referer
+			# Exempt OIDC protocol endpoints that relying parties call directly
+			# (server-to-server, no browser Referer): the token endpoint and the
+			# UserInfo endpoint. These are authenticated by client credentials /
+			# Bearer token, not by a session cookie, so the CSRF Referer check
+			# neither applies nor should block them.
 			return if $c->req->url->path eq '/token';
+			return if $c->req->url->path eq '/userinfo';
 
 			my $referer = $c->req->headers->referrer;
 			unless ($referer) {
