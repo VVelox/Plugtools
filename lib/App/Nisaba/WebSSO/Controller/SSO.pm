@@ -2,9 +2,11 @@ package App::Nisaba::WebSSO::Controller::SSO;
 
 use Mojo::Base 'Mojolicious::Controller';
 use Mojo::URL;
-use Mojo::Util   qw(b64_encode b64_decode);
+use Mojo::Util   qw(b64_encode b64_decode url_unescape);
+use Mojo::JSON   qw(decode_json);
 use MIME::Base64 ();
 use Digest::SHA  qw(sha256);
+use Crypt::PK::RSA;
 
 # --------------------------------------------------------------------------- #
 # Helpers
@@ -65,11 +67,13 @@ sub discovery {
 			authorization_endpoint                => "$issuer/authorize",
 			token_endpoint                        => "$issuer/token",
 			userinfo_endpoint                     => "$issuer/userinfo",
+			end_session_endpoint                  => "$issuer/sso/logout",
 			response_types_supported              => ['code'],
 			grant_types_supported                 => ['authorization_code'],
-			subject_types_supported               => [ 'public', 'pairwise' ],
-			id_token_signing_alg_values_supported => ['none'],
-			scopes_supported                      => [ 'openid', 'profile', 'email', 'phone', 'address' ],
+			subject_types_supported               => ['public'],
+			jwks_uri                              => "$issuer/jwks",
+			id_token_signing_alg_values_supported => [ 'RS256',               'HS256',   'none' ],
+			scopes_supported                      => [ 'openid',              'profile', 'email', 'phone', 'address' ],
 			token_endpoint_auth_methods_supported => [ 'client_secret_basic', 'client_secret_post', 'none', ],
 			claims_supported                      => [
 				'sub',          'name',                  'given_name',         'family_name',
@@ -82,6 +86,38 @@ sub discovery {
 		}
 	);
 } ## end sub discovery
+
+# --------------------------------------------------------------------------- #
+# JWKS endpoint — serves public keys for all clients that have oidcJwks set
+# --------------------------------------------------------------------------- #
+
+sub jwks {
+	my $self = shift;
+
+	my @all_keys;
+	my $clients;
+	eval { $clients = $self->pt->getOIDCClients };
+	$clients //= [];
+
+	for my $entry (@$clients) {
+		my $jwks_json = $entry->get_value('oidcJwks');
+		next unless $jwks_json;
+		eval {
+			my $jwks = decode_json($jwks_json);
+			if ( $jwks->{keys} && ref $jwks->{keys} eq 'ARRAY' ) {
+				for my $key ( @{ $jwks->{keys} } ) {
+					# Only expose public components
+					my %pub = map { $_ => $key->{$_} }
+						grep { defined $key->{$_} } qw(kty n e kid use alg key_ops);
+					$pub{use} //= 'sig';
+					push @all_keys, \%pub;
+				}
+			}
+		};
+	} ## end for my $entry (@$clients)
+
+	$self->render( json => { keys => \@all_keys } );
+} ## end sub jwks
 
 # --------------------------------------------------------------------------- #
 # Authorization endpoint
@@ -114,9 +150,17 @@ sub authorize {
 		);
 	}
 
-	# Validate redirect_uri
+	# Validate redirect_uri against registered URIs
 	my @registered_uris = $client_entry->get_value('oidcRedirectURI');
-	if ( @registered_uris && !grep { $_ eq $redirect_uri } @registered_uris ) {
+	unless (@registered_uris) {
+		return $self->render(
+			template          => 'sso/error',
+			layout            => 'sso',
+			error_title       => 'Client Configuration Error',
+			error_description => 'This client has no registered redirect URIs.',
+		);
+	}
+	unless ( grep { $_ eq $redirect_uri } @registered_uris ) {
 		return $self->render(
 			template          => 'sso/error',
 			layout            => 'sso',
@@ -125,7 +169,11 @@ sub authorize {
 		);
 	}
 
-	# Only support authorization code flow
+	# response_type is required (RFC 6749 Section 4.1.2.1: missing required
+	# parameter is invalid_request); only the authorization code flow is supported.
+	if ( $response_type eq '' ) {
+		return $self->_authz_error( $redirect_uri, $state, 'invalid_request', 'response_type is required.' );
+	}
 	if ( $response_type ne 'code' ) {
 		return $self->_authz_error( $redirect_uri, $state, 'unsupported_response_type',
 			'Only response_type=code is supported.' );
@@ -135,6 +183,15 @@ sub authorize {
 	my @scopes = split /\s+/, $scope;
 	unless ( grep { $_ eq 'openid' } @scopes ) {
 		return $self->_authz_error( $redirect_uri, $state, 'invalid_scope', 'The openid scope is required.' );
+	}
+
+	# RFC 7636 Section 4.3: reject unsupported code_challenge_method
+	if (   $code_challenge ne ''
+		&& $code_challenge_method ne ''
+		&& $code_challenge_method ne 'S256'
+		&& $code_challenge_method ne 'plain' )
+	{
+		return $self->_authz_error( $redirect_uri, $state, 'invalid_request', 'Unsupported code_challenge_method.' );
 	}
 
 	# Store the authorization request in session
@@ -195,7 +252,8 @@ sub login {
 		return $self->redirect_to('sso_totp_challenge');
 	}
 
-	$self->session( sso_user => $user );
+	$self->session( sso_user      => $user );
+	$self->session( sso_auth_time => time() );
 	$self->redirect_to('sso_consent');
 } ## end sub login
 
@@ -309,7 +367,8 @@ sub passkey_login_finish {
 		return $self->render( json => { ok => 1, totp_required => 1 } );
 	}
 
-	$self->session( sso_user => $user );
+	$self->session( sso_user      => $user );
+	$self->session( sso_auth_time => time() );
 	$self->render( json => { ok => 1 } );
 } ## end sub passkey_login_finish
 
@@ -342,7 +401,8 @@ sub totp_challenge {
 	}
 
 	delete $self->session->{sso_totp_pending_user};
-	$self->session( sso_user => $user );
+	$self->session( sso_user      => $user );
+	$self->session( sso_auth_time => time() );
 	$self->redirect_to('sso_consent');
 } ## end sub totp_challenge
 
@@ -421,19 +481,25 @@ sub consent {
 	# Generate authorization code
 	my $code = _random_b64url(32);
 
-	# Store code details in session (in production, use a shared store)
-	$self->session(
-		'sso_code_'
-			. $code => {
-				client_id             => $authz->{client_id},
-				redirect_uri          => $authz->{redirect_uri},
-				scope                 => $authz->{scope},
-				nonce                 => $authz->{nonce},
-				user                  => $user,
-				issued_at             => time(),
-				code_challenge        => $authz->{code_challenge},
-				code_challenge_method => $authz->{code_challenge_method},
-			}
+	# Store code details in the shared server-side store so the token endpoint
+	# (called server-to-server by the relying party, with no browser cookie)
+	# can redeem it. The TTL here is a GC backstop; the token endpoint enforces
+	# the protocol expiry from issued_at against the current configured lifetime.
+	my $code_lifetime = $self->pt->{ini}->{''}->{ssoCodeLifetime} // 600;
+	$self->sso_storage->put(
+		'code', $code,
+		{
+			client_id             => $authz->{client_id},
+			redirect_uri          => $authz->{redirect_uri},
+			scope                 => $authz->{scope},
+			nonce                 => $authz->{nonce},
+			user                  => $user,
+			issued_at             => time(),
+			auth_time             => ( $self->session('sso_auth_time') // time() ),
+			code_challenge        => $authz->{code_challenge},
+			code_challenge_method => $authz->{code_challenge_method},
+		},
+		$code_lifetime,
 	);
 
 	# Clean up authorization session
@@ -445,6 +511,47 @@ sub consent {
 	$url->query->merge( state => $authz->{state} ) if $authz->{state} ne '';
 	$self->redirect_to($url);
 } ## end sub consent
+
+# --------------------------------------------------------------------------- #
+# Logout / end-session (OIDC RP-Initiated Logout 1.0)
+# --------------------------------------------------------------------------- #
+
+sub logout {
+	my $self = shift;
+
+	my $hint  = $self->param('id_token_hint')            // '';
+	my $post  = $self->param('post_logout_redirect_uri') // '';
+	my $state = $self->param('state')                    // '';
+	my $cid   = $self->param('client_id')                // '';
+
+	# A request authenticated by a verifiable id_token_hint can be logged out
+	# without prompting. Otherwise we must confirm with the user to prevent a
+	# malicious third party from forcing a logout via a crafted link.
+	my $info = $self->_verify_id_token_hint($hint);
+	if ( $info && $info->{verified} ) {
+		return $self->_perform_logout( $post, $state, $info, $cid );
+	}
+
+	$self->render(
+		template                 => 'sso/logout_confirm',
+		layout                   => 'sso',
+		post_logout_redirect_uri => $post,
+		state                    => $state,
+		client_id                => $cid,
+	);
+} ## end sub logout
+
+sub logout_post {
+	my $self = shift;
+
+	my $hint  = $self->param('id_token_hint')            // '';
+	my $post  = $self->param('post_logout_redirect_uri') // '';
+	my $state = $self->param('state')                    // '';
+	my $cid   = $self->param('client_id')                // '';
+
+	my $info = $self->_verify_id_token_hint($hint);
+	return $self->_perform_logout( $post, $state, $info, $cid );
+} ## end sub logout_post
 
 # --------------------------------------------------------------------------- #
 # Token endpoint
@@ -468,24 +575,33 @@ sub token {
 	# Client authentication: check Authorization header for client_secret_basic
 	my $client_secret = $self->param('client_secret')      // '';
 	my $auth_header   = $self->req->headers->authorization // '';
+	my $used_basic    = 0;
 	if ( $auth_header =~ /^Basic\s+(.+)$/i ) {
+		$used_basic = 1;
 		my $decoded = MIME::Base64::decode_base64($1);
 		my ( $hdr_id, $hdr_secret ) = split /:/, $decoded, 2;
+		# RFC 6749 Section 2.3.1: credentials are application/x-www-form-urlencoded
+		if ( defined $hdr_id ) {
+			$hdr_id =~ s/\+/ /g;
+			$hdr_id = url_unescape($hdr_id);
+		}
+		if ( defined $hdr_secret ) {
+			$hdr_secret =~ s/\+/ /g;
+			$hdr_secret = url_unescape($hdr_secret);
+		}
 		$client_id     = $hdr_id     // $client_id;
 		$client_secret = $hdr_secret // $client_secret;
-	}
+	} ## end if ( $auth_header =~ /^Basic\s+(.+)$/i )
 
-	# Look up authorization code
-	my $code_data = $self->session( 'sso_code_' . $code );
+	# Look up the authorization code in the shared store and atomically delete
+	# it: consume() enforces one-time use across concurrent worker processes.
+	my $code_data = $self->sso_storage->consume( 'code', $code );
 	unless ($code_data) {
 		return $self->render(
 			json   => { error => 'invalid_grant', error_description => 'Authorization code not found or expired.' },
 			status => 400,
 		);
 	}
-
-	# Delete the code (one-time use)
-	delete $self->session->{ 'sso_code_' . $code };
 
 	# Validate code hasn't expired
 	my $code_lifetime = $self->pt->{ini}->{''}->{ssoCodeLifetime} // 600;
@@ -504,13 +620,22 @@ sub token {
 		);
 	}
 
-	# Validate redirect_uri matches
-	if ( $redirect_uri ne '' && $redirect_uri ne $code_data->{redirect_uri} ) {
-		return $self->render(
-			json   => { error => 'invalid_grant', error_description => 'redirect_uri mismatch.' },
-			status => 400,
-		);
-	}
+	# Validate redirect_uri matches (RFC 6749 Section 4.1.3: REQUIRED if
+	# redirect_uri was included in the authorization request)
+	if ( $code_data->{redirect_uri} && $code_data->{redirect_uri} ne '' ) {
+		if ( $redirect_uri eq '' ) {
+			return $self->render(
+				json   => { error => 'invalid_grant', error_description => 'redirect_uri is required.' },
+				status => 400,
+			);
+		}
+		if ( $redirect_uri ne $code_data->{redirect_uri} ) {
+			return $self->render(
+				json   => { error => 'invalid_grant', error_description => 'redirect_uri mismatch.' },
+				status => 400,
+			);
+		}
+	} ## end if ( $code_data->{redirect_uri} && $code_data...)
 
 	# Validate PKCE code_verifier if code_challenge was provided
 	if ( $code_data->{code_challenge} && $code_data->{code_challenge} ne '' ) {
@@ -544,36 +669,58 @@ sub token {
 	if ($client_entry) {
 		my $stored_secret = $client_entry->get_value('oidcClientSecret') // '';
 		if ( $stored_secret ne '' && $client_secret ne $stored_secret ) {
+			# RFC 6749 Section 5.2: if the client authenticated via the
+			# Authorization header, a 401 MUST carry a WWW-Authenticate header.
+			$self->res->headers->www_authenticate('Basic realm="token"') if $used_basic;
 			return $self->render(
 				json   => { error => 'invalid_client', error_description => 'Client authentication failed.' },
 				status => 401,
 			);
 		}
-	}
+	} ## end if ($client_entry)
 
 	# Generate access token
 	my $access_token   = _random_b64url(32);
 	my $token_lifetime = $self->pt->{ini}->{''}->{ssoTokenLifetime} // 3600;
 
-	# Store token in session for userinfo lookup
-	$self->session(
-		'sso_token_'
-			. $access_token => {
-				user      => $code_data->{user},
-				scope     => $code_data->{scope},
-				client_id => $client_id,
-				issued_at => time(),
-			}
+	# Store the access token in the shared store so the UserInfo endpoint (also
+	# called server-to-server) can resolve it. TTL is a GC backstop; UserInfo
+	# enforces the protocol expiry from issued_at.
+	$self->sso_storage->put(
+		'token',
+		$access_token,
+		{
+			user      => $code_data->{user},
+			scope     => $code_data->{scope},
+			client_id => $client_id,
+			issued_at => time(),
+		},
+		$token_lifetime,
 	);
 
-	# Build ID token (unsigned, alg=none — JWT)
-	my $id_token = $self->_build_id_token( $code_data->{user}, $client_id, $code_data->{nonce}, $code_data->{scope}, );
+	# Build ID token. Returns undef if the client is configured for a signing
+	# algorithm that the server cannot satisfy (missing/unusable key material);
+	# never silently downgrade to an unsigned token in that case.
+	my $id_token
+		= $self->_build_id_token( $code_data->{user}, $client_id, $code_data->{nonce}, $code_data->{scope},
+			$code_data->{auth_time},
+		);
+	unless ( defined $id_token ) {
+		return $self->render(
+			json   => { error => 'server_error', error_description => 'Unable to sign ID token.' },
+			status => 500,
+		);
+	}
+
+	# RFC 6749 Section 5.1: responses containing tokens MUST include these headers
+	$self->res->headers->cache_control('no-store');
+	$self->res->headers->header( 'Pragma' => 'no-cache' );
 
 	$self->render(
 		json => {
 			access_token => $access_token,
 			token_type   => 'Bearer',
-			expires_in   => $token_lifetime,
+			expires_in   => ( $token_lifetime + 0 ),    # RFC 6749 5.1: MUST be a JSON number
 			id_token     => $id_token,
 			scope        => $code_data->{scope},
 		}
@@ -601,7 +748,7 @@ sub userinfo {
 		return $self->render( json => { error => 'invalid_token' }, status => 401 );
 	}
 
-	my $token_data = $self->session( 'sso_token_' . $token );
+	my $token_data = $self->sso_storage->get( 'token', $token );
 	unless ($token_data) {
 		$self->res->headers->www_authenticate('Bearer error="invalid_token"');
 		return $self->render( json => { error => 'invalid_token' }, status => 401 );
@@ -610,7 +757,7 @@ sub userinfo {
 	# Check token expiry
 	my $token_lifetime = $self->pt->{ini}->{''}->{ssoTokenLifetime} // 3600;
 	if ( ( time() - $token_data->{issued_at} ) > $token_lifetime ) {
-		delete $self->session->{ 'sso_token_' . $token };
+		$self->sso_storage->delete( 'token', $token );
 		$self->res->headers->www_authenticate('Bearer error="invalid_token"');
 		return $self->render( json => { error => 'invalid_token' }, status => 401 );
 	}
@@ -648,15 +795,103 @@ sub _authz_error {
 	$self->redirect_to($url);
 } ## end sub _authz_error
 
+# Parse and (where possible) cryptographically verify an id_token_hint. Returns
+# a hashref { client_id, client_entry, verified, payload } or undef if the hint
+# is absent/unparseable or was not issued by us. The token's expiry is
+# intentionally ignored: logout commonly happens after the ID token has expired.
+sub _verify_id_token_hint {
+	my ( $self, $hint ) = @_;
+	return undef unless defined $hint && $hint ne '';
+
+	my @parts = split /\./, $hint;
+	return undef unless @parts >= 2;
+
+	my $header  = eval { decode_json( _b64url_decode( $parts[0] ) ) };
+	my $payload = eval { decode_json( _b64url_decode( $parts[1] ) ) };
+	return undef unless $payload && ref $payload eq 'HASH';
+
+	# Must be one of our own ID tokens.
+	return undef unless ( $payload->{iss} // '' ) eq $self->sso_issuer;
+
+	my $aud = $payload->{aud};
+	$aud = $aud->[0] if ref $aud eq 'ARRAY';
+	return undef unless defined $aud && $aud ne '';
+
+	my $client_entry;
+	eval { $client_entry = $self->pt->getOIDCClientEntry( { clientId => $aud } ) };
+	return undef unless $client_entry;
+
+	# Verify the signature with the client's configured algorithm. An unsigned
+	# (alg=none) hint can identify the client but is never treated as verified.
+	my $alg           = $header->{alg} // 'none';
+	my $signing_input = $parts[0] . '.' . $parts[1];
+	my $sig           = @parts >= 3 ? _b64url_decode( $parts[2] ) : '';
+	my $verified      = 0;
+
+	if ( $alg eq 'RS256' ) {
+		my $jwks_json = $client_entry->get_value('oidcJwks');
+		if ($jwks_json) {
+			my $jwks = eval { decode_json($jwks_json) };
+			if ( $jwks && $jwks->{keys} && @{ $jwks->{keys} } ) {
+				my $rsa = Crypt::PK::RSA->new;
+				eval { $rsa->import_key( $jwks->{keys}[0] ) };
+				$verified = 1 if !$@ && eval { $rsa->verify_message( $sig, $signing_input, 'SHA256', 'v1.5' ) };
+			}
+		}
+	} elsif ( $alg eq 'HS256' ) {
+		my $secret = $client_entry->get_value('oidcClientSecret') // '';
+		if ( $secret ne '' ) {
+			require Digest::SHA;
+			$verified = 1 if $sig eq Digest::SHA::hmac_sha256( $signing_input, $secret );
+		}
+	}
+
+	return {
+		client_id    => $aud,
+		client_entry => $client_entry,
+		verified     => $verified,
+		payload      => $payload,
+	};
+} ## end sub _verify_id_token_hint
+
+# Clear the SSO session and, when a post_logout_redirect_uri is supplied and is
+# registered for the resolved client, redirect there (with state). Otherwise
+# render the logged-out page. The redirect target is always validated against
+# the client's registered oidcPostLogoutRedirectURI values to prevent an open
+# redirect.
+sub _perform_logout {
+	my ( $self, $post, $state, $info, $client_id_param ) = @_;
+
+	# Drop the entire SSO session cookie (login state, auth_time, etc.).
+	$self->session( expires => 1 );
+
+	# Resolve the client for redirect-URI validation: a verified id_token_hint
+	# is authoritative; otherwise fall back to the client_id parameter.
+	my $client_entry;
+	if ( $info && $info->{verified} ) {
+		$client_entry = $info->{client_entry};
+	} elsif ( defined $client_id_param && $client_id_param ne '' ) {
+		eval { $client_entry = $self->pt->getOIDCClientEntry( { clientId => $client_id_param } ) };
+	}
+
+	if ( defined $post && $post ne '' && $client_entry ) {
+		my @registered = $client_entry->get_value('oidcPostLogoutRedirectURI');
+		if ( grep { $_ eq $post } @registered ) {
+			my $url = Mojo::URL->new($post);
+			$url->query->merge( state => $state ) if defined $state && $state ne '';
+			return $self->redirect_to($url);
+		}
+	}
+
+	return $self->render( template => 'sso/logout', layout => 'sso' );
+} ## end sub _perform_logout
+
 sub _build_id_token {
-	my ( $self, $user, $client_id, $nonce, $scope ) = @_;
+	my ( $self, $user, $client_id, $nonce, $scope, $auth_time ) = @_;
 
 	my $issuer   = $self->sso_issuer;
 	my $now      = time();
 	my $lifetime = $self->pt->{ini}->{''}->{ssoTokenLifetime} // 3600;
-
-	# JWT header (alg=none)
-	my $header = _b64url_encode('{"alg":"none","typ":"JWT"}');
 
 	# JWT payload
 	my %payload = (
@@ -666,8 +901,12 @@ sub _build_id_token {
 		iat => $now,
 		exp => $now + $lifetime,
 	);
-	$payload{nonce}     = $nonce if $nonce && $nonce ne '';
-	$payload{auth_time} = $now;
+	$payload{nonce} = $nonce if $nonce && $nonce ne '';
+
+	# auth_time (OIDC Core 2): when the End-User authentication actually
+	# occurred, not when this token was issued. Falls back to now only if the
+	# authentication time was not recorded.
+	$payload{auth_time} = ( defined $auth_time ? $auth_time : $now ) + 0;
 
 	# Add claims based on scope
 	my %scopes = map { $_ => 1 } split /\s+/, ( $scope // '' );
@@ -676,12 +915,13 @@ sub _build_id_token {
 		$self->_pt_call( sub { $entry = $self->pt->getUserEntry( { user => $user } ) } );
 		if ($entry) {
 			if ( $scopes{profile} ) {
-				$payload{name}        = $entry->get_value('displayName') // $entry->get_value('cn') // '';
-				$payload{given_name}  = $entry->get_value('givenName')   // '';
-				$payload{family_name} = $entry->get_value('sn')          // '';
+				my $name = $entry->get_value('displayName') // $entry->get_value('cn');
+				$payload{name}        = $name                          if defined $name;
+				$payload{given_name}  = $entry->get_value('givenName') if $entry->get_value('givenName');
+				$payload{family_name} = $entry->get_value('sn')        if $entry->get_value('sn');
 			}
 			if ( $scopes{email} ) {
-				$payload{email} = $entry->get_value('mail') // '';
+				$payload{email} = $entry->get_value('mail') if $entry->get_value('mail');
 			}
 		} ## end if ($entry)
 	} ## end if ( $scopes{profile} || $scopes{email} )
@@ -689,8 +929,59 @@ sub _build_id_token {
 	my $json_payload = Mojo::JSON::encode_json( \%payload );
 	my $body         = _b64url_encode($json_payload);
 
-	# alg=none: header.payload.
-	return "$header.$body.";
+	# Determine signing algorithm from client entry
+	my $client_entry;
+	eval { $client_entry = $self->pt->getOIDCClientEntry( { clientId => $client_id } ) };
+
+	my $alg = 'none';
+	my $jwks_json;
+	if ($client_entry) {
+		$alg       = $client_entry->get_value('oidcIdTokenSignedResponseAlg') // 'none';
+		$jwks_json = $client_entry->get_value('oidcJwks');
+	}
+
+	if ( $alg eq 'none' ) {
+		# Unsigned JWT: header.payload.
+		my $header = _b64url_encode('{"alg":"none","typ":"JWT"}');
+		return "$header.$body.";
+	} elsif ( $alg eq 'RS256' ) {
+		# Sign with the client's RSA private key
+		my $jwks = $jwks_json ? eval { decode_json($jwks_json) } : undef;
+		if ( $jwks && $jwks->{keys} && @{ $jwks->{keys} } ) {
+			my $jwk    = $jwks->{keys}[0];
+			my $kid    = $jwk->{kid} // '';
+			my $header = _b64url_encode( Mojo::JSON::encode_json( { alg => 'RS256', typ => 'JWT', kid => $kid } ) );
+			my $signing_input = "$header.$body";
+
+			my $rsa = Crypt::PK::RSA->new;
+			eval { $rsa->import_key($jwk) };
+			if ( !$@ ) {
+				my $sig     = $rsa->sign_message( $signing_input, 'SHA256', 'v1.5' );
+				my $sig_b64 = _b64url_encode($sig);
+				return "$signing_input.$sig_b64";
+			}
+		} ## end if ( $jwks && $jwks->{keys} && @{ $jwks->{...}})
+
+		# Client requires RS256 but no usable key: do NOT downgrade to none.
+		return undef;
+	} elsif ( $alg eq 'HS256' ) {
+		# Sign with the client secret using HMAC-SHA256
+		my $secret = $client_entry ? ( $client_entry->get_value('oidcClientSecret') // '' ) : '';
+		if ( $secret ne '' ) {
+			my $header        = _b64url_encode('{"alg":"HS256","typ":"JWT"}');
+			my $signing_input = "$header.$body";
+			require Digest::SHA;
+			my $sig     = Digest::SHA::hmac_sha256( $signing_input, $secret );
+			my $sig_b64 = _b64url_encode($sig);
+			return "$signing_input.$sig_b64";
+		}
+
+		# Client requires HS256 but has no secret: do NOT downgrade to none.
+		return undef;
+	} ## end elsif ( $alg eq 'HS256' )
+
+	# Unknown/unsupported configured algorithm: refuse rather than downgrade.
+	return undef;
 } ## end sub _build_id_token
 
 sub _build_userinfo_claims {

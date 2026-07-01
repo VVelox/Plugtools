@@ -1,6 +1,9 @@
 package App::Nisaba::Web::Controller::OIDC;
 
 use Mojo::Base 'Mojolicious::Controller';
+use Crypt::PK::RSA;
+use MIME::Base64 qw(encode_base64url);
+use Mojo::JSON   qw(encode_json);
 
 sub _pt_call {
 	my ( $self, $code ) = @_;
@@ -32,17 +35,77 @@ sub add {
 	$self->render( template => 'oidc/add' );
 }
 
+sub _generate_id {
+	my @chars = ( 'a' .. 'z', '0' .. '9' );
+	my $id    = '';
+	$id .= $chars[ rand @chars ] for 1 .. 24;
+	return $id;
+}
+
+sub _generate_secret {
+	my @chars = ( 'A' .. 'Z', 'a' .. 'z', '0' .. '9', '-', '_' );
+	my $sec   = '';
+	$sec .= $chars[ rand @chars ] for 1 .. 48;
+	return $sec;
+}
+
+sub _generate_kid {
+	my @chars = ( 'a' .. 'z', '0' .. '9' );
+	my $kid   = '';
+	$kid .= $chars[ rand @chars ] for 1 .. 16;
+	return $kid;
+}
+
+# Generate an RSA key pair and return a JWK Set JSON string (with private key).
+sub _generate_jwks {
+	my $rsa = Crypt::PK::RSA->new;
+	$rsa->generate_key( 256, 65537 );    # 2048-bit key
+
+	my $kid = _generate_kid();
+
+	# export_key_jwk returns a JSON string; decode, add metadata, re-encode
+	my $priv_json = $rsa->export_key_jwk('private');
+	my $priv_hash = Mojo::JSON::decode_json($priv_json);
+	$priv_hash->{kid} = $kid;
+	$priv_hash->{use} = 'sig';
+	$priv_hash->{alg} = 'RS256';
+
+	my $priv_jwks = encode_json( { keys => [$priv_hash] } );
+	return $priv_jwks;
+} ## end sub _generate_jwks
+
 sub create {
 	my $self = shift;
 
+	# Auto-generate client ID
+	my $clientId = _generate_id();
+
+	# Client type determines secret and auth method
+	my $clientType = $self->param('clientType') // 'confidential';
+	my $clientSecret;
+	my $authMethod;
+	if ( $clientType eq 'public' ) {
+		$authMethod = 'none';
+	} else {
+		$clientSecret = _generate_secret();
+		$authMethod   = 'client_secret_basic';
+	}
+
 	my %params;
-	$params{clientId}        = $self->param('clientId')        // '';
-	$params{clientSecret}    = $self->param('clientSecret')    // '';
-	$params{clientName}      = $self->param('clientName')      // '';
+	$params{clientId}     = $clientId;
+	$params{clientSecret} = $clientSecret if defined $clientSecret;
+	$params{clientName}   = $self->param('clientName') // '';
+	$params{authMethod}   = $authMethod;
+
+	# Signing algorithm
+	my $signingAlg = $self->param('signingAlg') // '';
+	$params{idTokenSignedResponseAlg} = $signingAlg if $signingAlg ne '';
+
+	# Application type (derived from client type for convenience)
 	$params{applicationType} = $self->param('applicationType') // 'web';
-	$params{authMethod}      = $self->param('authMethod')      // '';
-	$params{subjectType}     = $self->param('subjectType')     // '';
-	$params{clientURI}       = $self->param('clientURI')       // '';
+
+	$params{subjectType} = $self->param('subjectType') // '';
+	$params{clientURI}   = $self->param('clientURI')   // '';
 
 	# Multi-value fields: split textarea lines into arrayrefs
 	my $redirect_text = $self->param('redirectURIs') // '';
@@ -54,14 +117,13 @@ sub create {
 	my $grant_text = $self->param('grantTypes') // '';
 	$params{grantTypes} = [ grep { $_ ne '' } split /[\s,]+/, $grant_text ];
 
-	my $response_text = $self->param('responseTypes') // '';
-	$params{responseTypes} = [ grep { $_ ne '' } split /\r?\n/, $response_text ];
+	$params{responseTypes} = [ grep { $_ ne '' } @{ $self->every_param('responseTypes') } ];
 
 	my $contact_text = $self->param('contacts') // '';
 	$params{contacts} = [ grep { $_ ne '' } split /\r?\n/, $contact_text ];
 
 	# Remove empty strings so addOIDCClient uses defaults
-	for my $key (qw(clientSecret clientName applicationType authMethod subjectType clientURI)) {
+	for my $key (qw(clientName applicationType subjectType clientURI)) {
 		delete $params{$key} if !defined $params{$key} || $params{$key} eq '';
 	}
 	for my $key (qw(redirectURIs scopes grantTypes responseTypes contacts)) {
@@ -74,8 +136,31 @@ sub create {
 		return $self->redirect_to('oidc_add');
 	}
 
-	$self->flash( success => "OIDC client '$params{clientId}' added successfully." );
-	$self->redirect_to('oidc_index');
+	# Generate and store RSA key pair for token signing
+	my $priv_jwks = _generate_jwks();
+	my $jwks_error = $self->_pt_call(
+		sub {
+			$self->pt->oidcClientUpdate(
+				{
+					clientId  => $clientId,
+					attribute => 'oidcJwks',
+					value     => $priv_jwks,
+				}
+			);
+		}
+	);
+	if ($jwks_error) {
+		$self->flash( error => "Client created but key generation failed: $jwks_error" );
+		return $self->redirect_to( 'oidc_show', clientId => $clientId );
+	}
+
+	# Flash the generated credentials so the show page can display them once
+	$self->flash( success           => "OIDC client created successfully." );
+	$self->flash( new_client_id     => $clientId );
+	$self->flash( new_client_type   => $clientType );
+	$self->flash( new_client_secret => $clientSecret ) if defined $clientSecret;
+
+	$self->redirect_to( 'oidc_show', clientId => $clientId );
 } ## end sub create
 
 sub show {
@@ -134,7 +219,42 @@ sub update {
 		softwareVersion              => 'oidcSoftwareVersion',
 	);
 
-	if ( exists $single_attrs{$action} ) {
+	if ( $action eq 'regenerateSecret' ) {
+		my $new_secret = _generate_secret();
+		$error = $self->_pt_call(
+			sub {
+				$self->pt->oidcClientUpdate(
+					{
+						clientId  => $clientId,
+						attribute => 'oidcClientSecret',
+						value     => $new_secret,
+					}
+				);
+			}
+		);
+		if ( !$error ) {
+			$self->flash( success           => "Client secret regenerated." );
+			$self->flash( new_client_secret => $new_secret );
+			return $self->redirect_to( 'oidc_show', clientId => $clientId );
+		}
+	} elsif ( $action eq 'regenerateKeys' ) {
+		my $new_jwks = _generate_jwks();
+		$error = $self->_pt_call(
+			sub {
+				$self->pt->oidcClientUpdate(
+					{
+						clientId  => $clientId,
+						attribute => 'oidcJwks',
+						value     => $new_jwks,
+					}
+				);
+			}
+		);
+		if ( !$error ) {
+			$self->flash( success => "Signing key pair regenerated." );
+			return $self->redirect_to( 'oidc_show', clientId => $clientId );
+		}
+	} elsif ( exists $single_attrs{$action} ) {
 		$error = $self->_pt_call(
 			sub {
 				$self->pt->oidcClientUpdate(

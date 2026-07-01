@@ -8,83 +8,118 @@
   </ol>
 </nav>
 
-<div class="card" style="max-width:600px">
+<div class="card" style="max-width:650px">
   <div class="card-header"><strong>Register OIDC Client</strong></div>
   <div class="card-body">
     <form method="post" action="/oidc">
-      <div class="mb-3">
-        <label class="form-label">Client ID <span class="text-danger">*</span></label>
-        <input type="text" name="clientId" class="form-control" required
-               placeholder="e.g. myapp-web">
-      </div>
+
       <div class="mb-3">
         <label class="form-label">Client Name</label>
         <input type="text" name="clientName" class="form-control"
-               placeholder="Human-readable name for consent screens">
+               placeholder="My Application">
+        <div class="form-text">Human-readable name shown on consent screens. Can be left blank.</div>
       </div>
-      <div class="mb-3">
-        <label class="form-label">Client Secret</label>
-        <input type="text" name="clientSecret" class="form-control"
-               placeholder="Leave blank for public clients">
-      </div>
-      <div class="row mb-3">
-        <div class="col">
-          <label class="form-label">Application Type</label>
-          <select name="applicationType" class="form-select">
-            <option value="web" selected>web</option>
-            <option value="native">native</option>
-          </select>
-        </div>
-        <div class="col">
-          <label class="form-label">Token Auth Method</label>
-          <select name="authMethod" class="form-select">
-            <option value="client_secret_basic" selected>client_secret_basic</option>
-            <option value="client_secret_post">client_secret_post</option>
-            <option value="client_secret_jwt">client_secret_jwt</option>
-            <option value="private_key_jwt">private_key_jwt</option>
-            <option value="none">none</option>
-          </select>
-        </div>
-      </div>
+
       <div class="mb-3">
         <label class="form-label">Redirect URIs</label>
         <textarea name="redirectURIs" class="form-control" rows="3"
                   placeholder="One URI per line"></textarea>
+        <div class="form-text">Allowed callback URIs. The client must redirect to one of these after authorization.</div>
       </div>
+
       <div class="row mb-3">
         <div class="col">
-          <label class="form-label">Scopes</label>
-          <input type="text" name="scopes" class="form-control"
-                 placeholder="openid profile email" value="openid">
+          <label class="form-label">Signing Algorithm</label>
+          <select name="signingAlg" class="form-select">
+            <option value="RS256" selected>RS256</option>
+            <option value="HS256">HS256</option>
+          </select>
+          <div class="form-text"><code>RS256</code> uses the server's RSA key. <code>HS256</code> uses the client secret (HMAC).</div>
         </div>
         <div class="col">
-          <label class="form-label">Grant Types</label>
-          <input type="text" name="grantTypes" class="form-control"
-                 placeholder="authorization_code refresh_token" value="authorization_code">
+          <label class="form-label">Client Type</label>
+          <select name="clientType" class="form-select">
+            <option value="confidential" selected>Confidential</option>
+            <option value="public">Public</option>
+          </select>
+          <div class="form-text"><strong>Confidential</strong>: server-side apps (secret auto-generated). <strong>Public</strong>: SPAs/native apps (no secret).</div>
         </div>
       </div>
+
+      <div class="alert alert-info small py-2 mb-3">
+        A unique <strong>Client ID</strong> will be auto-generated.
+        Confidential clients also get an auto-generated <strong>Client Secret</strong>.
+        Both will be shown after registration so you can copy them.
+      </div>
+
+      <!-- Advanced (collapsible) -->
       <div class="mb-3">
-        <label class="form-label">Response Types</label>
-        <textarea name="responseTypes" class="form-control" rows="2"
-                  placeholder="One per line (e.g. code)">code</textarea>
+        <a class="text-decoration-none" data-bs-toggle="collapse" href="#oidc-advanced" role="button"
+           aria-expanded="false" aria-controls="oidc-advanced">
+          Advanced settings &#9662;
+        </a>
       </div>
-      <div class="mb-3">
-        <label class="form-label">Subject Type</label>
-        <select name="subjectType" class="form-select">
-          <option value="public" selected>public</option>
-          <option value="pairwise">pairwise</option>
-        </select>
+      <div class="collapse" id="oidc-advanced">
+        <div class="row mb-3">
+          <div class="col">
+            <label class="form-label">Scopes</label>
+            <input type="text" name="scopes" class="form-control"
+                   placeholder="openid profile email" value="openid">
+            <div class="form-text">Space-separated. <code>openid</code> is required for OIDC.</div>
+          </div>
+          <div class="col">
+            <label class="form-label">Grant Types</label>
+            <input type="text" name="grantTypes" class="form-control"
+                   placeholder="authorization_code refresh_token" value="authorization_code">
+            <div class="form-text">Space-separated. Common: <code>authorization_code</code>, <code>refresh_token</code>.</div>
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Response Types</label>
+          <select name="responseTypes" class="form-select" multiple size="3">
+            <option value="code" selected>code</option>
+            <option value="id_token">id_token</option>
+            <option value="token">token</option>
+            <option value="code id_token">code id_token</option>
+          </select>
+          <div class="form-text">Hold Ctrl/Cmd to select multiple. <code>code</code> is standard for Authorization Code flow.</div>
+        </div>
+
+        <div class="row mb-3">
+          <div class="col">
+            <label class="form-label">Application Type</label>
+            <select name="applicationType" class="form-select">
+              <option value="web" selected>web</option>
+              <option value="native">native</option>
+            </select>
+            <div class="form-text"><code>web</code> for browser apps, <code>native</code> for mobile/desktop.</div>
+          </div>
+          <div class="col">
+            <label class="form-label">Subject Type</label>
+            <select name="subjectType" class="form-select">
+              <option value="public" selected>public</option>
+              <option value="pairwise">pairwise</option>
+            </select>
+            <div class="form-text"><code>public</code> uses the same <code>sub</code> for all clients. <code>pairwise</code> gives each client a unique <code>sub</code>.</div>
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Client URI</label>
+          <input type="url" name="clientURI" class="form-control"
+                 placeholder="https://myapp.example.com">
+          <div class="form-text">Homepage URL of this client application.</div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Contacts</label>
+          <textarea name="contacts" class="form-control" rows="2"
+                    placeholder="One email per line"></textarea>
+          <div class="form-text">Administrative contact emails for this client.</div>
+        </div>
       </div>
-      <div class="mb-3">
-        <label class="form-label">Client URI</label>
-        <input type="url" name="clientURI" class="form-control"
-               placeholder="https://myapp.example.com">
-      </div>
-      <div class="mb-4">
-        <label class="form-label">Contacts</label>
-        <textarea name="contacts" class="form-control" rows="2"
-                  placeholder="One email per line"></textarea>
-      </div>
+
       <button class="btn btn-primary">Register Client</button>
       <a href="/oidc" class="btn btn-outline-secondary ms-2">Cancel</a>
     </form>

@@ -2,6 +2,7 @@ package App::Nisaba::WebSSO;
 
 use Mojo::Base 'Mojolicious';
 use App::Nisaba;
+use App::Nisaba::WebSSO::Storage;
 use File::ShareDir 'dist_dir';
 
 =head1 NAME
@@ -57,6 +58,27 @@ sub startup {
 	# Helper to access the App::Nisaba instance
 	$self->helper( pt => sub { $pt } );
 
+	# Shared server-side store for OIDC authorization codes and access tokens.
+	# These are redeemed by relying-party back ends (server-to-server, no
+	# browser cookie), so they cannot live in the session. Built lazily and
+	# memoized on first use; the test suite overrides this helper with an
+	# in-memory store, so the default on-disk path is never touched there.
+	my $sso_storage;
+	$self->helper(
+		sso_storage => sub {
+			return $sso_storage if $sso_storage;
+			my $ini = $pt->{ini}->{''} // {};
+			$sso_storage = App::Nisaba::WebSSO::Storage->new(
+				{
+					backend          => ( $ini->{ssoStorageBackend} // 'SQLite' ),
+					path             => $ini->{ssoStoragePath},
+					cleanup_interval => $ini->{ssoStorageCleanupInterval},
+				}
+			);
+			return $sso_storage;
+		}
+	);
+
 	# Helper to call a pt method and return an error string (empty = success)
 	$self->helper(
 		pt_call => sub {
@@ -97,8 +119,13 @@ sub startup {
 			my $c = shift;
 			return unless $c->req->method eq 'POST';
 
-			# Exempt the token endpoint — clients POST to it without a browser Referer
+			# Exempt OIDC protocol endpoints that relying parties call directly
+			# (server-to-server, no browser Referer): the token endpoint and the
+			# UserInfo endpoint. These are authenticated by client credentials /
+			# Bearer token, not by a session cookie, so the CSRF Referer check
+			# neither applies nor should block them.
 			return if $c->req->url->path eq '/token';
+			return if $c->req->url->path eq '/userinfo';
 
 			my $referer = $c->req->headers->referrer;
 			unless ($referer) {
@@ -120,6 +147,9 @@ sub startup {
 	# OIDC discovery
 	$r->get('/.well-known/openid-configuration')->to('s_s_o#discovery')->name('sso_discovery');
 
+	# JWKS endpoint (public keys for token verification)
+	$r->get('/jwks')->to('s_s_o#jwks')->name('sso_jwks');
+
 	# Authorization endpoint
 	$r->get('/authorize')->to('s_s_o#authorize')->name('sso_authorize');
 
@@ -138,6 +168,12 @@ sub startup {
 	# Consent form and submission
 	$r->get('/sso/consent')->to('s_s_o#consent_form')->name('sso_consent');
 	$r->post('/sso/consent')->to('s_s_o#consent')->name('sso_consent_post');
+
+	# Logout / end-session (OIDC RP-Initiated Logout). GET initiates (and
+	# confirms when the request is not authenticated by a valid id_token_hint);
+	# POST performs the confirmed logout.
+	$r->get('/sso/logout')->to('s_s_o#logout')->name('sso_logout');
+	$r->post('/sso/logout')->to('s_s_o#logout_post')->name('sso_logout_post');
 
 	# Token endpoint (POST only, used by RPs)
 	$r->post('/token')->to('s_s_o#token')->name('sso_token');

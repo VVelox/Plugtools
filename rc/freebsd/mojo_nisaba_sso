@@ -1,0 +1,72 @@
+#!/bin/sh
+#
+# PROVIDE: mojo_nisaba_sso
+# REQUIRE: LOGIN NETWORKING
+# KEYWORD: shutdown
+#
+# App::Nisaba OpenID Connect SSO provider.
+#
+# Add the following to /etc/rc.conf (or /etc/rc.conf.d/mojo_nisaba_sso) to
+# enable and configure this service:
+#
+#   mojo_nisaba_sso_enable="YES"
+#   #mojo_nisaba_sso_user="www"                       # service user
+#   #mojo_nisaba_sso_listen="http://*:8082"           # Mojolicious listen URL
+#   # ...or serve HTTPS directly (requires IO::Socket::SSL; cert+key readable
+#   # by the service user). Quote the whole value because of the "&":
+#   #mojo_nisaba_sso_listen="https://*:8443?cert=/usr/local/etc/nisaba/tls/server.crt&key=/usr/local/etc/nisaba/tls/server.key"
+#   #mojo_nisaba_sso_config="/usr/local/etc/nisabarc" # NISABA_CONFIG
+#   #mojo_nisaba_sso_secret=""                         # NISABA_SECRET (or set websecret in nisabarc)
+#   #mojo_nisaba_sso_command="prefork"                # Mojolicious server command
+#
+
+. /etc/rc.subr
+
+name="mojo_nisaba_sso"
+desc="App::Nisaba OpenID Connect SSO provider"
+rcvar="${name}_enable"
+
+load_rc_config $name
+
+: ${mojo_nisaba_sso_enable:="NO"}
+: ${mojo_nisaba_sso_user:="www"}
+: ${mojo_nisaba_sso_group:="${mojo_nisaba_sso_user}"}
+: ${mojo_nisaba_sso_listen:="http://*:8082"}
+: ${mojo_nisaba_sso_config:="/usr/local/etc/nisabarc"}
+: ${mojo_nisaba_sso_secret:=""}
+: ${mojo_nisaba_sso_command:="prefork"}
+
+# Writable state directory for the SQLite grant store (ssoStoragePath).
+mojo_nisaba_sso_dbdir="/var/db/nisaba"
+
+# daemon(8) supervises and restarts the foreground Mojolicious server and
+# records its pid; rc.subr runs it as ${mojo_nisaba_sso_user}.
+program="/usr/local/bin/${name}"
+pidfile="/var/run/${name}/${name}.pid"
+command="/usr/sbin/daemon"
+procname="/usr/sbin/daemon"
+# The listen URL is double-quoted so an HTTPS value such as
+# https://*:8443?cert=...&key=... (note the "&") survives rc.subr's eval as a
+# single argument instead of being split at the ampersand.
+command_args="-S -t ${name} -R 5 -P ${pidfile} ${program} ${mojo_nisaba_sso_command} -l \"${mojo_nisaba_sso_listen}\""
+
+start_precmd="${name}_precmd"
+
+mojo_nisaba_sso_precmd()
+{
+	# Run directory for the pidfile, writable by the service user.
+	install -d -o "${mojo_nisaba_sso_user}" -g "${mojo_nisaba_sso_group}" -m 0755 \
+		"/var/run/${name}"
+
+	# Writable state directory for the SQLite grant store.
+	install -d -o "${mojo_nisaba_sso_user}" -g "${mojo_nisaba_sso_group}" -m 0700 \
+		"${mojo_nisaba_sso_dbdir}"
+
+	# Pass configuration to the application via the environment (preserved
+	# through rc.subr's "su -m").
+	[ -n "${mojo_nisaba_sso_config}" ] && export NISABA_CONFIG="${mojo_nisaba_sso_config}"
+	[ -n "${mojo_nisaba_sso_secret}" ] && export NISABA_SECRET="${mojo_nisaba_sso_secret}"
+	return 0
+}
+
+run_rc_command "$1"
