@@ -2,8 +2,9 @@ package App::Nisaba::Web::Controller::OIDC;
 
 use Mojo::Base 'Mojolicious::Controller';
 use Crypt::PK::RSA;
-use MIME::Base64 qw(encode_base64url);
-use Mojo::JSON   qw(encode_json);
+use Crypt::PRNG   qw(random_string_from);
+use MIME::Base64  qw(encode_base64url);
+use Mojo::JSON    qw(encode_json);
 
 sub _pt_call {
 	my ( $self, $code ) = @_;
@@ -21,7 +22,8 @@ sub index {
 	my $clients;
 	eval { $clients = $self->pt->getOIDCClients };
 	if ($@) {
-		$self->flash( error => "Failed to fetch OIDC clients: $@" );
+		# stash, not flash — flash only surfaces on the next request
+		$self->stash( flash_error => "Failed to fetch OIDC clients: $@" );
 		$clients = [];
 	}
 
@@ -36,24 +38,15 @@ sub add {
 }
 
 sub _generate_id {
-	my @chars = ( 'a' .. 'z', '0' .. '9' );
-	my $id    = '';
-	$id .= $chars[ rand @chars ] for 1 .. 24;
-	return $id;
+	return random_string_from( join( '', 'a' .. 'z', '0' .. '9' ), 24 );
 }
 
 sub _generate_secret {
-	my @chars = ( 'A' .. 'Z', 'a' .. 'z', '0' .. '9', '-', '_' );
-	my $sec   = '';
-	$sec .= $chars[ rand @chars ] for 1 .. 48;
-	return $sec;
+	return random_string_from( join( '', 'A' .. 'Z', 'a' .. 'z', '0' .. '9', '-', '_' ), 48 );
 }
 
 sub _generate_kid {
-	my @chars = ( 'a' .. 'z', '0' .. '9' );
-	my $kid   = '';
-	$kid .= $chars[ rand @chars ] for 1 .. 16;
-	return $kid;
+	return random_string_from( join( '', 'a' .. 'z', '0' .. '9' ), 16 );
 }
 
 # Generate an RSA key pair and return a JWK Set JSON string (with private key).
@@ -77,11 +70,43 @@ sub _generate_jwks {
 sub create {
 	my $self = shift;
 
+	# Reject configurations the SSO provider will refuse to serve.
+	my $clientType = $self->param('clientType') // 'confidential';
+	if ( $clientType ne 'confidential' && $clientType ne 'public' ) {
+		$self->flash( error => "Unknown client type '$clientType'." );
+		return $self->redirect_to('oidc_add');
+	}
+
+	my $signingAlg = $self->param('signingAlg') // '';
+	if ( $signingAlg ne '' && $signingAlg ne 'RS256' && $signingAlg ne 'HS256' && $signingAlg ne 'none' ) {
+		$self->flash(
+			error => "Unsupported signing algorithm '$signingAlg' — the SSO provider supports RS256, HS256, and none." );
+		return $self->redirect_to('oidc_add');
+	}
+	if ( $clientType eq 'public' && $signingAlg eq 'HS256' ) {
+		$self->flash( error =>
+				'HS256 signs ID tokens with the client secret, but public clients have no secret. Use RS256 for public clients.'
+		);
+		return $self->redirect_to('oidc_add');
+	}
+
+	my $redirect_text = $self->param('redirectURIs') // '';
+	my @redirectURIs  = grep { $_ ne '' } map { s/^\s+|\s+$//gr } split /\r?\n/, $redirect_text;
+	if ( !@redirectURIs ) {
+		$self->flash( error => 'At least one redirect URI is required.' );
+		return $self->redirect_to('oidc_add');
+	}
+	for my $uri (@redirectURIs) {
+		if ( $uri !~ m{^[A-Za-z][A-Za-z0-9+.-]*:} || $uri =~ /\s/ ) {
+			$self->flash( error => "Invalid redirect URI '$uri' — must be an absolute URI." );
+			return $self->redirect_to('oidc_add');
+		}
+	}
+
 	# Auto-generate client ID
 	my $clientId = _generate_id();
 
 	# Client type determines secret and auth method
-	my $clientType = $self->param('clientType') // 'confidential';
 	my $clientSecret;
 	my $authMethod;
 	if ( $clientType eq 'public' ) {
@@ -97,8 +122,6 @@ sub create {
 	$params{clientName}   = $self->param('clientName') // '';
 	$params{authMethod}   = $authMethod;
 
-	# Signing algorithm
-	my $signingAlg = $self->param('signingAlg') // '';
 	$params{idTokenSignedResponseAlg} = $signingAlg if $signingAlg ne '';
 
 	# Application type (derived from client type for convenience)
@@ -107,9 +130,7 @@ sub create {
 	$params{subjectType} = $self->param('subjectType') // '';
 	$params{clientURI}   = $self->param('clientURI')   // '';
 
-	# Multi-value fields: split textarea lines into arrayrefs
-	my $redirect_text = $self->param('redirectURIs') // '';
-	$params{redirectURIs} = [ grep { $_ ne '' } split /\r?\n/, $redirect_text ];
+	$params{redirectURIs} = \@redirectURIs;
 
 	my $scope_text = $self->param('scopes') // '';
 	$params{scopes} = [ grep { $_ ne '' } split /[\s,]+/, $scope_text ];
@@ -150,18 +171,41 @@ sub create {
 		}
 	);
 	if ($jwks_error) {
-		$self->flash( error => "Client created but key generation failed: $jwks_error" );
+		return $self->_render_show(
+			$clientId,
+			flash_error   => "Client created but key generation failed: $jwks_error",
+			new_client_id => $clientId,
+			( defined $clientSecret ? ( new_client_secret => $clientSecret ) : () ),
+		);
+	}
+
+	$self->_render_show(
+		$clientId,
+		flash_success => "OIDC client created successfully.",
+		new_client_id => $clientId,
+		( defined $clientSecret ? ( new_client_secret => $clientSecret ) : () ),
+	);
+} ## end sub create
+
+# Render the show page directly instead of redirect+flash. Generated
+# credentials are passed via the stash so they never transit the session
+# cookie, which is signed but not encrypted.
+sub _render_show {
+	my ( $self, $clientId, %stash ) = @_;
+
+	my $entry;
+	eval { $entry = $self->pt->getOIDCClientEntry( { clientId => $clientId } ) };
+	if ( $@ || $self->pt->error || !$entry ) {
 		return $self->redirect_to( 'oidc_show', clientId => $clientId );
 	}
 
-	# Flash the generated credentials so the show page can display them once
-	$self->flash( success           => "OIDC client created successfully." );
-	$self->flash( new_client_id     => $clientId );
-	$self->flash( new_client_type   => $clientType );
-	$self->flash( new_client_secret => $clientSecret ) if defined $clientSecret;
-
-	$self->redirect_to( 'oidc_show', clientId => $clientId );
-} ## end sub create
+	$self->render(
+		template => 'oidc/show',
+		entry    => $entry,
+		clientId => $clientId,
+		%stash,
+	);
+} ## end sub _render_show
 
 sub show {
 	my $self     = shift;
@@ -186,6 +230,54 @@ sub update {
 	my $self     = shift;
 	my $clientId = $self->param('clientId');
 	my $action   = $self->param('action') // '';
+
+	# Reject updates that would leave the client in a state the SSO
+	# provider refuses to serve.
+	my %secret_auth = map { $_ => 1 } qw(client_secret_basic client_secret_post client_secret_jwt);
+	if ( $action eq 'authMethod' || $action eq 'idTokenSignedResponseAlg' || $action eq 'clientSecret' ) {
+		my $value = $self->param('value') // '';
+
+		my $veto;
+		if ( $action eq 'authMethod' && !$secret_auth{$value} && $value ne 'private_key_jwt' && $value ne 'none' ) {
+			$veto = "Unknown token endpoint auth method '$value'.";
+		} elsif ( $action eq 'idTokenSignedResponseAlg'
+			&& $value ne ''
+			&& $value ne 'RS256'
+			&& $value ne 'HS256'
+			&& $value ne 'none' )
+		{
+			$veto = "Unsupported signing algorithm '$value' — the SSO provider supports RS256, HS256, and none.";
+		}
+
+		my $entry;
+		if ( !$veto ) {
+			eval { $entry = $self->pt->getOIDCClientEntry( { clientId => $clientId } ) };
+		}
+		if ($entry) {
+			my $has_secret = ( $entry->get_value('oidcClientSecret') // '' ) ne '';
+			my $has_jwks   = ( $entry->get_value('oidcJwks') // '' ) ne '';
+			if ( $action eq 'authMethod' && $secret_auth{$value} && !$has_secret ) {
+				$veto = "Auth method '$value' requires a client secret — generate one first.";
+			} elsif ( $action eq 'idTokenSignedResponseAlg' ) {
+				if ( $value eq 'HS256' && !$has_secret ) {
+					$veto = 'HS256 signs with the client secret, but this client has none — generate a secret first.';
+				} elsif ( $value eq 'RS256' && !$has_jwks ) {
+					$veto = 'RS256 requires a signing key pair — generate keys first.';
+				}
+			} elsif ( $action eq 'clientSecret' && $value eq '' ) {
+				my $am  = $entry->get_value('oidcTokenEndpointAuthMethod')  // '';
+				my $alg = $entry->get_value('oidcIdTokenSignedResponseAlg') // '';
+				if ( $secret_auth{$am} || $alg eq 'HS256' ) {
+					$veto = 'Cannot clear the client secret while the auth method or signing algorithm depends on it.';
+				}
+			}
+		}
+
+		if ($veto) {
+			$self->flash( error => $veto );
+			return $self->redirect_to( 'oidc_show', clientId => $clientId );
+		}
+	} ## end guard
 
 	my $error;
 
@@ -233,9 +325,11 @@ sub update {
 			}
 		);
 		if ( !$error ) {
-			$self->flash( success           => "Client secret regenerated." );
-			$self->flash( new_client_secret => $new_secret );
-			return $self->redirect_to( 'oidc_show', clientId => $clientId );
+			return $self->_render_show(
+				$clientId,
+				flash_success     => "Client secret regenerated.",
+				new_client_secret => $new_secret,
+			);
 		}
 	} elsif ( $action eq 'regenerateKeys' ) {
 		my $new_jwks = _generate_jwks();

@@ -23,8 +23,8 @@
       <div class="mb-3">
         <label class="form-label">Redirect URIs</label>
         <textarea name="redirectURIs" class="form-control" rows="3"
-                  placeholder="One URI per line"></textarea>
-        <div class="form-text">Allowed callback URIs. The client must redirect to one of these after authorization.</div>
+                  placeholder="One URI per line" required></textarea>
+        <div class="form-text">Allowed callback URIs, one per line — at least one is required. The client must redirect to one of these after authorization.</div>
       </div>
 
       <div class="row mb-3">
@@ -34,7 +34,7 @@
             <option value="RS256" selected>RS256</option>
             <option value="HS256">HS256</option>
           </select>
-          <div class="form-text"><code>RS256</code> uses the server's RSA key. <code>HS256</code> uses the client secret (HMAC).</div>
+          <div class="form-text"><code>RS256</code> uses the server's RSA key. <code>HS256</code> uses the client secret (HMAC), so it requires a confidential client.</div>
         </div>
         <div class="col">
           <label class="form-label">Client Type</label>
@@ -125,3 +125,20 @@
     </form>
   </div>
 </div>
+
+<script>
+(function () {
+  // Public clients have no secret, so HS256 (HMAC with the secret) cannot work.
+  var typeSel = document.querySelector('select[name="clientType"]');
+  var algSel  = document.querySelector('select[name="signingAlg"]');
+  if (!typeSel || !algSel) return;
+  var hs256 = algSel.querySelector('option[value="HS256"]');
+  function sync() {
+    var pub = typeSel.value === 'public';
+    hs256.disabled = pub;
+    if (pub && algSel.value === 'HS256') algSel.value = 'RS256';
+  }
+  typeSel.addEventListener('change', sync);
+  sync();
+})();
+</script>

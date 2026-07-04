@@ -1651,4 +1651,157 @@ $t->get_ok("/sso/logout?id_token_hint=$forged&post_logout_redirect_uri=https://t
   ->status_is(200)
   ->content_like( qr/Sign Out/i, 'unsigned id_token_hint requires confirmation' );
 
+# ── Conformance-grade JWT validation with Crypt::JWT ────────────────────────
+# The checks above prove our signatures are byte-correct. This section instead
+# validates the tokens the way a standards-based relying party would: it hands
+# the *published* JWKS (fetched from /jwks) and the raw id_token to
+# Crypt::JWT::decode_jwt, which selects the verification key by `kid`, checks
+# the RS256 signature, and enforces the iss/aud/exp claims in a single call.
+# Passing this is strong evidence of real-world OIDC interop, and it exercises
+# the negative behaviours a compliant RP must have (reject wrong key, reject
+# alg confusion, reject an unsigned token).
+#
+# Skips cleanly when Crypt::JWT is not installed so the rest of the suite still
+# runs.
+subtest 'Crypt::JWT relying-party verification' => sub {
+	eval { require Crypt::JWT; 1 }
+		or plan skip_all => "Crypt::JWT not installed: $@";
+
+	my $tj = Test::Mojo->new('App::Nisaba::WebSSO');
+	_install_stubs(
+		$tj->app,
+		getOIDCClientEntry => sub {
+			my ( $self, $args ) = @_;
+			return $client_rs256  if ( $args->{clientId} // '' ) eq 'rs256app';
+			return $client_hs256  if ( $args->{clientId} // '' ) eq 'hs256app';
+			return $client_public if ( $args->{clientId} // '' ) eq 'testapp';
+			return undef;
+		},
+		# /jwks aggregates public keys across all clients; expose the RS256 one.
+		getOIDCClients => sub { return [$client_rs256] },
+	);
+	_add_referer_hook($tj);
+
+	# An RP discovers the signing keys from the JWKS endpoint.
+	$tj->get_ok('/jwks')->status_is(200);
+	my $jwks = $tj->tx->res->json;
+
+	# Helper: drive the browser flow and return the issued id_token.
+	my $get_id_token = sub {
+		my ( $client_id, $redirect, $query, %token_args ) = @_;
+		$tj->reset_session;
+		$tj->get_ok(
+			"/authorize?client_id=$client_id&redirect_uri=$redirect&response_type=code&$query")
+		  ->status_is(302);
+		$tj->post_ok( '/sso/login', form => { user => 'alice', pass => 'correct' } )->status_is(302);
+		$tj->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+		my $code = Mojo::URL->new( $tj->tx->res->headers->location )->query->param('code');
+		$tj->post_ok(
+			'/token',
+			( $token_args{headers} ? ( $token_args{headers} ) : () ),
+			form => {
+				grant_type   => 'authorization_code',
+				code         => $code,
+				redirect_uri => $redirect,
+				( $token_args{form} ? %{ $token_args{form} } : () ),
+			}
+		)->status_is(200);
+		return $tj->tx->res->json->{id_token};
+	};
+
+	# ── RS256: verify signature + claims against the published JWKS ──
+	my $rs_token = $get_id_token->(
+		'rs256app', 'https://rs256app.example.com/callback',
+		'scope=openid+profile+email&state=cj1&nonce=cjnonce1',
+		form => { client_id => 'rs256app' },
+	);
+	ok( $rs_token, 'obtained RS256 id_token' );
+
+	my $claims = eval {
+		Crypt::JWT::decode_jwt(
+			token        => $rs_token,
+			kid_keys     => $jwks,               # select key by `kid`, verify signature
+			accepted_alg => 'RS256',             # pin alg — reject alg confusion
+			verify_iss   => sub { $_[0] eq 'http://localhost' },
+			verify_aud   => sub { $_[0] eq 'rs256app' },
+			# verify_exp defaults to enforcing exp when present (it always is)
+		);
+	};
+	ok( !$@, 'Crypt::JWT verifies RS256 id_token against published JWKS' )
+		or diag "decode_jwt failed: $@";
+	is( $claims->{sub},   'alice',             'RS256 verified claim: sub' );
+	is( $claims->{aud},   'rs256app',          'RS256 verified claim: aud' );
+	is( $claims->{nonce}, 'cjnonce1',          'RS256 verified claim: nonce' );
+	is( $claims->{email}, 'alice@example.com', 'RS256 verified claim: email' );
+	is( $claims->{name},  'Alice Wonderland',  'RS256 verified claim: name' );
+	ok( defined $claims->{exp} && $claims->{exp} > time(), 'RS256 verified claim: exp in the future' );
+
+	# Wrong key (same kid, different RSA key) → signature must fail.
+	my $other_rsa = Crypt::PK::RSA->new;
+	$other_rsa->generate_key( 256, 65537 );
+	my $other_jwk = Mojo::JSON::decode_json( $other_rsa->export_key_jwk('public') );
+	$other_jwk->{kid} = 'test-rs256-kid';
+	eval {
+		Crypt::JWT::decode_jwt(
+			token => $rs_token, kid_keys => { keys => [$other_jwk] }, accepted_alg => 'RS256' );
+	};
+	ok( $@, 'RS256 id_token rejected when verified against the wrong key' );
+
+	# alg confusion: an RS256 token must not be accepted where only HS256 is allowed.
+	eval {
+		Crypt::JWT::decode_jwt( token => $rs_token, kid_keys => $jwks, accepted_alg => 'HS256' );
+	};
+	ok( $@, 'RS256 id_token rejected when only HS256 is accepted (alg confusion defense)' );
+
+	# Tampered payload → signature must fail.
+	my @p = split /\./, $rs_token;
+	my $tampered_payload = Mojo::JSON::decode_json( _b64url_decode( $p[1] ) );
+	$tampered_payload->{sub} = 'attacker';
+	my $tampered = join '.', $p[0], _b64url_encode( Mojo::JSON::encode_json($tampered_payload) ), $p[2];
+	eval {
+		Crypt::JWT::decode_jwt( token => $tampered, kid_keys => $jwks, accepted_alg => 'RS256' );
+	};
+	ok( $@, 'RS256 id_token with a tampered payload is rejected' );
+
+	# ── alg=none: a signature-requiring RP must refuse an unsigned token ──
+	my $none_token = $get_id_token->(
+		'testapp', 'https://testapp.example.com/callback',
+		'scope=openid&state=cj2&nonce=cjnonce2',
+		form => { client_id => 'testapp' },
+	);
+	like( $none_token, qr/\.$/, 'testapp issues an unsigned (alg=none) id_token' );
+	eval {
+		Crypt::JWT::decode_jwt( token => $none_token, kid_keys => $jwks, accepted_alg => 'RS256' );
+	};
+	ok( $@, 'unsigned (alg=none) id_token is rejected by a signature-requiring RP' );
+
+	# ── HS256: verify with the shared client secret ──
+	my $hs_basic = 'Basic ' . MIME::Base64::encode_base64( "hs256app:$hs256_secret", '' );
+	my $hs_token = $get_id_token->(
+		'hs256app', 'https://hs256app.example.com/callback',
+		'scope=openid+profile&state=cj3&nonce=cjnonce3',
+		headers => { Authorization => $hs_basic },
+	);
+
+	my $hs_claims = eval {
+		Crypt::JWT::decode_jwt(
+			token        => $hs_token,
+			key          => $hs256_secret,
+			accepted_alg => 'HS256',
+			verify_iss   => sub { $_[0] eq 'http://localhost' },
+			verify_aud   => sub { $_[0] eq 'hs256app' },
+		);
+	};
+	ok( !$@, 'Crypt::JWT verifies HS256 id_token with the client secret' )
+		or diag "decode_jwt HS256 failed: $@";
+	is( $hs_claims->{aud},   'hs256app', 'HS256 verified claim: aud' );
+	is( $hs_claims->{nonce}, 'cjnonce3', 'HS256 verified claim: nonce' );
+
+	# Wrong secret → must fail.
+	eval {
+		Crypt::JWT::decode_jwt( token => $hs_token, key => 'wrong-secret', accepted_alg => 'HS256' );
+	};
+	ok( $@, 'HS256 id_token rejected with the wrong secret' );
+};
+
 done_testing;

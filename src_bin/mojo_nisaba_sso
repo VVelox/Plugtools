@@ -280,11 +280,12 @@ C<mod_proxy_http> to be loaded.
     # advertises the S256 method.
     OIDCPKCEMethod S256
 
-    # How long (seconds) before re-checking the user's session.
+    # Destroy the session after this many seconds of inactivity
+    # (default 300). The absolute session lifetime is controlled
+    # separately by OIDCSessionMaxDuration (default 8 hours).
     OIDCSessionInactivityTimeout 3600
 
-    # Pass OIDC claims as environment variables / request headers
-    # so the backend application can use them.
+    # Which claim to use as REMOTE_USER.
     OIDCRemoteUserClaim sub
     # or use "email" to set REMOTE_USER to the user's email:
     # OIDCRemoteUserClaim email
@@ -292,8 +293,8 @@ C<mod_proxy_http> to be loaded.
 =head2 Passing claims to a backend
 
 When C<AuthType openid-connect> is active, mod_auth_openidc sets
-several environment variables and headers that a backend (CGI, FCGI,
-reverse proxy, etc.) can read:
+several variables that content handled by Apache itself (CGI, FCGI,
+etc.) can read from the environment:
 
     REMOTE_USER                — the claim configured by OIDCRemoteUserClaim
     OIDC_CLAIM_sub             — subject identifier
@@ -303,7 +304,7 @@ reverse proxy, etc.) can read:
     OIDC_CLAIM_family_name     — last name
     OIDC_CLAIM_preferred_username — username
 
-To forward these as HTTP headers to a proxied application:
+To forward the claims as HTTP headers to a reverse-proxied application:
 
     OIDCPassClaimsAs headers
 
@@ -315,7 +316,34 @@ To forward these as HTTP headers to a proxied application:
     </Location>
 
 The backend will receive headers like C<OIDC_CLAIM_email>,
-C<OIDC_CLAIM_name>, etc.
+C<OIDC_CLAIM_name>, etc. Note that C<REMOTE_USER> itself is an
+Apache-internal variable and is B<not> forwarded across a proxy; to
+give a proxied backend the authenticated user name as a header, set:
+
+    OIDCAuthNHeader X-Remote-User
+
+B<Security:> these headers are plain text and the backend trusts them
+blindly. mod_auth_openidc strips matching inbound headers on protected
+paths, so they cannot be forged I<through> Apache, but anything that can
+reach the backend port directly (another local user or service on the
+same host, another machine on the network) can send fabricated
+C<OIDC_CLAIM_*> / C<X-Remote-User> headers and impersonate any user.
+Binding the backend to C<127.0.0.1> is not sufficient on a multi-user
+host. Ensure the backend is reachable B<only> via Apache — use a unix
+domain socket, firewall rules, or authentication between Apache and the
+backend.
+
+Where the backend can verify a JWT, a stronger option is to pass the
+signed ID token instead of (or in addition to) bare claim headers:
+
+    OIDCPassIdTokenAs serialized
+
+The backend then receives the ID token JWT in the C<OIDC_id_token>
+header and can verify its RS256 signature against the provider's
+published JWKS (C<https://sso.example.com/jwks>), along with the
+C<iss>, C<aud>, and C<exp> claims. A fabricated header fails signature
+verification, so direct access to the backend port gains an attacker
+nothing.
 
 =head2 Restricting access by claim
 

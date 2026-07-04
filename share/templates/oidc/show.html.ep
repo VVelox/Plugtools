@@ -75,9 +75,10 @@
   );
 %>
 
-<!-- Generated credentials (shown once after creation or regeneration) -->
-% my $new_id     = flash('new_client_id');
-% my $new_secret = flash('new_client_secret');
+<!-- Generated credentials (shown once after creation or regeneration; passed
+     via the stash, never through the session cookie) -->
+% my $new_id     = stash('new_client_id');
+% my $new_secret = stash('new_client_secret');
 % if ($new_id || $new_secret) {
 <div class="alert alert-success alert-dismissible mb-4" role="alert">
   % if ($new_id) {
@@ -472,7 +473,7 @@
      ═══════════════════════════════════════════════════════════════ -->
 
 <!-- LDAP entry viewer -->
-% my %sensitive = map { lc($_) => 1 } qw(oidcClientSecret oidcRegistrationAccessToken);
+% my %sensitive = map { lc($_) => 1 } qw(oidcClientSecret oidcRegistrationAccessToken oidcJwks);
 <div class="modal fade" id="modal-ldap-entry" tabindex="-1">
   <div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
     <div class="modal-header">
@@ -640,10 +641,21 @@
       </div>
       <div class="modal-body">
         <label class="form-label"><%= $cf->[2] %></label>
+        % if ($cf->[0] eq 'idTokenSignedResponseAlg') {
+        % my $cur_alg = $entry->get_value($cf->[1]) // '';
+        <select name="value" class="form-select">
+          <option value="" <%= $cur_alg eq '' ? 'selected' : '' %>>(not set — defaults to none)</option>
+          <option value="none" <%= $cur_alg eq 'none' ? 'selected' : '' %>>none (unsigned)</option>
+          <option value="RS256" <%= $cur_alg eq 'RS256' ? 'selected' : '' %>>RS256</option>
+          <option value="HS256" <%= $cur_alg eq 'HS256' ? 'selected' : '' %>>HS256</option>
+        </select>
+        <div class="form-text">Only these are supported by the SSO provider. HS256 requires a client secret; RS256 requires a signing key pair.</div>
+        % } else {
         <input type="text" name="value" class="form-control"
                value="<%= $entry->get_value($cf->[1]) // '' %>"
                placeholder="e.g. RS256, A128CBC-HS256">
         <div class="form-text">Leave blank to clear. Common values: RS256, ES256, A128CBC-HS256, A256GCM.</div>
+        % }
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>

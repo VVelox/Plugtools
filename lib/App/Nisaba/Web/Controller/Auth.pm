@@ -1,7 +1,8 @@
 package App::Nisaba::Web::Controller::Auth;
 
 use Mojo::Base 'Mojolicious::Controller', -signatures;
-use Mojo::Util qw(b64_encode);
+use Mojo::Util      qw(b64_encode);
+use Net::LDAP::Util qw(escape_filter_value);
 
 # --------------------------------------------------------------------------- #
 # Auth middleware — used as an under() bridge
@@ -231,7 +232,7 @@ sub _is_admin ( $self, $user ) {
 	# Find the admin group in LDAP
 	my $grp_mesg = $ldap->search(
 		base   => $pt->{ini}->{''}->{groupbase},
-		filter => '(&(objectClass=posixGroup)(cn=' . $admin_grp . '))',
+		filter => '(&(objectClass=posixGroup)(cn=' . escape_filter_value( $admin_grp ) . '))',
 	);
 	my $grp_entry = $grp_mesg->pop_entry;
 	return 0 unless $grp_entry;
@@ -247,7 +248,7 @@ sub _is_admin ( $self, $user ) {
 	if ( defined $grp_gid ) {
 		my $usr_mesg = $ldap->search(
 			base   => $pt->{ini}->{''}->{userbase},
-			filter => '(uid=' . $user . ')',
+			filter => '(uid=' . escape_filter_value( $user ) . ')',
 			attrs  => ['gidNumber'],
 		);
 		my $usr_entry = $usr_mesg->pop_entry;

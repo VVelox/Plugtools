@@ -27,6 +27,7 @@ my %WriteMakefileArgs = (
 	},
 	TEST_REQUIRES => {
 		'Test::More' => '0',
+		'Crypt::JWT' => '0',
 	},
 	PREREQ_PM => {
 		'Test::More'                        => 0,

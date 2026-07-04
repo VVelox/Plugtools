@@ -62,13 +62,13 @@
 
 <div class="container-fluid mt-3 px-4">
 
-  % if (my $err = flash('error')) {
+  % if (my $err = flash('error') || stash('flash_error')) {
   <div class="alert alert-danger alert-dismissible fade show" role="alert">
     <strong>Error:</strong> <%= $err %>
     <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
   </div>
   % }
-  % if (my $ok = flash('success')) {
+  % if (my $ok = flash('success') || stash('flash_success')) {
   <div class="alert alert-success alert-dismissible fade show" role="alert">
     <%= $ok %>
     <button type="button" class="btn-close" data-bs-dismiss="alert"></button>

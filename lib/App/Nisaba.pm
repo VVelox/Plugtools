@@ -5,6 +5,7 @@ use strict;
 use Config::IniHash;
 use File::BaseDir qw/xdg_config_home/;
 use Net::LDAP;
+use Net::LDAP::Util qw(escape_filter_value escape_dn_value);
 use Net::LDAP::Entry;
 use Net::LDAP::posixAccount;
 use Net::LDAP::posixGroup;
@@ -262,7 +263,7 @@ sub _getLDAPGroupEntry {
 	my ( $self, $ldap, $group ) = @_;
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{groupbase},
-		filter => '(&(objectClass=posixGroup)(cn=' . $group . '))',
+		filter => '(&(objectClass=posixGroup)(cn=' . escape_filter_value( $group ) . '))',
 	);
 	return undef if $mesg->{errorMessage} ne '';
 	return $mesg->pop_entry;
@@ -274,7 +275,7 @@ sub _getLDAPUserEntry {
 	my ( $self, $ldap, $user ) = @_;
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{userbase},
-		filter => '(uid=' . $user . ')',
+		filter => '(uid=' . escape_filter_value( $user ) . ')',
 	);
 	return undef if $mesg->{errorMessage} ne '';
 	return $mesg->pop_entry;
@@ -394,7 +395,7 @@ sub addGroup {
 	my ($nss_gbyid) = $self->_nssGroupByGID( $args{gid} );
 	my $gid_ldap = $ldap->search(
 		base   => $self->{ini}->{''}->{groupbase},
-		filter => '(gidNumber=' . $args{gid} . ')',
+		filter => '(gidNumber=' . escape_filter_value( $args{gid} ) . ')',
 	);
 	if ( defined($nss_gbyid) || $gid_ldap->count > 0 ) {
 		$self->{error}       = 20;
@@ -924,7 +925,7 @@ sub deleteUser {
 	#check if the primary group exists in LDAP
 	my $gname_mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{groupbase},
-		filter => '(&(objectClass=posixGroup)(gidNumber=' . $gid . '))',
+		filter => '(&(objectClass=posixGroup)(gidNumber=' . escape_filter_value( $gid ) . '))',
 	);
 	my $gname_entry = $gname_mesg->pop_entry;
 	my $gname       = defined($gname_entry) ? $gname_entry->get_value('cn') : undef;
@@ -1357,7 +1358,7 @@ sub groupGIDchange {
 	#we now do another search for the purpose of updating any users with the old GID
 	my $mesg3 = $ldap->search(
 		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(objectClass=posixAccount) (gidNumber=' . $gid . '))'
+		filter => '(&(objectClass=posixAccount) (gidNumber=' . escape_filter_value( $gid ) . '))'
 	);
 	if ( $mesg3->{errorMessage} ne '' ) {
 		$self->{error} = 37;
@@ -2120,7 +2121,7 @@ sub removeUserFromGroups {
 	#search and get the first entry
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{groupbase},
-		filter => '(&(objectClass=posixGroup) (memberUid=' . $user . '))'
+		filter => '(&(objectClass=posixGroup) (memberUid=' . escape_filter_value( $user ) . '))'
 	);
 	my $entry = $mesg->pop_entry;
 
@@ -2296,7 +2297,7 @@ sub deleteNetgroup {
 	my $ldap = $self->connect();
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{netgroupbase},
-		filter => '(&(objectClass=nisNetgroup)(cn=' . $args{group} . '))'
+		filter => '(&(objectClass=nisNetgroup)(cn=' . escape_filter_value( $args{group} ) . '))'
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
 		$self->{error}       = 27;
@@ -2399,7 +2400,7 @@ sub getNetgroupEntry {
 	my $ldap = $self->connect();
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{netgroupbase},
-		filter => '(&(objectClass=nisNetgroup)(cn=' . $args{group} . '))'
+		filter => '(&(objectClass=nisNetgroup)(cn=' . escape_filter_value( $args{group} ) . '))'
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
 		$self->{error}       = 27;
@@ -2457,7 +2458,7 @@ sub netgroupDescriptionChange {
 	my $ldap = $self->connect();
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{netgroupbase},
-		filter => '(&(objectClass=nisNetgroup)(cn=' . $args{group} . '))'
+		filter => '(&(objectClass=nisNetgroup)(cn=' . escape_filter_value( $args{group} ) . '))'
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
 		$self->{error}       = 27;
@@ -2536,7 +2537,7 @@ sub netgroupTripleAdd {
 	my $ldap = $self->connect();
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{netgroupbase},
-		filter => '(&(objectClass=nisNetgroup)(cn=' . $args{group} . '))'
+		filter => '(&(objectClass=nisNetgroup)(cn=' . escape_filter_value( $args{group} ) . '))'
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
 		$self->{error}       = 27;
@@ -2610,7 +2611,7 @@ sub netgroupTripleRemove {
 	my $ldap = $self->connect();
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{netgroupbase},
-		filter => '(&(objectClass=nisNetgroup)(cn=' . $args{group} . '))'
+		filter => '(&(objectClass=nisNetgroup)(cn=' . escape_filter_value( $args{group} ) . '))'
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
 		$self->{error}       = 27;
@@ -2684,7 +2685,7 @@ sub netgroupMemberAdd {
 	my $ldap = $self->connect();
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{netgroupbase},
-		filter => '(&(objectClass=nisNetgroup)(cn=' . $args{group} . '))'
+		filter => '(&(objectClass=nisNetgroup)(cn=' . escape_filter_value( $args{group} ) . '))'
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
 		$self->{error}       = 27;
@@ -2758,7 +2759,7 @@ sub netgroupMemberRemove {
 	my $ldap = $self->connect();
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{netgroupbase},
-		filter => '(&(objectClass=nisNetgroup)(cn=' . $args{group} . '))'
+		filter => '(&(objectClass=nisNetgroup)(cn=' . escape_filter_value( $args{group} ) . '))'
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
 		$self->{error}       = 27;
@@ -3552,7 +3553,7 @@ sub userGIDchange {
 	#check if the target group (by GID) exists in LDAP
 	my $new_grp_mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{groupbase},
-		filter => '(&(objectClass=posixGroup)(gidNumber=' . $args{gid} . '))',
+		filter => '(&(objectClass=posixGroup)(gidNumber=' . escape_filter_value( $args{gid} ) . '))',
 	);
 	if ( !defined( $new_grp_mesg->pop_entry ) ) {
 		$self->{error}       = 14;
@@ -6023,7 +6024,7 @@ sub userVerifyPassword {
 
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{userbase},
-		filter => '(uid=' . $args{user} . ')',
+		filter => '(uid=' . escape_filter_value( $args{user} ) . ')',
 		attrs  => ['dn'],
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
@@ -6114,7 +6115,7 @@ sub userSetPassSelf {
 
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{userbase},
-		filter => '(uid=' . $args{user} . ')',
+		filter => '(uid=' . escape_filter_value( $args{user} ) . ')',
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
 		$self->{error}       = 32;
@@ -6198,7 +6199,7 @@ sub userSelfInfo {
 
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{userbase},
-		filter => '(uid=' . $args{user} . ')',
+		filter => '(uid=' . escape_filter_value( $args{user} ) . ')',
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
 		$self->{error}       = 32;
@@ -6285,7 +6286,7 @@ sub userSSHPublicKeyAddSelf {
 
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{userbase},
-		filter => '(uid=' . $args{user} . ')',
+		filter => '(uid=' . escape_filter_value( $args{user} ) . ')',
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
 		$self->{error}       = 32;
@@ -6370,7 +6371,7 @@ sub userSSHPublicKeyRemoveSelf {
 
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{userbase},
-		filter => '(uid=' . $args{user} . ')',
+		filter => '(uid=' . escape_filter_value( $args{user} ) . ')',
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
 		$self->{error}       = 32;
@@ -6443,7 +6444,7 @@ sub userConvertToLdapPublicKeySelf {
 
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{userbase},
-		filter => '(uid=' . $args{user} . ')',
+		filter => '(uid=' . escape_filter_value( $args{user} ) . ')',
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
 		$self->{error}       = 32;
@@ -7509,7 +7510,7 @@ sub groupConvertToMfa {
 
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{groupbase},
-		filter => '(cn=' . $args{group} . ')',
+		filter => '(cn=' . escape_filter_value( $args{group} ) . ')',
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
 		$self->{error}       = 27;
@@ -7584,7 +7585,7 @@ sub groupMfaRequiredSet {
 
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{groupbase},
-		filter => '(cn=' . $args{group} . ')',
+		filter => '(cn=' . escape_filter_value( $args{group} ) . ')',
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
 		$self->{error}       = 27;
@@ -7656,7 +7657,7 @@ sub groupMfaGracePeriodSet {
 
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{groupbase},
-		filter => '(cn=' . $args{group} . ')',
+		filter => '(cn=' . escape_filter_value( $args{group} ) . ')',
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
 		$self->{error}       = 27;
@@ -7730,7 +7731,7 @@ sub groupMfaInfoGet {
 
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{groupbase},
-		filter => '(cn=' . $args{group} . ')',
+		filter => '(cn=' . escape_filter_value( $args{group} ) . ')',
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
 		$self->{error}       = 27;
@@ -8983,7 +8984,7 @@ sub getOIDCClientEntry {
 
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{oidcbase},
-		filter => '(&(objectClass=oidcRelyingParty)(oidcClientId=' . $args{clientId} . '))',
+		filter => '(&(objectClass=oidcRelyingParty)(oidcClientId=' . escape_filter_value( $args{clientId} ) . '))',
 		scope  => 'one',
 	);
 	if ( $mesg->{errorMessage} ne '' ) {
@@ -9065,7 +9066,7 @@ sub addOIDCClient {
 	}
 	$self->errorblank;
 
-	my $dn = 'oidcClientId=' . $args{clientId} . ',' . $self->{ini}->{''}->{oidcbase};
+	my $dn = 'oidcClientId=' . escape_dn_value( $args{clientId} ) . ',' . $self->{ini}->{''}->{oidcbase};
 
 	my @attrs = (
 		objectClass  => 'oidcRelyingParty',
