@@ -26,11 +26,15 @@ sub login ($self) {
 	my $user = $self->param('user') // '';
 	my $pass = $self->param('pass') // '';
 
+	return unless $self->rate_guard( 'login', user => $user, render => { template => 'admin/login' } );
+
 	my $err = $self->pt_call( sub { $self->pt->userVerifyPassword( { user => $user, password => $pass } ) } );
 	if ($err) {
+		$self->rate_fail( 'login', user => $user );
 		$self->flash( error => 'Invalid username or password.' );
 		return $self->redirect_to('admin_login');
 	}
+	$self->rate_reset( 'login', user => $user );
 
 	# Verify user is a member of the admin group
 	unless ( $self->_is_admin($user) ) {
@@ -82,6 +86,8 @@ sub passkey_login_start ($self) {
 } ## end sub passkey_login_start
 
 sub passkey_login_finish ($self) {
+	return unless $self->rate_guard( 'passkey', render => { json => 1 } );
+
 	my $challenge_b64 = $self->session('admin_passkey_login_challenge');
 	unless ($challenge_b64) {
 		return $self->render( json => { error => 'No login in progress' }, status => 400 );
@@ -147,8 +153,10 @@ sub passkey_login_finish ($self) {
 	};
 	if ($@) {
 		( my $msg = $@ ) =~ s/ at \S+ line \d+\.?\s*$//;
+		$self->rate_fail('passkey');
 		return $self->render( json => { error => "Verification failed: $msg" }, status => 401 );
 	}
+	$self->rate_reset('passkey');
 
 	# Update sign count and last-used timestamp (best-effort)
 	$self->pt_call(
@@ -193,14 +201,18 @@ sub totp_challenge ($self) {
 		return $self->redirect_to('admin_login');
 	}
 
+	return unless $self->rate_guard( 'totp', user => $user, render => { template => 'admin/totp_challenge' } );
+
 	my $code = $self->param('code') // '';
 
 	my $ok;
 	my $err = $self->pt_call( sub { $ok = $self->pt->userTotpVerify( { user => $user, code => $code } ) } );
 	if ( $err || !$ok ) {
+		$self->rate_fail( 'totp', user => $user );
 		$self->flash( error => 'Invalid TOTP code. Please try again.' );
 		return $self->redirect_to('admin_totp_challenge');
 	}
+	$self->rate_reset( 'totp', user => $user );
 
 	delete $self->session->{admin_totp_pending_user};
 	$self->session( admin_user => $user );

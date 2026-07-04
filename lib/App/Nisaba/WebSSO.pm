@@ -2,6 +2,9 @@ package App::Nisaba::WebSSO;
 
 use Mojo::Base 'Mojolicious';
 use App::Nisaba;
+use App::Nisaba::WebSecret;
+use App::Nisaba::WebCSRF;
+use App::Nisaba::WebUtil ();
 use App::Nisaba::WebSSO::Storage;
 use File::ShareDir 'dist_dir';
 
@@ -52,8 +55,25 @@ sub startup {
 	$pt_args{config} = $ENV{NISABA_CONFIG} if $ENV{NISABA_CONFIG};
 	my $pt = App::Nisaba->new( \%pt_args );
 
-	# Session secret
-	$self->secrets( [ $pt->{ini}->{''}->{websecret} // $ENV{NISABA_SECRET} // 'nisaba_sso_change_me' ] );
+	# Session secret — from config or NISABA_SECRET. Refuses to start rather
+	# than sign sessions with a predictable default (see App::Nisaba::WebSecret).
+	$self->secrets(
+		[
+			App::Nisaba::WebSecret::resolve(
+				configured => $pt->{ini}->{''}->{websecret},
+				env        => $ENV{NISABA_SECRET},
+				app        => 'App::Nisaba::WebSSO (OIDC provider)',
+			)
+		]
+	);
+
+	# Harden the session cookie: SameSite=Lax (explicit) and Secure (HTTPS-only).
+	# Lax still allows the top-level cross-site GET navigation an RP uses to reach
+	# /authorize. Secure is on by default; disable it for plain-HTTP development
+	# or testing with cookieSecure=0 in the config or NISABA_COOKIE_SECURE=0.
+	$self->sessions->samesite('Lax');
+	my $cookie_secure = $pt->{ini}->{''}->{cookieSecure} // $ENV{NISABA_COOKIE_SECURE} // 1;
+	$self->sessions->secure( $cookie_secure ? 1 : 0 );
 
 	# Helper to access the App::Nisaba instance
 	$self->helper( pt => sub { $pt } );
@@ -113,34 +133,15 @@ sub startup {
 		}
 	);
 
-	# Referer check: every POST must originate from the same host.
-	$self->hook(
-		before_dispatch => sub {
-			my $c = shift;
-			return unless $c->req->method eq 'POST';
+	# CSRF: reject state-changing requests whose origin isn't our own. The OIDC
+	# token and UserInfo endpoints are exempt: relying parties call them
+	# server-to-server with client credentials / a Bearer token and no browser
+	# cookie, so the CSRF threat and its headers don't apply there.
+	App::Nisaba::WebCSRF::install_origin_check( $self, exempt_paths => [ '/token', '/userinfo' ] );
+	App::Nisaba::WebCSRF::install_token_check( $self, exempt_paths => [ '/token', '/userinfo' ] );
 
-			# Exempt OIDC protocol endpoints that relying parties call directly
-			# (server-to-server, no browser Referer): the token endpoint and the
-			# UserInfo endpoint. These are authenticated by client credentials /
-			# Bearer token, not by a session cookie, so the CSRF Referer check
-			# neither applies nor should block them.
-			return if $c->req->url->path eq '/token';
-			return if $c->req->url->path eq '/userinfo';
-
-			my $referer = $c->req->headers->referrer;
-			unless ($referer) {
-				$c->render( text => 'Forbidden: missing Referer header', status => 403 );
-				return;
-			}
-
-			my $ref_host = Mojo::URL->new($referer)->host // '';
-			my $req_host = $c->req->url->to_abs->host     // '';
-			unless ( $ref_host eq $req_host ) {
-				$c->render( text => 'Forbidden: Referer host mismatch', status => 403 );
-				return;
-			}
-		}
-	);
+	# Brute-force rate limiting for the auth endpoints.
+	App::Nisaba::WebUtil::install_rate_limiter($self);
 
 	my $r = $self->routes;
 

@@ -78,9 +78,10 @@ sub create {
 	}
 
 	my $signingAlg = $self->param('signingAlg') // '';
-	if ( $signingAlg ne '' && $signingAlg ne 'RS256' && $signingAlg ne 'HS256' && $signingAlg ne 'none' ) {
+	if ( $signingAlg ne '' && $signingAlg ne 'RS256' && $signingAlg ne 'HS256' ) {
 		$self->flash(
-			error => "Unsupported signing algorithm '$signingAlg' — the SSO provider supports RS256, HS256, and none." );
+			error => "Unsupported signing algorithm '$signingAlg' — the SSO provider supports RS256 and HS256. "
+				. 'Unsigned (none) ID tokens are not permitted.' );
 		return $self->redirect_to('oidc_add');
 	}
 	if ( $clientType eq 'public' && $signingAlg eq 'HS256' ) {
@@ -241,12 +242,13 @@ sub update {
 		if ( $action eq 'authMethod' && !$secret_auth{$value} && $value ne 'private_key_jwt' && $value ne 'none' ) {
 			$veto = "Unknown token endpoint auth method '$value'.";
 		} elsif ( $action eq 'idTokenSignedResponseAlg'
-			&& $value ne ''
 			&& $value ne 'RS256'
-			&& $value ne 'HS256'
-			&& $value ne 'none' )
+			&& $value ne 'HS256' )
 		{
-			$veto = "Unsupported signing algorithm '$value' — the SSO provider supports RS256, HS256, and none.";
+			# 'none' (unsigned) and clearing the value (which would fall back to
+			# unsigned) are rejected: an admin-managed client must sign its tokens.
+			$veto = "Unsupported signing algorithm '$value' — the SSO provider supports RS256 and HS256. "
+				. 'Unsigned (none) ID tokens are not permitted.';
 		}
 
 		my $entry;

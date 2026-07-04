@@ -35,6 +35,9 @@ load_rc_config $name
 : ${mojo_nisaba_config:="/usr/local/etc/nisabarc"}
 : ${mojo_nisaba_secret:=""}
 : ${mojo_nisaba_command:="prefork"}
+# Writable state dir for the brute-force rate-limiter SQLite database
+# (rateLimitPath). Only needed while rate limiting is enabled (the default).
+: ${mojo_nisaba_dbdir:="/var/db/nisaba"}
 
 # daemon(8) supervises and restarts the foreground Mojolicious server and
 # records its pid; rc.subr runs it as ${mojo_nisaba_user}.
@@ -54,6 +57,10 @@ mojo_nisaba_precmd()
 	# Run directory for the pidfile, writable by the service user.
 	install -d -o "${mojo_nisaba_user}" -g "${mojo_nisaba_group}" -m 0755 \
 		"/var/run/${name}"
+
+	# State dir for the rate-limiter database, writable by the service user.
+	install -d -o "${mojo_nisaba_user}" -g "${mojo_nisaba_group}" -m 0700 \
+		"${mojo_nisaba_dbdir}"
 
 	# Pass configuration to the application via the environment (preserved
 	# through rc.subr's "su -m").

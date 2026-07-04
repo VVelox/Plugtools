@@ -35,12 +35,15 @@ Restart=on-failure
 RestartSec=5
 
 # --- Hardening ------------------------------------------------------------
-# This service keeps no local state (it talks to LDAP and, optionally, an SMTP
-# relay over the network), so the whole filesystem can be read-only.
+# The only local state is the brute-force rate-limiter SQLite database under
+# /var/db/nisaba (rateLimitPath); ReadWritePaths keeps the rest of the
+# filesystem read-only. The directory is created by nisaba.tmpfiles.conf. If you
+# disable rate limiting (rateLimit=0) you can drop the ReadWritePaths line.
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
+ReadWritePaths=/var/db/nisaba
 ProtectHome=true
 ProtectControlGroups=true
 ProtectKernelModules=true

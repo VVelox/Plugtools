@@ -246,6 +246,7 @@
             <code style="font-size:0.8rem"><%= $v %></code>
             <form method="post" action="/oidc/<%= $clientId %>"
                   data-confirm="<%= $ms->[5] %>">
+              <%= csrf_field %>
               <input type="hidden" name="action" value="<%= $ms->[0] %>_remove">
               <input type="hidden" name="value" value="<%= $v %>">
               <button class="btn btn-outline-danger btn-sm">Remove</button>
@@ -257,6 +258,7 @@
         <p class="text-muted">None configured.</p>
         % }
         <form method="post" action="/oidc/<%= $clientId %>" class="d-flex gap-2">
+          <%= csrf_field %>
           <input type="hidden" name="action" value="<%= $ms->[0] %>_add">
           <input type="<%= $ms->[3] %>" name="value" class="form-control form-control-sm"
                  placeholder="<%= $ms->[4] %>" required>
@@ -282,6 +284,7 @@
               % for my $tv (sort @tvals) {
               <form method="post" action="/oidc/<%= $clientId %>" class="d-inline me-1 mb-1"
                     data-confirm="<%= $ts->[5] %>">
+                <%= csrf_field %>
                 <input type="hidden" name="action" value="<%= $ts->[0] %>_remove">
                 <input type="hidden" name="value" value="<%= $tv %>">
                 <button class="btn btn-sm btn-outline-secondary" title="Click to remove">
@@ -294,6 +297,7 @@
             <p class="text-muted mb-3">None configured.</p>
             % }
             <form method="post" action="/oidc/<%= $clientId %>" class="d-flex gap-2">
+              <%= csrf_field %>
               <input type="hidden" name="action" value="<%= $ts->[0] %>_add">
               % if ($ts->[0] eq 'grantType') {
               <select name="value" class="form-select form-select-sm">
@@ -338,6 +342,7 @@
             <%= $c %>
             <form method="post" action="/oidc/<%= $clientId %>"
                   data-confirm="Remove this contact?">
+              <%= csrf_field %>
               <input type="hidden" name="action" value="contact_remove">
               <input type="hidden" name="value" value="<%= $c %>">
               <button class="btn btn-outline-danger btn-sm">Remove</button>
@@ -349,6 +354,7 @@
         <p class="text-muted">No contacts configured.</p>
         % }
         <form method="post" action="/oidc/<%= $clientId %>" class="d-flex gap-2">
+          <%= csrf_field %>
           <input type="hidden" name="action" value="contact_add">
           <input type="email" name="value" class="form-control form-control-sm" placeholder="email" required>
           <button class="btn btn-primary btn-sm text-nowrap">Add</button>
@@ -418,6 +424,7 @@
         % }
         <form method="post" action="/oidc/<%= $clientId %>"
               data-confirm="Regenerate the signing key pair? Existing tokens signed with the old key will no longer verify.">
+          <%= csrf_field %>
           <input type="hidden" name="action" value="regenerateKeys">
           <button class="btn btn-sm btn-outline-warning"><%= $pub_jwks_json ne '' ? 'Regenerate Keys' : 'Generate Keys' %></button>
         </form>
@@ -463,6 +470,7 @@
   <div class="card-body">
     <form method="post" action="/oidc/<%= $clientId %>/delete"
           data-confirm="Permanently delete OIDC client <%= $clientId %>?">
+      <%= csrf_field %>
       <button class="btn btn-danger">Delete Client</button>
     </form>
   </div>
@@ -504,6 +512,7 @@
 <div class="modal fade" id="modal-<%= $uf->[0] %>" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/oidc/<%= $clientId %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="<%= $uf->[0] %>">
       <div class="modal-header">
         <h5 class="modal-title">Edit <%= $uf->[2] %></h5>
@@ -528,6 +537,7 @@
 <div class="modal fade" id="modal-clientName" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/oidc/<%= $clientId %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="clientName">
       <div class="modal-header">
         <h5 class="modal-title">Edit Client Name</h5>
@@ -558,6 +568,7 @@
       <p class="text-muted small">Generate a new random secret. The new secret will be shown once so you can copy it.</p>
       <div class="d-flex gap-2">
         <form method="post" action="/oidc/<%= $clientId %>">
+          <%= csrf_field %>
           <input type="hidden" name="action" value="regenerateSecret">
           <button class="btn btn-primary">Regenerate Secret</button>
         </form>
@@ -576,6 +587,7 @@
 <div class="modal fade" id="modal-<%= $sf->[0] %>" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/oidc/<%= $clientId %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="<%= $sf->[0] %>">
       <div class="modal-header">
         <h5 class="modal-title">Edit <%= $sf->[2] %></h5>
@@ -601,6 +613,7 @@
 <div class="modal fade" id="modal-authMethod" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/oidc/<%= $clientId %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="authMethod">
       <div class="modal-header">
         <h5 class="modal-title">Edit Token Endpoint Auth Method</h5>
@@ -634,6 +647,7 @@
 <div class="modal fade" id="modal-<%= $cf->[0] %>" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/oidc/<%= $clientId %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="<%= $cf->[0] %>">
       <div class="modal-header">
         <h5 class="modal-title">Edit <%= $cf->[2] %></h5>
@@ -644,12 +658,10 @@
         % if ($cf->[0] eq 'idTokenSignedResponseAlg') {
         % my $cur_alg = $entry->get_value($cf->[1]) // '';
         <select name="value" class="form-select">
-          <option value="" <%= $cur_alg eq '' ? 'selected' : '' %>>(not set — defaults to none)</option>
-          <option value="none" <%= $cur_alg eq 'none' ? 'selected' : '' %>>none (unsigned)</option>
           <option value="RS256" <%= $cur_alg eq 'RS256' ? 'selected' : '' %>>RS256</option>
           <option value="HS256" <%= $cur_alg eq 'HS256' ? 'selected' : '' %>>HS256</option>
         </select>
-        <div class="form-text">Only these are supported by the SSO provider. HS256 requires a client secret; RS256 requires a signing key pair.</div>
+        <div class="form-text">HS256 requires a client secret; RS256 requires a signing key pair. Unsigned (<code>none</code>) ID tokens are not supported.</div>
         % } else {
         <input type="text" name="value" class="form-control"
                value="<%= $entry->get_value($cf->[1]) // '' %>"
@@ -671,6 +683,7 @@
 <div class="modal fade" id="modal-<%= $mf->[0] %>" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/oidc/<%= $clientId %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="<%= $mf->[0] %>">
       <div class="modal-header">
         <h5 class="modal-title">Edit <%= $mf->[2] %></h5>

@@ -13,6 +13,12 @@ BEGIN {
 	require File::ShareDir;
 	no warnings 'redefine';
 	*File::ShareDir::dist_dir = sub { $share };
+
+	# The web apps now refuse to start without an explicit session secret.
+	$ENV{NISABA_SECRET} = 'test-secret-nisaba' unless defined $ENV{NISABA_SECRET};
+
+	# Serve over plain HTTP in tests so the session cookie round-trips.
+	$ENV{NISABA_COOKIE_SECURE} = '0' unless defined $ENV{NISABA_COOKIE_SECURE};
 }
 use Test::More;
 use Test::Mojo;

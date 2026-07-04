@@ -38,6 +38,7 @@
                   % if (@cn_vals > 1) {
                   <form method="post" action="/users/<%= $username %>" class="d-inline ms-2 flex-shrink-0"
                         data-confirm="Remove CN value &#39;<%= $cn_val %>&#39;?">
+                    <%= csrf_field %>
                     <input type="hidden" name="action" value="cn_remove">
                     <input type="hidden" name="cn" value="<%= $cn_val %>">
                     <button class="btn btn-outline-danger btn-sm py-0" title="Remove">&#10005;</button>
@@ -166,6 +167,7 @@
                 <div class="d-flex justify-content-between align-items-center mb-1">
                   <span class="text-break"><%= $val %></span>
                   <form method="post" action="/users/<%= $username %>" class="d-inline ms-2 flex-shrink-0">
+                    <%= csrf_field %>
                     <input type="hidden" name="action" value="<%= $attr %>_remove">
                     <input type="hidden" name="<%= $attr %>" value="<%= $val %>">
                     <button class="btn btn-outline-danger btn-sm py-0" title="Remove"
@@ -200,6 +202,7 @@
         </p>
         <form method="post" action="/users/<%= $username %>/inetorgperson"
               data-confirm="Convert <%= $username %> to inetOrgPerson?">
+          <%= csrf_field %>
           <button class="btn btn-outline-primary">Convert to inetOrgPerson</button>
         </form>
       </div>
@@ -226,6 +229,7 @@
               <code class="text-break small" style="word-break:break-all"><%= $key %></code>
               <form method="post" action="/users/<%= $username %>" class="flex-shrink-0"
                     data-confirm="Remove this SSH public key?">
+                <%= csrf_field %>
                 <input type="hidden" name="action" value="sshkey_remove">
                 <input type="hidden" name="key" value="<%= $key %>">
                 <button class="btn btn-outline-danger btn-sm py-0" title="Remove">&#10005;</button>
@@ -250,6 +254,7 @@
         </p>
         <form method="post" action="/users/<%= $username %>/lpk"
               data-confirm="Add ldapPublicKey objectClass to <%= $username %>?">
+          <%= csrf_field %>
           <button class="btn btn-outline-primary">Enable SSH Key Storage</button>
         </form>
       </div>
@@ -277,6 +282,7 @@
               <td>
                 <form method="post" action="/users/<%= $username %>"
                       class="d-flex gap-2 align-items-center">
+                  <%= csrf_field %>
                   <input type="hidden" name="action" value="totp_status">
                   <select name="status" class="form-select form-select-sm" style="width:auto">
                     % for my $s (qw(none pending active disabled bypassed)) {
@@ -293,6 +299,7 @@
               <td>
                 <form method="post" action="/users/<%= $username %>"
                       class="d-flex gap-2 align-items-center">
+                  <%= csrf_field %>
                   <input type="hidden" name="action" value="totp_algorithm">
                   <select name="algorithm" class="form-select form-select-sm" style="width:auto">
                     % for my $a (qw(SHA1 SHA256 SHA512)) {
@@ -309,6 +316,7 @@
               <td>
                 <form method="post" action="/users/<%= $username %>"
                       class="d-flex gap-2 align-items-center">
+                  <%= csrf_field %>
                   <input type="hidden" name="action" value="totp_period">
                   <input type="number" name="period" class="form-control form-control-sm"
                          style="width:6rem" min="1" required
@@ -322,6 +330,7 @@
               <td>
                 <form method="post" action="/users/<%= $username %>"
                       class="d-flex gap-2 align-items-center">
+                  <%= csrf_field %>
                   <input type="hidden" name="action" value="totp_digits">
                   <select name="digits" class="form-select form-select-sm" style="width:auto">
                     % for my $d (6, 8) {
@@ -341,6 +350,7 @@
                   <span class="badge bg-success">Set</span>
                   <form method="post" action="/users/<%= $username %>"
                         data-confirm="Remove TOTP secret for <%= $username %>? This will reset their status to none.">
+                    <%= csrf_field %>
                     <input type="hidden" name="action" value="totp_secret_remove">
                     <button type="submit" class="btn btn-outline-danger btn-sm py-0">Remove</button>
                   </form>
@@ -380,6 +390,7 @@
         </p>
         <form method="post" action="/users/<%= $username %>/totp"
               data-confirm="Enable TOTP for <%= $username %>?">
+          <%= csrf_field %>
           <button class="btn btn-outline-primary">Enable TOTP</button>
         </form>
       </div>
@@ -424,6 +435,7 @@
                     action="/users/<%= $username %>/passkeys/<%= $cred->{credentialId} %>/remove"
                     class="flex-shrink-0"
                     data-confirm="Remove this passkey from <%= $username %>?">
+                <%= csrf_field %>
                 <button class="btn btn-outline-danger btn-sm py-0" title="Remove">&#10005;</button>
               </form>
             </div>
@@ -443,6 +455,7 @@
         </p>
         <form method="post" action="/users/<%= $username %>/passkeys/enable"
               data-confirm="Enable passkey storage for <%= $username %>?">
+          <%= csrf_field %>
           <button class="btn btn-outline-primary">Enable Passkey Storage</button>
         </form>
       </div>
@@ -475,6 +488,7 @@
                 <form method="post" action="/users/<%= $username %>/groups/<%= $gname %>/remove"
                       data-confirm="Remove <%= $username %> from group <%= $gname %>?"
                       class="d-inline">
+                  <%= csrf_field %>
                   <button class="btn btn-outline-danger btn-sm py-0" title="Remove from group">&#10005;</button>
                 </form>
               </td>
@@ -498,6 +512,7 @@
   <div class="card-body">
     <form method="post" action="/users/<%= $username %>/delete"
           data-confirm="Permanently delete user <%= $username %>?">
+      <%= csrf_field %>
       <div class="form-check mb-2">
         <input class="form-check-input" type="checkbox" name="removeHome" value="1" id="removeHome">
         <label class="form-check-label" for="removeHome">Remove home directory</label>
@@ -517,6 +532,7 @@
 <div class="modal fade" id="modal-cn-add" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="cn_add">
       <div class="modal-header">
         <h5 class="modal-title">Add CN Value</h5>
@@ -539,6 +555,7 @@
 <div class="modal fade" id="modal-password-remove" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>/password/remove">
+      <%= csrf_field %>
       <div class="modal-header">
         <h5 class="modal-title">Remove Password</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -566,6 +583,7 @@
 <div class="modal fade" id="modal-password" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>/password">
+      <%= csrf_field %>
       <div class="modal-header">
         <h5 class="modal-title">Set Password</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -627,6 +645,7 @@
 <div class="modal fade" id="modal-gecos" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="gecos">
       <div class="modal-header">
         <h5 class="modal-title">Edit GECOS</h5>
@@ -648,6 +667,7 @@
 <div class="modal fade" id="modal-shell" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="shell">
       <div class="modal-header">
         <h5 class="modal-title">Edit Shell</h5>
@@ -674,6 +694,7 @@
 <div class="modal fade" id="modal-uid" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="uid">
       <div class="modal-header">
         <h5 class="modal-title">Edit UID</h5>
@@ -695,6 +716,7 @@
 <div class="modal fade" id="modal-gid" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="gid">
       <div class="modal-header">
         <h5 class="modal-title">Edit GID</h5>
@@ -716,6 +738,7 @@
 <div class="modal fade" id="modal-home" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="home">
       <div class="modal-header">
         <h5 class="modal-title">Edit Home Directory</h5>
@@ -739,6 +762,7 @@
 <div class="modal fade" id="modal-sn" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="sn">
       <div class="modal-header">
         <h5 class="modal-title">Edit Surname</h5>
@@ -760,6 +784,7 @@
 <div class="modal fade" id="modal-givenName" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="givenName">
       <div class="modal-header">
         <h5 class="modal-title">Edit Given Name</h5>
@@ -781,6 +806,7 @@
 <div class="modal fade" id="modal-displayName" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="displayName">
       <div class="modal-header">
         <h5 class="modal-title">Edit Display Name</h5>
@@ -802,6 +828,7 @@
 <div class="modal fade" id="modal-homePostalAddress" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="homePostalAddress">
       <div class="modal-header">
         <h5 class="modal-title">Edit Home Address</h5>
@@ -824,6 +851,7 @@
 <div class="modal fade" id="modal-title" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="title">
       <div class="modal-header">
         <h5 class="modal-title">Edit Title</h5>
@@ -845,6 +873,7 @@
 <div class="modal fade" id="modal-roomNumber" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="roomNumber">
       <div class="modal-header">
         <h5 class="modal-title">Edit Room Number</h5>
@@ -866,6 +895,7 @@
 <div class="modal fade" id="modal-employeeNumber" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="employeeNumber">
       <div class="modal-header">
         <h5 class="modal-title">Edit Employee Number</h5>
@@ -887,6 +917,7 @@
 <div class="modal fade" id="modal-employeeType" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="employeeType">
       <div class="modal-header">
         <h5 class="modal-title">Edit Employee Type</h5>
@@ -912,6 +943,7 @@
 <div class="modal fade" id="modal-sshkey-add" tabindex="-1">
   <div class="modal-dialog modal-lg"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="sshkey_add">
       <div class="modal-header">
         <h5 class="modal-title">Add SSH Public Key</h5>
@@ -937,6 +969,7 @@
 <div class="modal fade" id="modal-mail-add" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="mail_add">
       <div class="modal-header">
         <h5 class="modal-title">Add Email Address</h5>
@@ -957,6 +990,7 @@
 <div class="modal fade" id="modal-tel-add" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="telephoneNumber_add">
       <div class="modal-header">
         <h5 class="modal-title">Add Telephone Number</h5>
@@ -978,6 +1012,7 @@
 <div class="modal fade" id="modal-mobile-add" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="mobile_add">
       <div class="modal-header">
         <h5 class="modal-title">Add Mobile Number</h5>
@@ -999,6 +1034,7 @@
 <div class="modal fade" id="modal-lang-add" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="preferredLanguage_add">
       <div class="modal-header">
         <h5 class="modal-title">Add Preferred Language</h5>
@@ -1020,6 +1056,7 @@
 <div class="modal fade" id="modal-uri-add" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="labeledURI_add">
       <div class="modal-header">
         <h5 class="modal-title">Add URI</h5>
@@ -1042,6 +1079,7 @@
 <div class="modal fade" id="modal-desc-add" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="description_add">
       <div class="modal-header">
         <h5 class="modal-title">Add Description</h5>
@@ -1062,6 +1100,7 @@
 <div class="modal fade" id="modal-addr-add" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="postalAddress_add">
       <div class="modal-header">
         <h5 class="modal-title">Add Postal Address</h5>
@@ -1088,6 +1127,7 @@
 <div class="modal fade" id="modal-totp-scratch-add" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="totp_scratch_add">
       <div class="modal-header">
         <h5 class="modal-title">Add Scratch Code</h5>
@@ -1115,6 +1155,7 @@
 <div class="modal fade" id="modal-group-add" tabindex="-1">
   <div class="modal-dialog modal-lg"><div class="modal-content">
     <form method="post" action="/users/<%= $username %>/groups">
+      <%= csrf_field %>
       <div class="modal-header">
         <h5 class="modal-title">Add to Groups</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>

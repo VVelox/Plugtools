@@ -12,6 +12,7 @@
   <div class="card-header"><strong>Add Group</strong></div>
   <div class="card-body">
     <form method="post" action="/groups">
+      <%= csrf_field %>
       <div class="mb-3">
         <label class="form-label">Group Name <span class="text-danger">*</span></label>
         <input type="text" name="group" class="form-control" required>

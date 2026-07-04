@@ -66,6 +66,7 @@
             <form method="post"
                   action="/groups/<%= $groupname %>/members/<%= $uid %>/delete"
                   data-confirm="Remove <%= $uid %> from <%= $groupname %>?">
+              <%= csrf_field %>
               <button class="btn btn-outline-danger btn-sm">Remove</button>
             </form>
           </li>
@@ -78,6 +79,7 @@
         % if (@{$non_members}) {
         <form method="post" action="/groups/<%= $groupname %>/members"
               class="d-flex gap-2">
+          <%= csrf_field %>
           <select name="user" class="form-select form-select-sm">
             % for my $u (@{$non_members}) {
             <option value="<%= $u->get_value('uid') %>">
@@ -100,6 +102,7 @@
   <div class="card-body">
     <form method="post" action="/groups/<%= $groupname %>/delete"
           data-confirm="Permanently delete group <%= $groupname %>?">
+      <%= csrf_field %>
       <button class="btn btn-danger">Delete Group</button>
     </form>
   </div>
@@ -136,6 +139,7 @@
 <div class="modal fade" id="modal-desc" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/groups/<%= $groupname %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="description">
       <div class="modal-header">
         <h5 class="modal-title">Edit Description</h5>
@@ -160,6 +164,7 @@
   <div class="modal-dialog">
     <div class="modal-content">
       <form method="post" action="/groups/<%= $groupname %>">
+        <%= csrf_field %>
         <div class="modal-header">
           <h5 class="modal-title">Edit GID</h5>
           <button type="button" class="btn-close" data-bs-dismiss="modal"></button>

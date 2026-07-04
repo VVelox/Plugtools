@@ -12,6 +12,10 @@ src_bin/plupass
 src_bin/plumod
 src_bin/mojo_nisaba
 lib/App/Nisaba.pm
+lib/App/Nisaba/WebSecret.pm
+lib/App/Nisaba/WebCSRF.pm
+lib/App/Nisaba/WebUtil.pm
+lib/App/Nisaba/WebUtil/RateLimiter.pm
 lib/App/Nisaba/Plugins/Dump.pm
 lib/App/Nisaba/Web.pm
 lib/App/Nisaba/Web/Controller/Users.pm
@@ -27,5 +31,12 @@ share/templates/groups/show.html.ep
 share/templates/groups/add.html.ep
 t/00-load.t
 t/01-load.t
+t/web-secret.t
+t/web-csrf.t
+t/web-hardening.t
+t/web-selfservice.t
+t/web-sso-pkce.t
+t/web-oidc.t
+t/web-ratelimit.t
 t/pod-coverage.t
 t/pod.t

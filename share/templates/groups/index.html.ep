@@ -6,6 +6,7 @@
   <div>
     <form method="post" action="/groups/clean" class="d-inline"
           data-confirm="Remove stale members from all groups?">
+      <%= csrf_field %>
       <button class="btn btn-outline-secondary me-2">Clean Groups</button>
     </form>
     <a href="/groups/add" class="btn btn-primary">+ Add Group</a>

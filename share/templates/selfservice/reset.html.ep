@@ -6,6 +6,7 @@
       <div class="card-header text-danger fw-bold">Reset Password</div>
       <div class="card-body">
         <form method="post" action="<%= url_for('reset_post', token => $token) %>">
+          <%= csrf_field %>
           <div class="mb-2">
             <label class="form-label" for="new_pass">New Password</label>
             <input type="password" class="form-control" id="new_pass" name="new_pass"

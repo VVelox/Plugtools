@@ -2,6 +2,7 @@ package App::Nisaba::WebSelfService::Controller::SelfService;
 
 use Mojo::Base 'Mojolicious::Controller', -signatures;
 use Mojo::Util qw(hmac_sha1_sum b64_encode b64_decode url_escape);
+use App::Nisaba::WebUtil qw(secure_compare);
 
 =head1 NAME
 
@@ -36,11 +37,15 @@ sub login ($self) {
 	my $user = $self->param('user') // '';
 	my $pass = $self->param('pass') // '';
 
+	return unless $self->rate_guard( 'login', user => $user, render => { template => 'selfservice/login' } );
+
 	my $err = $self->pt_call( sub { $self->pt->userVerifyPassword( { user => $user, password => $pass } ) } );
 	if ($err) {
+		$self->rate_fail( 'login', user => $user );
 		$self->flash( error => 'Invalid username or password.' );
 		return $self->redirect_to('login');
 	}
+	$self->rate_reset( 'login', user => $user );
 
 	# Check whether TOTP is active for this user
 	my $info;
@@ -89,6 +94,8 @@ sub passkey_login_start ($self) {
 } ## end sub passkey_login_start
 
 sub passkey_login_finish ($self) {
+	return unless $self->rate_guard( 'passkey', render => { json => 1 } );
+
 	my $challenge_b64 = $self->session('passkey_login_challenge');
 	unless ($challenge_b64) {
 		return $self->render( json => { error => 'No login in progress' }, status => 400 );
@@ -148,8 +155,10 @@ sub passkey_login_finish ($self) {
 	};
 	if ($@) {
 		( my $msg = $@ ) =~ s/ at \S+ line \d+\.?\s*$//;
+		$self->rate_fail('passkey');
 		return $self->render( json => { error => "Verification failed: $msg" }, status => 401 );
 	}
+	$self->rate_reset('passkey');
 
 	# Update sign count and last-used timestamp (best-effort; don't abort login on failure)
 	$self->pt_call(
@@ -190,14 +199,18 @@ sub totp_challenge ($self) {
 		return $self->redirect_to('login');
 	}
 
+	return unless $self->rate_guard( 'totp', user => $user, render => { template => 'selfservice/totp_challenge' } );
+
 	my $code = $self->param('code') // '';
 
 	my $ok;
 	my $err = $self->pt_call( sub { $ok = $self->pt->userTotpVerify( { user => $user, code => $code } ) } );
 	if ( $err || !$ok ) {
+		$self->rate_fail( 'totp', user => $user );
 		$self->flash( error => 'Invalid TOTP code. Please try again.' );
 		return $self->redirect_to('totp_challenge');
 	}
+	$self->rate_reset( 'totp', user => $user );
 
 	delete $self->session->{totp_pending_user};
 	$self->session( user => $user );
@@ -587,7 +600,9 @@ sub forgot_form ($self) {
 		$self->flash( error => 'Password reset by email is not configured on this server.' );
 		return $self->redirect_to('login');
 	}
-	$self->session( expires => 1 );
+	# Drop any logged-in identity, but keep the session itself so the CSRF token
+	# rendered into the form survives to the POST.
+	delete $self->session->{user};
 	$self->render( template => 'selfservice/forgot' );
 }
 
@@ -598,6 +613,8 @@ sub forgot ($self) {
 	}
 
 	my $user = $self->param('user') // '';
+
+	return unless $self->rate_guard( 'forgot', user => $user, hit => 1, render => { template => 'selfservice/forgot' } );
 
 	# Always show the same message to prevent user enumeration
 	my $ok_msg = 'If that username exists and has an email address on file, a reset link has been sent.';
@@ -616,11 +633,16 @@ sub forgot ($self) {
 		return $self->redirect_to('forgot');
 	}
 
-	# Generate a signed reset token: base64(user \0 expiry \0 sig)
+	# Generate a signed reset token: base64(user \0 expiry \0 sig). The signature
+	# is bound to a fingerprint of the user's current password, so as soon as the
+	# password changes — including when this token is used to reset it — every
+	# outstanding token for the user stops validating. That makes each token
+	# effectively single use.
 	my $expiry  = time() + 3600;                              # 1 hour
 	my $secret  = $self->app->secrets->[0];
+	my $pwfp    = _password_fingerprint( $self, $user );
 	my $payload = $user . "\0" . $expiry;
-	my $sig     = hmac_sha1_sum( $payload, $secret );
+	my $sig     = hmac_sha1_sum( $payload . "\0" . $pwfp, $secret );
 	my $token   = b64_encode( $payload . "\0" . $sig, '' );
 	$token =~ tr|+/|,-|;                                      # URL-safe
 
@@ -657,21 +679,28 @@ sub reset_form ($self) {
 		$self->flash( error => 'This reset link is invalid or has expired.' );
 		return $self->redirect_to('forgot');
 	}
-	$self->session( expires => 1 );
+	# Drop any logged-in identity, but keep the session itself so the CSRF token
+	# rendered into the form survives to the POST.
+	delete $self->session->{user};
 	$self->render( template => 'selfservice/reset', token => $token );
 } ## end sub reset_form
 
 sub reset ($self) {
 	my $token = $self->param('token') // '';
+
+	return unless $self->rate_guard( 'reset', render => { template => 'selfservice/reset', token => $token } );
+
 	$self->session( expires => 1 );
 	my $new_pass = $self->param('new_pass') // '';
 	my $confirm  = $self->param('confirm')  // '';
 
 	my $user = _verify_reset_token( $self, $token );
 	if ( !defined($user) ) {
+		$self->rate_fail('reset');
 		$self->flash( error => 'This reset link is invalid or has expired.' );
 		return $self->redirect_to('forgot');
 	}
+	$self->rate_reset('reset');
 
 	if ( $new_pass eq '' ) {
 		$self->flash( error => 'Password must not be empty.' );
@@ -709,10 +738,23 @@ sub _verify_reset_token {
 	return undef if time() > $expiry;
 
 	my $secret   = $c->app->secrets->[0];
-	my $expected = hmac_sha1_sum( $user . "\0" . $expiry, $secret );
-	return undef unless $sig eq $expected;
+	my $pwfp     = _password_fingerprint( $c, $user );
+	my $expected = hmac_sha1_sum( $user . "\0" . $expiry . "\0" . $pwfp, $secret );
+	return undef unless secure_compare( $sig, $expected );
 
 	return $user;
 } ## end sub _verify_reset_token
+
+# A fingerprint of the user's current password, keyed by the app secret. Folded
+# into the reset-token signature so a password change invalidates every
+# outstanding reset token for the user. A user with no password yet yields a
+# stable value, so a token issued beforehand can still set the first password.
+sub _password_fingerprint {
+	my ( $c, $user ) = @_;
+	my $entry;
+	eval { $entry = $c->pt->getUserEntry( { user => $user } ) };
+	my @pw = $entry ? ( grep { defined } $entry->get_value('userPassword') ) : ();
+	return hmac_sha1_sum( join( "\x1f", @pw ), $c->app->secrets->[0] );
+} ## end sub _password_fingerprint
 
 1;

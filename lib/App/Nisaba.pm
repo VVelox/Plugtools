@@ -2918,9 +2918,10 @@ sub readConfig {
 	if ( !defined( $ini->{''}->{netgroupbase} ) ) {
 		$ini->{''}->{netgroupbase} = '';
 	}
-	if ( !defined( $ini->{''}->{websecret} ) ) {
-		$ini->{''}->{websecret} = 'nisaba_change_me';
-	}
+	# NOTE: websecret is intentionally NOT defaulted. The web apps sign session
+	# cookies with it and refuse to start without an explicitly configured value
+	# (see App::Nisaba::WebSecret); defaulting it here to a known string would
+	# reintroduce a predictable, forgeable session secret.
 	if ( !defined( $ini->{''}->{totpissuer} ) ) {
 		$ini->{''}->{totpissuer} = 'Nisaba';
 	}

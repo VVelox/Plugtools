@@ -283,7 +283,7 @@ sub update {
 		$error = $self->_pt_call( sub { $self->pt->userCNremove( { user => $user, cn => $self->param('cn') } ) } );
 	} elsif ( $action eq 'sshkey_add' ) {
 		my $key = $self->param('key') // '';
-		$key =~ s/[\r\n]+$//;    # strip trailing newline that textareas append
+		$key =~ s/[\r\n]+//g;    # an SSH public key is one line; drop any newlines
 		$error = $self->_pt_call( sub { $self->pt->userSSHPublicKeyAdd( { user => $user, key => $key } ) } );
 	} elsif ( $action eq 'sshkey_remove' ) {
 		$error = $self->_pt_call(

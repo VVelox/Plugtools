@@ -13,6 +13,12 @@ BEGIN {
 	require File::ShareDir;
 	no warnings 'redefine';
 	*File::ShareDir::dist_dir = sub { $share };
+
+	# The web apps now refuse to start without an explicit session secret.
+	$ENV{NISABA_SECRET} = 'test-secret-nisaba' unless defined $ENV{NISABA_SECRET};
+
+	# Serve over plain HTTP in tests so the session cookie round-trips.
+	$ENV{NISABA_COOKIE_SECURE} = '0' unless defined $ENV{NISABA_COOKIE_SECURE};
 }
 
 use Test::More;
@@ -179,6 +185,7 @@ sub _add_referer_hook {
 			return unless $tx->req->method eq 'POST';
 			my $host = $tx->req->url->to_abs->host_port // 'localhost';
 			$tx->req->headers->referrer("http://$host/");
+			$tx->req->headers->header( 'X-CSRF-Token' => 'testcsrf' );
 		}
 	);
 }
@@ -188,7 +195,7 @@ _install_stubs( $t->app );
 _add_referer_hook($t);
 
 # Inject an admin session so routes behind require_login are accessible
-$t->app->hook( before_dispatch => sub { $_[0]->session( admin_user => 'testadmin' ) } );
+$t->app->hook( before_dispatch => sub { $_[0]->session( admin_user => 'testadmin', csrf_token => 'testcsrf' ) } );
 
 # ── index ─────────────────────────────────────────────────────────────────────
 
@@ -394,6 +401,13 @@ $t->post_ok( '/users/alice', form => { action => 'sshkey_add', key => 'ssh-rsa A
   ->status_is(302)
   ->header_like( Location => qr{/users/alice}, 'sshkey_add redirects to show' );
 is( $sshkey_args->{key}, 'ssh-rsa AAAA...', 'userSSHPublicKeyAdd got correct key' );
+
+# A submitted key with embedded/trailing newlines is flattened to one line
+# (matching the self-service portal's behaviour).
+$sshkey_args = undef;
+$t->post_ok( '/users/alice', form => { action => 'sshkey_add', key => "ssh-rsa AAAAkey\r\nmore\n" } )
+  ->status_is(302);
+is( $sshkey_args->{key}, 'ssh-rsa AAAAkeymore', 'sshkey_add strips all newlines from the key' );
 
 my $sshkey_rm_args;
 _install_stubs(

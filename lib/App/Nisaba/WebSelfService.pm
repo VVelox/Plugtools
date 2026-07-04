@@ -2,6 +2,9 @@ package App::Nisaba::WebSelfService;
 
 use Mojo::Base 'Mojolicious', -signatures;
 use App::Nisaba;
+use App::Nisaba::WebSecret;
+use App::Nisaba::WebCSRF;
+use App::Nisaba::WebUtil ();
 use File::ShareDir 'dist_dir';
 
 =head1 NAME
@@ -46,10 +49,24 @@ sub startup ($self) {
 	my $config_file = $ENV{NISABA_CONFIG};
 	my $pt          = App::Nisaba->new( defined($config_file) ? { config => $config_file } : () );
 
-	# Session secret — read from config, fall back to default
-	my $default_secret = 'nisaba_change_me';
-	my $secret         = $pt->{ini}->{''}->{websecret} // $default_secret;
-	$self->secrets( [$secret] );
+	# Session secret — from config or NISABA_SECRET. Refuses to start rather
+	# than sign sessions with a predictable default (see App::Nisaba::WebSecret).
+	$self->secrets(
+		[
+			App::Nisaba::WebSecret::resolve(
+				configured => $pt->{ini}->{''}->{websecret},
+				env        => $ENV{NISABA_SECRET},
+				app        => 'App::Nisaba::WebSelfService (self-service portal)',
+			)
+		]
+	);
+
+	# Harden the session cookie: SameSite=Lax (explicit) and Secure (HTTPS-only).
+	# Secure is on by default; disable it for plain-HTTP development or testing
+	# with cookieSecure=0 in the config or NISABA_COOKIE_SECURE=0 in the env.
+	$self->sessions->samesite('Lax');
+	my $cookie_secure = $pt->{ini}->{''}->{cookieSecure} // $ENV{NISABA_COOKIE_SECURE} // 1;
+	$self->sessions->secure( $cookie_secure ? 1 : 0 );
 
 	# Helper to access the App::Nisaba instance
 	$self->helper( pt => sub { $pt } );
@@ -67,12 +84,14 @@ sub startup ($self) {
 		}
 	);
 
-	# Helper: password reset requires SMTP configured AND a non-default secret
+	# Helper: password reset requires SMTP configured. The reset token is HMAC'd
+	# with the session secret; that secret is now guaranteed to be an explicitly
+	# configured value (startup aborts otherwise), so no default-secret guard is
+	# needed here.
 	$self->helper(
 		reset_available => sub {
 			my ($c) = @_;
-			return $c->pt->smtpAvailable
-				&& ( $c->app->secrets->[0] ne $default_secret );
+			return $c->pt->smtpAvailable;
 		}
 	);
 
@@ -83,6 +102,14 @@ sub startup ($self) {
 			return eval { $c->pt->passkeySchemaAvailable } ? 1 : 0;
 		}
 	);
+
+	# CSRF: reject state-changing requests whose origin isn't our own, and
+	# require the per-session synchronizer token on every such request.
+	App::Nisaba::WebCSRF::install_origin_check($self);
+	App::Nisaba::WebCSRF::install_token_check($self);
+
+	# Brute-force rate limiting for the auth endpoints.
+	App::Nisaba::WebUtil::install_rate_limiter($self);
 
 	# Routes
 	my $r = $self->routes;

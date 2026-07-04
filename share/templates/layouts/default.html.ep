@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="<%= csrf_token %>">
   <title><%= title %> — Nisaba</title>
   <link rel="stylesheet" href="/bootstrap/css/bootstrap.min.css">
   <style>
@@ -51,6 +52,7 @@
         </li>
         <li class="nav-item">
           <form method="post" action="<%= url_for('admin_logout') %>" class="d-inline">
+            <%= csrf_field %>
             <button type="submit" class="btn btn-sm btn-outline-secondary my-1">Log Out</button>
           </form>
         </li>
@@ -73,6 +75,9 @@
     <%= $ok %>
     <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
   </div>
+  % }
+  % if (my $re = stash('rate_error')) {
+  <div class="alert alert-warning" role="alert"><%= $re %></div>
   % }
 
   <%= content %>

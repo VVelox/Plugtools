@@ -13,6 +13,20 @@ BEGIN {
 	require File::ShareDir;
 	no warnings 'redefine';
 	*File::ShareDir::dist_dir = sub { $share };
+
+	# The web apps now refuse to start without an explicit session secret.
+	$ENV{NISABA_SECRET} = 'test-secret-nisaba' unless defined $ENV{NISABA_SECRET};
+
+	# Serve over plain HTTP in tests so the session cookie round-trips.
+	$ENV{NISABA_COOKIE_SECURE} = '0' unless defined $ENV{NISABA_COOKIE_SECURE};
+
+	# This suite exercises broad OIDC behaviour with a public client and no PKCE;
+	# the mandatory-PKCE policy is covered on its own in t/web-sso-pkce.t.
+	$ENV{NISABA_REQUIRE_PKCE} = '0' unless defined $ENV{NISABA_REQUIRE_PKCE};
+
+	# Rate limiting has its own suite (t/web-ratelimit.t); disable here so the
+	# many repeated logins aren't throttled.
+	$ENV{NISABA_RATELIMIT} = '0' unless defined $ENV{NISABA_RATELIMIT};
 }
 
 use Test::More;
@@ -20,6 +34,7 @@ use Test::Mojo;
 use Mojo::JSON qw(decode_json);
 use MIME::Base64 ();
 use Digest::SHA qw(sha256);
+use Crypt::PK::RSA;
 
 eval { require App::Nisaba::WebSSO };
 if ($@) {
@@ -59,6 +74,18 @@ eval {
 	}
 }
 
+# RSA signing key for the public test client. A public client has no shared
+# secret, so it signs ID tokens with RS256 using a stored key pair — the shape a
+# real registration produces. The provider now refuses to issue unsigned tokens,
+# so every client that completes a token exchange must have a working alg.
+my $testapp_rsa = Crypt::PK::RSA->new;
+$testapp_rsa->generate_key( 256, 65537 );    # 2048-bit
+my $testapp_jwk = decode_json( $testapp_rsa->export_key_jwk('private') );
+$testapp_jwk->{kid} = 'testapp-kid';
+$testapp_jwk->{use} = 'sig';
+$testapp_jwk->{alg} = 'RS256';
+my $testapp_jwks_json = Mojo::JSON::encode_json( { keys => [$testapp_jwk] } );
+
 # ── Fake OIDC client entry ────────────────────────────────────────────────────
 
 my $client_public = FakeEntry->new(
@@ -71,6 +98,8 @@ my $client_public = FakeEntry->new(
 	oidcResponseType => ['code'],
 	oidcApplicationType      => 'web',
 	oidcTokenEndpointAuthMethod => 'none',
+	oidcIdTokenSignedResponseAlg => 'RS256',
+	oidcJwks                     => $testapp_jwks_json,
 	oidcClientURI   => 'https://testapp.example.com',
 	oidcPolicyURI   => 'https://testapp.example.com/privacy',
 	oidcTosURI      => 'https://testapp.example.com/tos',
@@ -81,12 +110,27 @@ my $client_confidential = FakeEntry->new(
 	oidcClientId     => 'secretapp',
 	oidcClientName   => 'Secret App',
 	oidcClientSecret => 's3cret',
+	oidcIdTokenSignedResponseAlg => 'HS256',
 	oidcRedirectURI  => ['https://secretapp.example.com/callback'],
 	oidcScope        => [ 'openid', 'profile' ],
 	oidcGrantType    => ['authorization_code'],
 	oidcResponseType => ['code'],
 	oidcApplicationType      => 'web',
 	oidcTokenEndpointAuthMethod => 'client_secret_basic',
+);
+
+# A client explicitly configured for alg=none. The admin UI no longer allows
+# this, but such an entry can still exist in LDAP; the provider must refuse to
+# issue a token for it rather than emit an unsigned one.
+my $client_none = FakeEntry->new(
+	_dn                          => 'oidcClientId=nonealg,ou=oidc,dc=example,dc=com',
+	oidcClientId                 => 'nonealg',
+	oidcRedirectURI              => ['https://nonealg.example.com/cb'],
+	oidcScope                    => ['openid'],
+	oidcGrantType                => ['authorization_code'],
+	oidcResponseType             => ['code'],
+	oidcTokenEndpointAuthMethod  => 'none',
+	oidcIdTokenSignedResponseAlg => 'none',
 );
 
 # ── Fake user entry ──────────────────────────────────────────────────────────
@@ -182,6 +226,13 @@ sub _install_stubs {
 	# requests within the run, the way a real shared store would.
 	no warnings 'redefine';
 	$app->helper( sso_storage => sub { $TEST_STORAGE } );
+
+	# Seed a known CSRF token into every request's session so the synchronizer-
+	# token check accepts the 'testcsrf' header the UA hooks send. Added once per
+	# app (guarded) since _install_stubs may run more than once for an instance.
+	unless ( $app->{_csrf_test_seeded}++ ) {
+		$app->hook( before_dispatch => sub { $_[0]->session( csrf_token => 'testcsrf' ) } );
+	}
 }
 
 # Add a same-host Referer to every POST so the middleware check passes.
@@ -198,6 +249,7 @@ sub _add_referer_hook {
 			return if $tx->req->url->path eq '/userinfo';
 			my $host = $tx->req->url->to_abs->host_port // 'localhost';
 			$tx->req->headers->referrer("http://$host/");
+			$tx->req->headers->header( 'X-CSRF-Token' => 'testcsrf' );
 		}
 	);
 }
@@ -234,6 +286,14 @@ $t->get_ok('/.well-known/openid-configuration')
   ->json_has('/response_types_supported')
   ->json_has('/claims_supported')
   ->json_has('/code_challenge_methods_supported');
+
+# Discovery advertises only secure options: no alg:none for id tokens, only S256 PKCE.
+my $disco = $t->tx->res->json;
+is_deeply( $disco->{code_challenge_methods_supported}, ['S256'], 'discovery advertises only S256 PKCE' );
+ok(
+	!grep( { $_ eq 'none' } @{ $disco->{id_token_signing_alg_values_supported} } ),
+	'discovery does not advertise alg:none for id tokens',
+);
 
 # ── Authorization: unknown client ────────────────────────────────────────────
 
@@ -366,8 +426,12 @@ my $token_resp   = $t->tx->res->json;
 my $access_token = $token_resp->{access_token};
 my $id_token     = $token_resp->{id_token};
 
-# Verify ID token structure (alg=none JWT: header.payload.)
-like( $id_token, qr/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.$/, 'id_token is alg=none JWT' );
+# Verify ID token structure (RS256 JWT: header.payload.signature)
+like(
+	$id_token,
+	qr/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/,
+	'id_token is a signed (RS256) JWT',
+);
 my @jwt_parts   = split /\./, $id_token;
 my $jwt_payload = decode_json( MIME::Base64::decode_base64( $jwt_parts[1] ) );
 is( $jwt_payload->{iss}, 'http://localhost',  'id_token iss correct' );
@@ -1203,7 +1267,7 @@ my $disc = $t->tx->res->json;
 my $alg_list = $disc->{id_token_signing_alg_values_supported};
 ok( ( grep { $_ eq 'RS256' } @$alg_list ), 'discovery advertises RS256' );
 ok( ( grep { $_ eq 'HS256' } @$alg_list ), 'discovery advertises HS256' );
-ok( ( grep { $_ eq 'none' }  @$alg_list ), 'discovery advertises none' );
+ok( !( grep { $_ eq 'none' } @$alg_list ), 'discovery does not advertise alg:none' );
 
 # ── UserInfo via POST ───────────────────────────────────────────────────────
 
@@ -1249,6 +1313,7 @@ $t->post_ok( '/userinfo', { Authorization => "Bearer $uipost_token" } )
 			return if $tx->req->url->path eq '/userinfo';
 			my $host = $tx->req->url->to_abs->host_port // 'localhost';
 			$tx->req->headers->referrer("http://$host/");
+			$tx->req->headers->header( 'X-CSRF-Token' => 'testcsrf' );
 		}
 	);
 
@@ -1675,6 +1740,7 @@ subtest 'Crypt::JWT relying-party verification' => sub {
 			return $client_rs256  if ( $args->{clientId} // '' ) eq 'rs256app';
 			return $client_hs256  if ( $args->{clientId} // '' ) eq 'hs256app';
 			return $client_public if ( $args->{clientId} // '' ) eq 'testapp';
+			return $client_none   if ( $args->{clientId} // '' ) eq 'nonealg';
 			return undef;
 		},
 		# /jwks aggregates public keys across all clients; expose the RS256 one.
@@ -1763,17 +1829,26 @@ subtest 'Crypt::JWT relying-party verification' => sub {
 	};
 	ok( $@, 'RS256 id_token with a tampered payload is rejected' );
 
-	# ── alg=none: a signature-requiring RP must refuse an unsigned token ──
-	my $none_token = $get_id_token->(
-		'testapp', 'https://testapp.example.com/callback',
-		'scope=openid&state=cj2&nonce=cjnonce2',
-		form => { client_id => 'testapp' },
-	);
-	like( $none_token, qr/\.$/, 'testapp issues an unsigned (alg=none) id_token' );
-	eval {
-		Crypt::JWT::decode_jwt( token => $none_token, kid_keys => $jwks, accepted_alg => 'RS256' );
-	};
-	ok( $@, 'unsigned (alg=none) id_token is rejected by a signature-requiring RP' );
+	# ── alg=none: the provider refuses to issue an unsigned token ──
+	# A client configured for alg=none never receives a token — the endpoint
+	# fails closed with server_error rather than emitting an unsigned JWT.
+	$tj->reset_session;
+	$tj->get_ok(
+		'/authorize?client_id=nonealg&redirect_uri=https://nonealg.example.com/cb&response_type=code&scope=openid&state=cj2&nonce=cjnonce2'
+	)->status_is(302);
+	$tj->post_ok( '/sso/login',   form => { user => 'alice', pass => 'correct' } )->status_is(302);
+	$tj->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+	my $none_code = Mojo::URL->new( $tj->tx->res->headers->location )->query->param('code');
+	$tj->post_ok(
+		'/token',
+		form => {
+			grant_type   => 'authorization_code',
+			code         => $none_code,
+			redirect_uri => 'https://nonealg.example.com/cb',
+			client_id    => 'nonealg',
+		}
+	)->status_is(500)
+	  ->json_is( '/error' => 'server_error', 'provider refuses to issue an unsigned (alg=none) token' );
 
 	# ── HS256: verify with the shared client secret ──
 	my $hs_basic = 'Basic ' . MIME::Base64::encode_base64( "hs256app:$hs256_secret", '' );

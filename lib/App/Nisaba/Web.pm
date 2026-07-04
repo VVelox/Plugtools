@@ -3,7 +3,9 @@ package App::Nisaba::Web;
 use Mojo::Base 'Mojolicious';
 use File::ShareDir qw(dist_dir);
 use App::Nisaba;
-use Mojo::URL;
+use App::Nisaba::WebSecret;
+use App::Nisaba::WebCSRF;
+use App::Nisaba::WebUtil ();
 
 our $VERSION = '0.0.1';
 
@@ -19,8 +21,24 @@ sub startup {
 	$pt_args{config} = $ENV{NISABA_CONFIG} if $ENV{NISABA_CONFIG};
 	my $pt = App::Nisaba->new( \%pt_args );
 
-	# Session secret — read from config, fall back to env, fall back to default
-	$self->secrets( [ $pt->{ini}->{''}->{websecret} // $ENV{NISABA_SECRET} // 'nisaba_change_me_in_production' ] );
+	# Session secret — from config or NISABA_SECRET. Refuses to start rather
+	# than sign sessions with a predictable default (see App::Nisaba::WebSecret).
+	$self->secrets(
+		[
+			App::Nisaba::WebSecret::resolve(
+				configured => $pt->{ini}->{''}->{websecret},
+				env        => $ENV{NISABA_SECRET},
+				app        => 'App::Nisaba::Web (admin portal)',
+			)
+		]
+	);
+
+	# Harden the session cookie: SameSite=Lax (explicit) and Secure (HTTPS-only).
+	# Secure is on by default; disable it for plain-HTTP development or testing
+	# with cookieSecure=0 in the config or NISABA_COOKIE_SECURE=0 in the env.
+	$self->sessions->samesite('Lax');
+	my $cookie_secure = $pt->{ini}->{''}->{cookieSecure} // $ENV{NISABA_COOKIE_SECURE} // 1;
+	$self->sessions->secure( $cookie_secure ? 1 : 0 );
 
 	# Helper to access the App::Nisaba instance
 	$self->helper( pt => sub { $pt } );
@@ -46,26 +64,13 @@ sub startup {
 		}
 	);
 
-	# Referer check: every POST must originate from the same host.
-	$self->hook(
-		before_dispatch => sub {
-			my $c = shift;
-			return unless $c->req->method eq 'POST';
+	# CSRF: reject state-changing requests whose origin isn't our own, and
+	# require the per-session synchronizer token on every such request.
+	App::Nisaba::WebCSRF::install_origin_check($self);
+	App::Nisaba::WebCSRF::install_token_check($self);
 
-			my $referer = $c->req->headers->referrer;
-			unless ($referer) {
-				$c->render( text => 'Forbidden: missing Referer header', status => 403 );
-				return;
-			}
-
-			my $ref_host = Mojo::URL->new($referer)->host // '';
-			my $req_host = $c->req->url->to_abs->host     // '';
-			unless ( $ref_host eq $req_host ) {
-				$c->render( text => 'Forbidden: Referer host mismatch', status => 403 );
-				return;
-			}
-		}
-	);
+	# Brute-force rate limiting for the auth endpoints.
+	App::Nisaba::WebUtil::install_rate_limiter($self);
 
 	my $r = $self->routes;
 

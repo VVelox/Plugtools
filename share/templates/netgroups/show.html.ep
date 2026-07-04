@@ -60,6 +60,7 @@
             <code><%= $triple %></code>
             <form method="post" action="/netgroups/<%= $groupname %>"
                   data-confirm="Remove triple <%= $triple %> from <%= $groupname %>?">
+              <%= csrf_field %>
               <input type="hidden" name="action" value="triple_remove">
               <input type="hidden" name="triple" value="<%= $triple %>">
               <button class="btn btn-outline-danger btn-sm">&#10005;</button>
@@ -93,6 +94,7 @@
             <a href="/netgroups/<%= $member %>"><%= $member %></a>
             <form method="post" action="/netgroups/<%= $groupname %>"
                   data-confirm="Remove member <%= $member %> from <%= $groupname %>?">
+              <%= csrf_field %>
               <input type="hidden" name="action" value="member_remove">
               <input type="hidden" name="member" value="<%= $member %>">
               <button class="btn btn-outline-danger btn-sm">&#10005;</button>
@@ -115,6 +117,7 @@
   <div class="card-body">
     <form method="post" action="/netgroups/<%= $groupname %>/delete"
           data-confirm="Permanently delete netgroup <%= $groupname %>?">
+      <%= csrf_field %>
       <button class="btn btn-danger">Delete Netgroup</button>
     </form>
   </div>
@@ -151,6 +154,7 @@
 <div class="modal fade" id="modal-desc" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/netgroups/<%= $groupname %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="description">
       <div class="modal-header">
         <h5 class="modal-title">Edit Description</h5>
@@ -174,6 +178,7 @@
 <div class="modal fade" id="modal-triple-add" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/netgroups/<%= $groupname %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="triple_add">
       <div class="modal-header">
         <h5 class="modal-title">Add Triple</h5>
@@ -198,6 +203,7 @@
 <div class="modal fade" id="modal-member-add" tabindex="-1">
   <div class="modal-dialog"><div class="modal-content">
     <form method="post" action="/netgroups/<%= $groupname %>">
+      <%= csrf_field %>
       <input type="hidden" name="action" value="member_add">
       <div class="modal-header">
         <h5 class="modal-title">Add Member Netgroup</h5>

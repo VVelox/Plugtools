@@ -12,6 +12,7 @@
   <div class="card-header"><strong>Register OIDC Client</strong></div>
   <div class="card-body">
     <form method="post" action="/oidc">
+      <%= csrf_field %>
 
       <div class="mb-3">
         <label class="form-label">Client Name</label>

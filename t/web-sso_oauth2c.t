@@ -33,6 +33,17 @@ BEGIN {
 	require File::ShareDir;
 	no warnings 'redefine';
 	*File::ShareDir::dist_dir = sub { $share };
+
+	# The web apps now refuse to start without an explicit session secret.
+	# Inherited by the WebSSO daemon this test spawns as a subprocess.
+	$ENV{NISABA_SECRET} = 'test-secret-nisaba' unless defined $ENV{NISABA_SECRET};
+
+	# Serve over plain HTTP so the session cookie round-trips (inherited by the
+	# WebSSO daemon this test spawns as a subprocess).
+	$ENV{NISABA_COOKIE_SECURE} = '0' unless defined $ENV{NISABA_COOKIE_SECURE};
+
+	# Rate limiting is covered in t/web-ratelimit.t; disable for this flow.
+	$ENV{NISABA_RATELIMIT} = '0' unless defined $ENV{NISABA_RATELIMIT};
 }
 
 use Test::More;
@@ -316,6 +327,10 @@ sub _install_stubs {
 	my $storage = App::Nisaba::WebSSO::Storage->new( { backend => 'SQLite', path => ':memory:' } );
 	no warnings 'redefine';
 	$app->helper( sso_storage => sub { $storage } );
+
+	# Seed a known CSRF token into every request's session so the login/consent
+	# POSTs below (which carry csrf_token => 'testcsrf') satisfy the token check.
+	$app->hook( before_dispatch => sub { $_[0]->session( csrf_token => 'testcsrf' ) } );
 }
 
 # ── Child process management ─────────────────────────────────────────────────
@@ -468,7 +483,7 @@ like( $tx->res->headers->location // '', qr{/sso/login}, 'authorize sends the br
 $tx = $ua->post(
 	"$issuer/sso/login",
 	{ Referer => "$issuer/sso/login" },
-	form => { user => 'alice', pass => 'correct' },
+	form => { user => 'alice', pass => 'correct', csrf_token => 'testcsrf' },
 );
 is( $tx->res->code, 302, 'login POST accepted' );
 like( $tx->res->headers->location // '', qr{/sso/consent}, 'login redirects to consent' );
@@ -477,7 +492,7 @@ like( $tx->res->headers->location // '', qr{/sso/consent}, 'login redirects to c
 $tx = $ua->post(
 	"$issuer/sso/consent",
 	{ Referer => "$issuer/sso/consent" },
-	form => { decision => 'allow' },
+	form => { decision => 'allow', csrf_token => 'testcsrf' },
 );
 is( $tx->res->code, 302, 'consent POST accepted' );
 my $cb_url = $tx->res->headers->location // '';

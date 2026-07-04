@@ -11,6 +11,7 @@
   <div class="card-header text-danger fw-bold">Change Password</div>
   <div class="card-body">
     <form method="post" action="<%= url_for('change_password') %>">
+      <%= csrf_field %>
       <div class="mb-2">
         <label class="form-label" for="current">Current Password</label>
         <input type="password" class="form-control" id="current" name="current"
@@ -46,6 +47,7 @@
         <form method="post" action="<%= url_for('sshkey_remove') %>"
               data-confirm="Remove this SSH key?"
               class="flex-shrink-0">
+          <%= csrf_field %>
           <input type="hidden" name="key" value="<%= $k %>">
           <button type="submit" class="btn btn-outline-danger btn-sm">Remove</button>
         </form>
@@ -65,6 +67,7 @@
       Enable it to store SSH public keys in your LDAP entry.
     </p>
     <form method="post" action="<%= url_for('sshkey_enable') %>">
+      <%= csrf_field %>
       <button type="submit" class="btn btn-outline-secondary btn-sm">
         Enable SSH Key Storage
       </button>
@@ -83,6 +86,7 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <form method="post" action="<%= url_for('sshkey_add') %>">
+        <%= csrf_field %>
         <div class="modal-body">
           <label class="form-label" for="key">Public Key</label>
           <textarea class="form-control font-monospace" id="key" name="key"
@@ -167,6 +171,7 @@
             <span><%= $info->{totpScratchCodeCount} // 0 %> remaining</span>
             <form method="post" action="<%= url_for('totp_scratch_replace') %>"
                   data-confirm="This will replace all existing scratch codes. Continue?">
+              <%= csrf_field %>
               <button type="submit" class="btn btn-outline-secondary btn-sm">Replace</button>
             </form>
           </td>
@@ -175,6 +180,7 @@
     </table>
     % if (($info->{totpStatus}//'') eq 'none') {
     <form method="post" action="<%= url_for('totp_generate') %>">
+      <%= csrf_field %>
       <button type="submit" class="btn btn-outline-secondary btn-sm">Set up TOTP</button>
     </form>
     % } elsif (($info->{totpStatus}//'') eq 'pending') {
@@ -195,6 +201,7 @@
       % }
       <p class="text-secondary small mb-1">Enter a code from your authenticator to verify and activate MFA:</p>
       <form method="post" action="<%= url_for('totp_verify') %>">
+        <%= csrf_field %>
         <div class="d-flex gap-2">
           <input type="text" class="form-control form-control-sm" name="code"
                  pattern="\d{6}" maxlength="6" required autocomplete="one-time-code"
@@ -210,6 +217,7 @@
       with a second factor using an authenticator app.
     </p>
     <form method="post" action="<%= url_for('totp_enable') %>">
+      <%= csrf_field %>
       <button type="submit" class="btn btn-outline-secondary btn-sm">Enable TOTP</button>
     </form>
   % }
@@ -251,6 +259,7 @@
         </div>
         <form method="post" action="<%= url_for('passkey_remove') %>"
               data-confirm="Remove this passkey?" class="flex-shrink-0">
+          <%= csrf_field %>
           <input type="hidden" name="credentialId" value="<%= $cred->{credentialId} %>">
           <button type="submit" class="btn btn-outline-danger btn-sm">Remove</button>
         </form>
@@ -279,6 +288,7 @@
       Enable it to register WebAuthn/FIDO2 passkeys as a second factor.
     </p>
     <form method="post" action="<%= url_for('passkey_enable') %>">
+      <%= csrf_field %>
       <button type="submit" class="btn btn-outline-secondary btn-sm">Enable Passkey Storage</button>
     </form>
   % }
@@ -359,7 +369,10 @@
 
       var finResp = await fetch('<%= url_for('passkey_register_finish') %>', {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': (document.querySelector('meta[name="csrf-token"]') || {}).content || '',
+        },
         body:    JSON.stringify(body),
       });
       var result = await finResp.json();

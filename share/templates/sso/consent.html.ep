@@ -53,6 +53,7 @@
     % }
 
     <form method="post" action="<%= url_for('sso_consent_post') %>">
+      <%= csrf_field %>
       <div class="d-flex gap-2 justify-content-center">
         <button type="submit" name="decision" value="deny"
                 class="btn btn-outline-secondary">Deny</button>

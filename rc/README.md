@@ -20,9 +20,51 @@ pointed to by `NISABA_CONFIG` (LDAP connection, `websecret`, `oidcbase`, the
 `sso*` keys, etc.); the listen address and a couple of environment variables are
 set per-service as shown below.
 
-Only `mojo_nisaba_sso` keeps local state: its OIDC authorization codes and
-access tokens live in a SQLite database at `/var/db/nisaba` (`ssoStoragePath`).
-The other two are network-only and run with a read-only filesystem.
+**A session secret is required.** Each service signs its session cookies — which
+carry every authentication decision — with the secret. Set `websecret` in
+`nisabarc` (or `NISABA_SECRET` in the environment) to a long random string, e.g.
+`openssl rand -base64 48`. The services **refuse to start** without one rather
+than fall back to a predictable default. Use the same value across all three
+workers of a service (and keep it stable across restarts) so existing sessions
+remain valid.
+
+**Session cookies are marked `Secure` by default**, so browsers only send them
+over HTTPS — serve these behind TLS (directly or via a TLS-terminating reverse
+proxy with `MOJO_REVERSE_PROXY=1`). For plain-HTTP development or testing, set
+`cookieSecure=0` in `nisabarc` (or `NISABA_COOKIE_SECURE=0` in the environment)
+to drop the flag. Cookies are always `SameSite=Lax`.
+
+`mojo_nisaba_sso` keeps its OIDC authorization codes and access tokens in a
+SQLite database at `/var/db/nisaba` (`ssoStoragePath`). All three services also
+keep a small brute-force **rate-limiter** database there (see below); apart from
+that they are network-only. The service units grant write access to
+`/var/db/nisaba` and otherwise run with a read-only filesystem.
+
+**Brute-force rate limiting** is on by default on every auth endpoint (login,
+TOTP challenge, passkey login, and the self-service forgot/reset flows). It
+counts failures per `(username, client-IP)` with a higher per-IP backstop and
+locks a key out once a threshold is reached. State lives in
+`/var/db/nisaba/web_rate_limiter.sqlite` (`rateLimitPath`). It **fails closed**:
+if that database can't be written, guarded endpoints return `503` — so the
+service user must be able to write `/var/db/nisaba` (the units and rc scripts
+arrange this). Disable it with `rateLimit=0` (or `NISABA_RATELIMIT=0`); tune any
+scope with `rateLimit<Scope><Max|Window|Lockout>` keys (scopes: `Login`,
+`LoginIp`, `Totp`, `TotpIp`, `Passkey`, `Reset`, `Forgot`, `ForgotIp`). Behind a
+reverse proxy, set `MOJO_REVERSE_PROXY=1` so the client IP is taken from
+`X-Forwarded-For` rather than the proxy.
+
+`mojo_nisaba_sso` **requires PKCE (S256) from public clients** — those registered
+with `token_endpoint_auth_method=none`, which cannot authenticate at the token
+endpoint. This defends against authorization-code interception and is on by
+default. To allow legacy public clients that cannot do PKCE, set `ssoRequirePkce=0`
+in `nisabarc` (or `NISABA_REQUIRE_PKCE=0` in the environment) — strongly
+discouraged. Confidential clients are unaffected.
+
+**ID tokens are always signed.** Each client must be registered with an
+`RS256` or `HS256` signing algorithm; the provider refuses to issue an unsigned
+(`alg=none`) token and returns `server_error` for a client that has no usable
+signing key. The admin UI only offers RS256/HS256, and discovery advertises only
+those.
 
 By default the services speak plain HTTP and are meant to sit behind a
 TLS-terminating reverse proxy. To terminate TLS in the app itself instead, see
@@ -65,7 +107,7 @@ The examples assume the executables are installed in `/usr/local/bin`. If
    cat > /usr/local/etc/nisaba/mojo_nisaba_sso.env <<'EOF'
    LISTEN=http://*:8082
    NISABA_CONFIG=/usr/local/etc/nisabarc
-   # NISABA_SECRET=...            # or set websecret in nisabarc
+   # NISABA_SECRET=...            # REQUIRED unless websecret is set in nisabarc
    # MOJO_REVERSE_PROXY=1         # only behind a trusted reverse proxy
    EOF
    ```

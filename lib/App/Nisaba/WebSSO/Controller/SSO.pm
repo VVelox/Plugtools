@@ -7,6 +7,7 @@ use Mojo::JSON   qw(decode_json);
 use MIME::Base64 ();
 use Digest::SHA  qw(sha256);
 use Crypt::PK::RSA;
+use App::Nisaba::WebUtil qw(secure_compare);
 
 # --------------------------------------------------------------------------- #
 # Helpers
@@ -72,7 +73,7 @@ sub discovery {
 			grant_types_supported                 => ['authorization_code'],
 			subject_types_supported               => ['public'],
 			jwks_uri                              => "$issuer/jwks",
-			id_token_signing_alg_values_supported => [ 'RS256',               'HS256',   'none' ],
+			id_token_signing_alg_values_supported => [ 'RS256',               'HS256' ],
 			scopes_supported                      => [ 'openid',              'profile', 'email', 'phone', 'address' ],
 			token_endpoint_auth_methods_supported => [ 'client_secret_basic', 'client_secret_post', 'none', ],
 			claims_supported                      => [
@@ -82,7 +83,7 @@ sub discovery {
 				'gender',       'birthdate',             'zoneinfo',           'locale',
 				'phone_number', 'phone_number_verified', 'address',            'updated_at',
 			],
-			code_challenge_methods_supported => [ 'S256', 'plain' ],
+			code_challenge_methods_supported => ['S256'],
 		}
 	);
 } ## end sub discovery
@@ -194,6 +195,31 @@ sub authorize {
 		return $self->_authz_error( $redirect_uri, $state, 'invalid_request', 'Unsupported code_challenge_method.' );
 	}
 
+	# OAuth 2.1 / RFC 7636: a public client cannot authenticate at the token
+	# endpoint, so PKCE is its only defence against authorization-code
+	# interception — require it, and require S256 specifically ('plain' sends
+	# challenge == verifier, handing an interceptor everything it needs). This is
+	# on by default; an operator may relax it for legacy public clients with
+	# ssoRequirePkce=0 in the config (strongly discouraged).
+	my $require_pkce = $self->pt->{ini}->{''}->{ssoRequirePkce} // $ENV{NISABA_REQUIRE_PKCE} // 1;
+	if ($require_pkce) {
+		my $auth_method = $client_entry->get_value('oidcTokenEndpointAuthMethod') // '';
+		my $has_secret  = ( $client_entry->get_value('oidcClientSecret') // '' ) ne '';
+		my $is_public   = ( $auth_method eq 'none' ) || !$has_secret;
+
+		if ($is_public) {
+			if ( $code_challenge eq '' ) {
+				return $self->_authz_error( $redirect_uri, $state, 'invalid_request',
+					'This client is public and must use PKCE: a code_challenge is required.' );
+			}
+			# An absent method defaults to 'plain' (RFC 7636 4.3); public clients must use S256.
+			if ( ( $code_challenge_method || 'plain' ) ne 'S256' ) {
+				return $self->_authz_error( $redirect_uri, $state, 'invalid_request',
+					'Public clients must use PKCE with code_challenge_method=S256.' );
+			}
+		}
+	} ## end if ($require_pkce)
+
 	# Store the authorization request in session
 	$self->session(
 		sso_authz => {
@@ -238,11 +264,15 @@ sub login {
 	my $user = $self->param('user') // '';
 	my $pass = $self->param('pass') // '';
 
+	return unless $self->rate_guard( 'login', user => $user, render => { template => 'sso/login', layout => 'sso' } );
+
 	my $err = $self->_pt_call( sub { $self->pt->userVerifyPassword( { user => $user, password => $pass } ) } );
 	if ($err) {
+		$self->rate_fail( 'login', user => $user );
 		$self->flash( error => 'Invalid username or password.' );
 		return $self->redirect_to('sso_login');
 	}
+	$self->rate_reset( 'login', user => $user );
 
 	# Check whether TOTP is active for this user
 	my $info;
@@ -283,6 +313,8 @@ sub passkey_login_start {
 
 sub passkey_login_finish {
 	my $self = shift;
+
+	return unless $self->rate_guard( 'passkey', render => { json => 1 } );
 
 	my $challenge_b64 = $self->session('sso_passkey_login_challenge');
 	unless ($challenge_b64) {
@@ -342,8 +374,10 @@ sub passkey_login_finish {
 	};
 	if ($@) {
 		( my $msg = $@ ) =~ s/ at \S+ line \d+\.?\s*$//;
+		$self->rate_fail('passkey');
 		return $self->render( json => { error => "Verification failed: $msg" }, status => 401 );
 	}
+	$self->rate_reset('passkey');
 
 	# Update sign count (best-effort)
 	$self->_pt_call(
@@ -391,14 +425,18 @@ sub totp_challenge {
 		return $self->redirect_to('sso_login');
 	}
 
+	return unless $self->rate_guard( 'totp', user => $user, render => { template => 'sso/totp_challenge', layout => 'sso' } );
+
 	my $code = $self->param('code') // '';
 
 	my $ok;
 	my $err = $self->_pt_call( sub { $ok = $self->pt->userTotpVerify( { user => $user, code => $code } ) } );
 	if ( $err || !$ok ) {
+		$self->rate_fail( 'totp', user => $user );
 		$self->flash( error => 'Invalid TOTP code. Please try again.' );
 		return $self->redirect_to('sso_totp_challenge');
 	}
+	$self->rate_reset( 'totp', user => $user );
 
 	delete $self->session->{sso_totp_pending_user};
 	$self->session( sso_user      => $user );
@@ -668,7 +706,7 @@ sub token {
 	$self->_pt_call( sub { $client_entry = $self->pt->getOIDCClientEntry( { clientId => $client_id } ) } );
 	if ($client_entry) {
 		my $stored_secret = $client_entry->get_value('oidcClientSecret') // '';
-		if ( $stored_secret ne '' && $client_secret ne $stored_secret ) {
+		if ( $stored_secret ne '' && !secure_compare( $client_secret, $stored_secret ) ) {
 			# RFC 6749 Section 5.2: if the client authenticated via the
 			# Authorization header, a 401 MUST carry a WWW-Authenticate header.
 			$self->res->headers->www_authenticate('Basic realm="token"') if $used_basic;
@@ -842,7 +880,7 @@ sub _verify_id_token_hint {
 		my $secret = $client_entry->get_value('oidcClientSecret') // '';
 		if ( $secret ne '' ) {
 			require Digest::SHA;
-			$verified = 1 if $sig eq Digest::SHA::hmac_sha256( $signing_input, $secret );
+			$verified = 1 if secure_compare( $sig, Digest::SHA::hmac_sha256( $signing_input, $secret ) );
 		}
 	}
 
@@ -933,6 +971,8 @@ sub _build_id_token {
 	my $client_entry;
 	eval { $client_entry = $self->pt->getOIDCClientEntry( { clientId => $client_id } ) };
 
+	# Default to 'none' only so that an unconfigured/unknown client is refused
+	# below rather than silently signed; we never actually emit an unsigned token.
 	my $alg = 'none';
 	my $jwks_json;
 	if ($client_entry) {
@@ -940,11 +980,7 @@ sub _build_id_token {
 		$jwks_json = $client_entry->get_value('oidcJwks');
 	}
 
-	if ( $alg eq 'none' ) {
-		# Unsigned JWT: header.payload.
-		my $header = _b64url_encode('{"alg":"none","typ":"JWT"}');
-		return "$header.$body.";
-	} elsif ( $alg eq 'RS256' ) {
+	if ( $alg eq 'RS256' ) {
 		# Sign with the client's RSA private key
 		my $jwks = $jwks_json ? eval { decode_json($jwks_json) } : undef;
 		if ( $jwks && $jwks->{keys} && @{ $jwks->{keys} } ) {
@@ -980,7 +1016,9 @@ sub _build_id_token {
 		return undef;
 	} ## end elsif ( $alg eq 'HS256' )
 
-	# Unknown/unsupported configured algorithm: refuse rather than downgrade.
+	# 'none' (unsigned), unset, or any unknown/unsupported algorithm: refuse to
+	# issue a token rather than emit an unsigned or downgraded one. The token
+	# endpoint turns this undef into a server_error.
 	return undef;
 } ## end sub _build_id_token
 
