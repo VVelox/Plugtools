@@ -26,8 +26,11 @@ my %WriteMakefileArgs = (
 		'File::ShareDir::Install' => '0',
 	},
 	TEST_REQUIRES => {
-		'Test::More' => '0',
-		'Crypt::JWT' => '0',
+		'Test::More'              => '0',
+		'Crypt::JWT'              => '0',
+		'Net::LDAP::Server::Test' => '0',
+		'Net::LDAP::Server'       => '0',
+		'Test::OpenLDAP'          => '0',
 	},
 	PREREQ_PM => {
 		'Test::More'                        => 0,

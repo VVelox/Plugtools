@@ -451,6 +451,7 @@ sub addGroup {
 			},
 			\%args
 		);
+		return undef if $self->error;
 	} ## end if ( defined( $self->{ini}->{''}->{pluginAddGroup...}))
 
 	#add it
@@ -647,6 +648,7 @@ sub addUser {
 		name       => $args{user},
 		uid        => $args{uid},
 		gid        => $args{gid},
+		gecos      => $args{gecos},
 		home       => $args{home},
 		loginShell => $args{shell},
 		primary    => $self->{ini}->{''}->{userPrimary},
@@ -662,6 +664,7 @@ sub addUser {
 			},
 			\%args
 		);
+		return undef if $self->error;
 	} ## end if ( defined( $self->{ini}->{''}->{pluginAddUser...}))
 
 	#add it
@@ -835,6 +838,7 @@ sub deleteGroup {
 				group => $group,
 			}
 		);
+		return undef if $self->error;
 	} ## end if ( defined( $self->{ini}->{''}->{pluginDeleteGroup...}))
 
 	#delete the entry
@@ -956,6 +960,7 @@ sub deleteUser {
 			},
 			\%args
 		);
+		return undef if $self->error;
 	} ## end if ( defined( $self->{ini}->{''}->{pluginDeleteUser...}))
 
 	#delete the entry
@@ -1209,6 +1214,7 @@ sub groupAddUser {
 			},
 			\%args
 		);
+		return undef if $self->error;
 	} ## end if ( defined( $self->{ini}->{''}->{pluginGroupAddUser...}))
 
 	#update the entry
@@ -1323,6 +1329,7 @@ sub groupGIDchange {
 			},
 			\%args
 		);
+		return undef if $self->error;
 	} ## end if ( defined( $self->{ini}->{''}->{pluginGroupGIDchange...}))
 
 	#update the entry
@@ -1553,6 +1560,7 @@ sub groupRemoveUser {
 			},
 			\%args
 		);
+		return undef if $self->error;
 	} ## end if ( defined( $self->{ini}->{''}->{pluginGroupRemoveUser...}))
 
 	#update the entry
@@ -2060,7 +2068,11 @@ sub plugin {
 	my $int = 0;
 	while ( defined( $plugins[$int] ) ) {
 		my %returned;
-		my $run = 'use ' . $plugins[$int] . ';' . "\n" . 'my %returned=' . $plugins[$int] . '->plugin(\%opts, \%args);';
+		# The eval must assign to the enclosing lexical %returned — a 'my'
+		# inside the eval string would declare a shadowing copy and make the
+		# $returned{error} check below always see an empty hash, silently
+		# discarding plugin-reported errors.
+		my $run = 'use ' . $plugins[$int] . ';' . "\n" . '%returned=' . $plugins[$int] . '->plugin(\%opts, \%args);';
 
 		#run it
 		my $ran = eval($run);
@@ -3042,6 +3054,7 @@ sub userGECOSchange {
 			},
 			\%args
 		);
+		return undef if $self->error;
 	} ## end if ( defined( $self->{ini}->{''}->{pluginUserGECOSchange...}))
 
 	#update the entry
@@ -3144,6 +3157,7 @@ sub userShellChange {
 			},
 			\%args
 		);
+		return undef if $self->error;
 	} ## end if ( defined( $self->{ini}->{''}->{pluginUserShellChange...}))
 
 	#update the entry
@@ -3246,6 +3260,7 @@ sub userHomeChange {
 			},
 			\%args
 		);
+		return undef if $self->error;
 	} ## end if ( defined( $self->{ini}->{''}->{pluginUserHomeChange...}))
 
 	#update the entry
@@ -3401,6 +3416,7 @@ sub userSetPass {
 			},
 			\%args
 		);
+		return undef if $self->error;
 	} else {
 		return 1;
 	}
@@ -3575,6 +3591,7 @@ sub userGIDchange {
 			},
 			\%args
 		);
+		return undef if $self->error;
 	} ## end if ( defined( $self->{ini}->{''}->{pluginUserGIDchange...}))
 
 	#update the entry
@@ -3685,6 +3702,7 @@ sub userUIDchange {
 			},
 			\%args
 		);
+		return undef if $self->error;
 	} ## end if ( defined( $self->{ini}->{''}->{pluginUserUIDchange...}))
 
 	#update the entry
