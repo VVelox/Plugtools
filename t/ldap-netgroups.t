@@ -55,11 +55,7 @@ like( $entry->dn, qr/^cn=webservers,\Q$netgroupbase\E$/, 'netgroup DN is under n
 is( $entry->get_value('cn'),          'webservers',       'cn round-trips' );
 is( $entry->get_value('description'), 'Web server hosts', 'description round-trips' );
 my @triples = sort $entry->get_value('nisNetgroupTriple');
-is_deeply(
-	\@triples,
-	[ '(www1,,example.com)', '(www2,,example.com)' ],
-	'multi-valued triples round-trip'
-);
+is_deeply( \@triples, [ '(www1,,example.com)', '(www2,,example.com)' ], 'multi-valued triples round-trip' );
 
 # A second netgroup with members referencing the first.
 ( $ret, $err ) = pt_try(
@@ -74,11 +70,7 @@ is_deeply(
 );
 is( $err, '', 'addNetgroup with a member netgroup succeeds' );
 ( $entry, $err ) = pt_try( sub { $pt->getNetgroupEntry( { group => 'allhosts' } ) } );
-is_deeply(
-	[ $entry->get_value('memberNisNetgroup') ],
-	['webservers'],
-	'memberNisNetgroup round-trips'
-);
+is_deeply( [ $entry->get_value('memberNisNetgroup') ], ['webservers'], 'memberNisNetgroup round-trips' );
 
 ( $netgroups, $err ) = pt_try( sub { $pt->getNetgroups } );
 is( $err, '', 'getNetgroups succeeds with entries present' );
@@ -101,76 +93,56 @@ is( $pt->error, 15, 'unknown netgroup sets error 15' );
 
 ( $ret, $err ) = pt_try(
 	sub {
-		$pt->netgroupDescriptionChange(
-			{ group => 'webservers', description => 'All the web hosts' } );
+		$pt->netgroupDescriptionChange( { group => 'webservers', description => 'All the web hosts' } );
 	}
 );
 is( $err, '', 'netgroupDescriptionChange set succeeds' );
 ( $entry, $err ) = pt_try( sub { $pt->getNetgroupEntry( { group => 'webservers' } ) } );
 is( $entry->get_value('description'), 'All the web hosts', 'description change visible' );
 
-( $ret, $err ) = pt_try(
-	sub { $pt->netgroupDescriptionChange( { group => 'webservers', description => '' } ) } );
+( $ret, $err ) = pt_try( sub { $pt->netgroupDescriptionChange( { group => 'webservers', description => '' } ) } );
 is( $err, '', 'netgroupDescriptionChange clear succeeds' );
 ( $entry, $err ) = pt_try( sub { $pt->getNetgroupEntry( { group => 'webservers' } ) } );
 is( $entry->get_value('description'), undef, 'description cleared' );
 
-( $ret, $err ) = pt_try(
-	sub { $pt->netgroupDescriptionChange( { group => 'nosuch', description => 'X' } ) } );
+( $ret, $err ) = pt_try( sub { $pt->netgroupDescriptionChange( { group => 'nosuch', description => 'X' } ) } );
 isnt( $err, '', 'description change on unknown netgroup fails' );
 is( $pt->error, 15, 'unknown netgroup sets error 15' );
 
 # ── netgroupTripleAdd / netgroupTripleRemove ────────────────────────────────
 
-( $ret, $err ) = pt_try(
-	sub { $pt->netgroupTripleAdd( { group => 'webservers', triple => '(www3,,example.com)' } ) } );
+( $ret, $err ) = pt_try( sub { $pt->netgroupTripleAdd( { group => 'webservers', triple => '(www3,,example.com)' } ) } );
 is( $err, '', 'netgroupTripleAdd succeeds' );
 ( $entry, $err ) = pt_try( sub { $pt->getNetgroupEntry( { group => 'webservers' } ) } );
 @triples = sort $entry->get_value('nisNetgroupTriple');
 is( scalar @triples, 3, 'triple added (3 present)' );
 
-( $ret, $err ) = pt_try(
-	sub { $pt->netgroupTripleRemove( { group => 'webservers', triple => '(www3,,example.com)' } ) }
-);
+( $ret, $err )
+	= pt_try( sub { $pt->netgroupTripleRemove( { group => 'webservers', triple => '(www3,,example.com)' } ) } );
 is( $err, '', 'netgroupTripleRemove succeeds' );
 ( $entry, $err ) = pt_try( sub { $pt->getNetgroupEntry( { group => 'webservers' } ) } );
 @triples = sort $entry->get_value('nisNetgroupTriple');
-is_deeply(
-	\@triples,
-	[ '(www1,,example.com)', '(www2,,example.com)' ],
-	'removed triple is gone, others remain'
-);
+is_deeply( \@triples, [ '(www1,,example.com)', '(www2,,example.com)' ], 'removed triple is gone, others remain' );
 
 ( $ret, $err ) = pt_try( sub { $pt->netgroupTripleAdd( { group => 'webservers' } ) } );
 isnt( $err, '', 'netgroupTripleAdd without a triple fails' );
 is( $pt->error, 68, 'missing triple sets error 68' );
 
-( $ret, $err ) = pt_try(
-	sub { $pt->netgroupTripleAdd( { group => 'nosuch', triple => '(x,,y)' } ) } );
+( $ret, $err ) = pt_try( sub { $pt->netgroupTripleAdd( { group => 'nosuch', triple => '(x,,y)' } ) } );
 isnt( $err, '', 'triple add on unknown netgroup fails' );
 is( $pt->error, 15, 'unknown netgroup sets error 15' );
 
 # ── netgroupMemberAdd / netgroupMemberRemove ────────────────────────────────
 
-( $ret, $err ) = pt_try(
-	sub { $pt->netgroupMemberAdd( { group => 'allhosts', member => 'dbservers' } ) } );
+( $ret, $err ) = pt_try( sub { $pt->netgroupMemberAdd( { group => 'allhosts', member => 'dbservers' } ) } );
 is( $err, '', 'netgroupMemberAdd succeeds' );
 ( $entry, $err ) = pt_try( sub { $pt->getNetgroupEntry( { group => 'allhosts' } ) } );
-is_deeply(
-	[ sort $entry->get_value('memberNisNetgroup') ],
-	[ 'dbservers', 'webservers' ],
-	'member added'
-);
+is_deeply( [ sort $entry->get_value('memberNisNetgroup') ], [ 'dbservers', 'webservers' ], 'member added' );
 
-( $ret, $err ) = pt_try(
-	sub { $pt->netgroupMemberRemove( { group => 'allhosts', member => 'dbservers' } ) } );
+( $ret, $err ) = pt_try( sub { $pt->netgroupMemberRemove( { group => 'allhosts', member => 'dbservers' } ) } );
 is( $err, '', 'netgroupMemberRemove succeeds' );
 ( $entry, $err ) = pt_try( sub { $pt->getNetgroupEntry( { group => 'allhosts' } ) } );
-is_deeply(
-	[ $entry->get_value('memberNisNetgroup') ],
-	['webservers'],
-	'removed member is gone, original remains'
-);
+is_deeply( [ $entry->get_value('memberNisNetgroup') ], ['webservers'], 'removed member is gone, original remains' );
 
 ( $ret, $err ) = pt_try( sub { $pt->netgroupMemberAdd( { group => 'allhosts' } ) } );
 isnt( $err, '', 'netgroupMemberAdd without a member fails' );
@@ -185,11 +157,8 @@ is( $err, '', 'deleteNetgroup succeeds' );
 isnt( $err, '', 'deleted netgroup is gone' );
 
 ( $netgroups, $err ) = pt_try( sub { $pt->getNetgroups } );
-is_deeply(
-	[ map { $_->get_value('cn') } @{ $netgroups // [] } ],
-	['webservers'],
-	'remaining netgroup intact after delete'
-);
+is_deeply( [ map { $_->get_value('cn') } @{ $netgroups // [] } ],
+	['webservers'], 'remaining netgroup intact after delete' );
 
 ( $ret, $err ) = pt_try( sub { $pt->deleteNetgroup( { group => 'allhosts' } ) } );
 isnt( $err, '', 'deleting a nonexistent netgroup fails' );

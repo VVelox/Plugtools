@@ -1,6 +1,7 @@
 package App::Nisaba::WebSelfService;
 
 use Mojo::Base 'Mojolicious', -signatures;
+use experimental 'signatures';    # redundant at runtime; here so perlcritic recognises signatures
 use App::Nisaba;
 use App::Nisaba::WebSecret;
 use App::Nisaba::WebCSRF;

@@ -61,7 +61,7 @@ sub resolve {
 	}
 
 	my $app = $args{app} // 'the Nisaba web application';
-	Carp::croak( <<"END_MSG" );
+	Carp::croak(<<"END_MSG");
 Refusing to start $app without a session secret.
 
 The session cookie that carries every authentication decision is signed with

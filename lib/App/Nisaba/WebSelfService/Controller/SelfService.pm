@@ -1,7 +1,8 @@
 package App::Nisaba::WebSelfService::Controller::SelfService;
 
 use Mojo::Base 'Mojolicious::Controller', -signatures;
-use Mojo::Util qw(hmac_sha1_sum b64_encode b64_decode url_escape);
+use experimental 'signatures';    # redundant at runtime; here so perlcritic recognises signatures
+use Mojo::Util           qw(hmac_sha1_sum b64_encode b64_decode url_escape);
 use App::Nisaba::WebUtil qw(secure_compare);
 
 =head1 NAME
@@ -604,7 +605,7 @@ sub forgot_form ($self) {
 	# rendered into the form survives to the POST.
 	delete $self->session->{user};
 	$self->render( template => 'selfservice/forgot' );
-}
+} ## end sub forgot_form
 
 sub forgot ($self) {
 	unless ( $self->reset_available ) {
@@ -614,7 +615,8 @@ sub forgot ($self) {
 
 	my $user = $self->param('user') // '';
 
-	return unless $self->rate_guard( 'forgot', user => $user, hit => 1, render => { template => 'selfservice/forgot' } );
+	return
+		unless $self->rate_guard( 'forgot', user => $user, hit => 1, render => { template => 'selfservice/forgot' } );
 
 	# Always show the same message to prevent user enumeration
 	my $ok_msg = 'If that username exists and has an email address on file, a reset link has been sent.';
@@ -638,13 +640,13 @@ sub forgot ($self) {
 	# password changes — including when this token is used to reset it — every
 	# outstanding token for the user stops validating. That makes each token
 	# effectively single use.
-	my $expiry  = time() + 3600;                              # 1 hour
+	my $expiry  = time() + 3600;                                       # 1 hour
 	my $secret  = $self->app->secrets->[0];
 	my $pwfp    = _password_fingerprint( $self, $user );
 	my $payload = $user . "\0" . $expiry;
 	my $sig     = hmac_sha1_sum( $payload . "\0" . $pwfp, $secret );
 	my $token   = b64_encode( $payload . "\0" . $sig, '' );
-	$token =~ tr|+/|,-|;                                      # URL-safe
+	$token =~ tr|+/|,-|;                                               # URL-safe
 
 	my $reset_url = $self->url_for('reset')->to_abs->to_string;
 	$reset_url =~ s|/reset/?$||;
@@ -755,6 +757,6 @@ sub _password_fingerprint {
 	eval { $entry = $c->pt->getUserEntry( { user => $user } ) };
 	my @pw = $entry ? ( grep { defined } $entry->get_value('userPassword') ) : ();
 	return hmac_sha1_sum( join( "\x1f", @pw ), $c->app->secrets->[0] );
-} ## end sub _password_fingerprint
+}
 
 1;

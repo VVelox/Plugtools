@@ -6,10 +6,10 @@ use warnings;
 # being installed. Must happen before the web module is loaded.
 use File::Basename ();
 use File::Spec;
+
 BEGIN {
-	my $share = File::Spec->rel2abs(
-		File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' )
-	);
+	my $share
+		= File::Spec->rel2abs( File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' ) );
 	require File::ShareDir;
 	no warnings 'redefine';
 	*File::ShareDir::dist_dir = sub { $share };
@@ -19,8 +19,9 @@ BEGIN {
 
 	# Rate limiting is covered in t/web-ratelimit.t; disable here.
 	$ENV{NISABA_RATELIMIT} = '0' unless defined $ENV{NISABA_RATELIMIT};
-}
+} ## end BEGIN
 use Test::More;
+use Mojo::Util ();
 use Test::Mojo;
 
 eval { require App::Nisaba::WebSelfService };
@@ -31,6 +32,7 @@ plan skip_all => "App::Nisaba::WebSelfService failed to load: $@" if $@;
 
 	package FakeEntry;
 	sub new { my ( $c, %a ) = @_; return bless { attrs => \%a }, $c }
+
 	sub get_value {
 		my ( $self, $attr ) = @_;
 		my $v = $self->{attrs}{$attr};
@@ -60,8 +62,8 @@ sub _install_stubs {
 		getUserEntry    => sub { return FakeEntry->new( userPassword => $current_pw ) },
 		userSetPassSelf => sub { my ( $s, $a ) = @_; $current_pw = '{SSHA}NEW-' . $a->{pass}; return 1 },
 
-		sendEmail               => sub { my ( $s, $a ) = @_; push @sent_emails, $a; return 1 },
-		userSSHPublicKeyAddSelf => sub { my ( $s, $a ) = @_; push @added_keys, $a->{key}; return 1 },
+		sendEmail               => sub { my ( $s, $a ) = @_; push @sent_emails, $a;        return 1 },
+		userSSHPublicKeyAddSelf => sub { my ( $s, $a ) = @_; push @added_keys,  $a->{key}; return 1 },
 
 		ldapPublicKeyAvailable => sub { 1 },
 		totpSchemaAvailable    => sub { 1 },
@@ -70,13 +72,9 @@ sub _install_stubs {
 	);
 
 	my $fake = bless { ini => { '' => {} } }, 'FakePT';
-	for my $name ( keys %methods ) {
-		no strict 'refs';
-		no warnings 'redefine';
-		*{"FakePT::$name"} = $methods{$name};
-	}
+	Mojo::Util::monkey_patch( 'FakePT', %methods );
 	$app->helper( pt => sub { $fake } );
-}
+} ## end sub _install_stubs
 
 my $t = Test::Mojo->new('App::Nisaba::WebSelfService');
 _install_stubs( $t->app );
@@ -122,8 +120,7 @@ is( $current_pw, '{SSHA}NEW-newpass1', 'password was NOT changed by the replayed
 # ── SSH key add strips all newlines ───────────────────────────────────────────
 
 @added_keys = ();
-$t->post_ok( '/sshkeys/add', form => { key => "ssh-rsa AAAAkeydata\r\nMOREdata\n" } )
-	->status_is(302);
+$t->post_ok( '/sshkeys/add', form => { key => "ssh-rsa AAAAkeydata\r\nMOREdata\n" } )->status_is(302);
 is( scalar(@added_keys), 1, 'SSH key add was invoked' );
 unlike( $added_keys[0], qr/[\r\n]/, 'all newlines are stripped from the submitted SSH key' );
 is( $added_keys[0], 'ssh-rsa AAAAkeydataMOREdata', 'key content is joined into a single line' );

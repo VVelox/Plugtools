@@ -15,11 +15,11 @@ sub plugin {
 
 	push @CALLS,
 		{
-		do       => $opts->{do},
-		args     => {%$args},
-		entry_dn => ( ref $opts->{entry} ? $opts->{entry}->dn : undef ),
-		has_self => ( ref $opts->{self} ? 1 : 0 ),
-		has_ldap => ( ref $opts->{ldap} ? 1 : 0 ),
+			do       => $opts->{do},
+			args     => {%$args},
+			entry_dn => ( ref $opts->{entry} ? $opts->{entry}->dn : undef ),
+			has_self => ( ref $opts->{self}  ? 1                  : 0 ),
+			has_ldap => ( ref $opts->{ldap}  ? 1                  : 0 ),
 		};
 
 	my %returned = ( error => undef );

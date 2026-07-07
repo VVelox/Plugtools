@@ -26,10 +26,10 @@ use warnings;
 # being installed. Must happen before App::Nisaba::WebSSO is loaded.
 use File::Basename ();
 use File::Spec;
+
 BEGIN {
-	my $share = File::Spec->rel2abs(
-		File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' )
-	);
+	my $share
+		= File::Spec->rel2abs( File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' ) );
 	require File::ShareDir;
 	no warnings 'redefine';
 	*File::ShareDir::dist_dir = sub { $share };
@@ -44,14 +44,16 @@ BEGIN {
 
 	# Rate limiting is covered in t/web-ratelimit.t; disable for this flow.
 	$ENV{NISABA_RATELIMIT} = '0' unless defined $ENV{NISABA_RATELIMIT};
-}
+} ## end BEGIN
 
 use Test::More;
+use Mojo::Util ();
 use Config;
-use File::Temp   ();
+use File::Temp ();
 use IO::Socket::INET;
 use MIME::Base64 ();
 use POSIX        qw(WNOHANG);
+use Time::HiRes  qw(sleep);
 
 # ── Generic helpers ──────────────────────────────────────────────────────────
 
@@ -85,7 +87,7 @@ sub capture {
 	};
 	close $fh;
 	return ( $?, $out, $timed_out );
-}
+} ## end sub capture
 
 sub path_dirs {
 	my $sep = $Config{path_sep} || ':';
@@ -124,7 +126,7 @@ sub find_go {
 
 	(@cands) = sort { $b cmp $a } @cands;
 	return $cands[0];
-}
+} ## end sub find_go
 
 # Where `go install` places binaries (GOBIN, else first GOPATH entry + /bin).
 sub go_bin_dir {
@@ -135,12 +137,12 @@ sub go_bin_dir {
 	for ( $gobin, $gopath ) { $_ //= ''; s/\s+\z//; }
 	return $gobin if $gobin ne '';
 	if ( $gopath ne '' ) {
-		my $sep = $Config{path_sep} || ':';
+		my $sep     = $Config{path_sep} || ':';
 		my ($first) = split /\Q$sep\E/, $gopath;
 		return File::Spec->catdir( $first, 'bin' ) if defined $first && $first ne '';
 	}
 	return undef;
-}
+} ## end sub go_bin_dir
 
 # Locate oauth2c: PATH, $GOBIN, ~/go/bin, then the Go toolchain's bin dir.
 sub find_oauth2c {
@@ -148,7 +150,7 @@ sub find_oauth2c {
 	my $p = find_on_path('oauth2c');
 	return $p if $p;
 	my @dirs;
-	push @dirs, $ENV{GOBIN} if defined $ENV{GOBIN} && $ENV{GOBIN} ne '';
+	push @dirs, $ENV{GOBIN}                                   if defined $ENV{GOBIN} && $ENV{GOBIN} ne '';
 	push @dirs, File::Spec->catdir( $ENV{HOME}, 'go', 'bin' ) if defined $ENV{HOME};
 	if ( my $gb = go_bin_dir($go) ) { push @dirs, $gb }
 	for my $dir (@dirs) {
@@ -156,7 +158,7 @@ sub find_oauth2c {
 		return $cand if -x $cand && !-d $cand;
 	}
 	return undef;
-}
+} ## end sub find_oauth2c
 
 # Grab a free TCP port on 127.0.0.1.
 sub free_port {
@@ -169,7 +171,7 @@ sub free_port {
 	my $port = $sock->sockport;
 	close $sock;
 	return $port;
-}
+} ## end sub free_port
 
 sub strip_ansi {
 	my ($s) = @_;
@@ -193,10 +195,9 @@ if ( !$oauth2c && $ENV{NISABA_TEST_OAUTH2C_INSTALL} ) {
 	diag( strip_ansi($inst_out) )
 		unless defined $inst_exit && $inst_exit == 0 && !$inst_timeout;
 	$oauth2c = find_oauth2c($go);
-}
+} ## end if ( !$oauth2c && $ENV{NISABA_TEST_OAUTH2C_INSTALL...})
 
-plan skip_all =>
-	'oauth2c not installed; set NISABA_TEST_OAUTH2C_INSTALL=1 to build it with '
+plan skip_all => 'oauth2c not installed; set NISABA_TEST_OAUTH2C_INSTALL=1 to build it with '
 	. '`go install github.com/cloudentity/oauth2c@latest` (needs Go and network)'
 	unless $oauth2c;
 
@@ -220,13 +221,16 @@ require Crypt::PK::RSA;
 # ── Test fixtures (same shape as t/web-sso.t) ───────────────────────────────
 
 {
+
 	package FakeEntry;
+
 	sub new {
 		my ( $class, %attrs ) = @_;
 		return bless { attrs => \%attrs, _dn => delete $attrs{_dn} // '' }, $class;
 	}
 	sub dn         { return $_[0]->{_dn} }
 	sub attributes { return keys %{ $_[0]->{attrs} } }
+
 	sub get_value {
 		my ( $self, $attr ) = @_;
 		my $v = $self->{attrs}{$attr};
@@ -235,11 +239,11 @@ require Crypt::PK::RSA;
 	}
 }
 
-my $sso_port     = free_port();
-my $cb_port      = free_port();
-my $issuer       = "http://127.0.0.1:$sso_port";
-my $redirect_url = "http://127.0.0.1:$cb_port/callback";
-my $client_id    = 'oauth2capp';
+my $sso_port      = free_port();
+my $cb_port       = free_port();
+my $issuer        = "http://127.0.0.1:$sso_port";
+my $redirect_url  = "http://127.0.0.1:$cb_port/callback";
+my $client_id     = 'oauth2capp';
 my $client_secret = 'oauth2c-test-secret';
 
 # RS256 signing key for the client so oauth2c gets a properly signed id_token.
@@ -315,12 +319,9 @@ sub _install_stubs {
 				passkeyUserVerification => 'preferred',
 			},
 		},
-	}, 'FakePT';
-	for my $name ( keys %methods ) {
-		no strict 'refs';
-		no warnings 'redefine';
-		*{"FakePT::$name"} = $methods{$name};
-	}
+		},
+		'FakePT';
+	Mojo::Util::monkey_patch( 'FakePT', %methods );
 
 	$app->helper( pt => sub { $fake_pt } );
 
@@ -331,7 +332,7 @@ sub _install_stubs {
 	# Seed a known CSRF token into every request's session so the login/consent
 	# POSTs below (which carry csrf_token => 'testcsrf') satisfy the token check.
 	$app->hook( before_dispatch => sub { $_[0]->session( csrf_token => 'testcsrf' ) } );
-}
+} ## end sub _install_stubs
 
 # ── Child process management ─────────────────────────────────────────────────
 
@@ -349,13 +350,13 @@ sub _cleanup_children {
 		next unless $pid;
 		while ( time() < $deadline ) {
 			last if waitpid( $pid, WNOHANG ) != 0;
-			select( undef, undef, undef, 0.1 );
+			sleep 0.1;
 		}
 		kill 'KILL', $pid;
 		waitpid( $pid, WNOHANG );
 	}
 	( $oauth2c_pid, $server_pid ) = ( undef, undef );
-}
+} ## end sub _cleanup_children
 END { _cleanup_children() }
 
 # ── 1. Boot the SSO provider as a real daemon ───────────────────────────────
@@ -372,17 +373,17 @@ if ( $server_pid == 0 ) {
 		my $app = $daemon->build_app('App::Nisaba::WebSSO');
 		$app->log->level('fatal');    # keep request traces out of the TAP stream
 		_install_stubs($app);
-		$daemon->run;    # blocks
+		$daemon->run;                 # blocks
 		1;
 	} or warn "SSO daemon failed: $@";
 	POSIX::_exit(1);
-}
+} ## end if ( $server_pid == 0 )
 
 # Wait for the daemon to come up: discovery must answer with our issuer.
 my $ua = Mojo::UserAgent->new( max_redirects => 0 );
 $ua->connect_timeout(5)->request_timeout(10);
 
-my $ready = 0;
+my $ready          = 0;
 my $ready_deadline = time() + 20;
 while ( time() < $ready_deadline ) {
 	my $tx = $ua->get("$issuer/.well-known/openid-configuration");
@@ -390,7 +391,7 @@ while ( time() < $ready_deadline ) {
 		$ready = 1;
 		last;
 	}
-	select( undef, undef, undef, 0.2 );
+	sleep 0.2;
 }
 ok( $ready, "SSO daemon is up and serving discovery at $issuer" )
 	or do { _cleanup_children(); done_testing(); exit 0 };
@@ -401,28 +402,21 @@ my $out_fh   = File::Temp->new( TEMPLATE => 'oauth2c-XXXXXX', TMPDIR => 1, SUFFI
 my $out_file = $out_fh->filename;
 
 my @oauth2c_cmd = (
-	$oauth2c, $issuer,
-	'--client-id',     $client_id,
-	'--client-secret', $client_secret,
-	'--response-types', 'code',
-	'--response-mode',  'query',
-	'--grant-type',     'authorization_code',
-	'--auth-method',    'client_secret_basic',
-	'--scopes',         'openid,profile,email',
-	'--redirect-url',   $redirect_url,
-	'--callback-addr',  "127.0.0.1:$cb_port",
-	'--pkce',
-	'--no-browser',
-	'--no-prompt',
+	$oauth2c,          $issuer,               '--client-id',      $client_id,
+	'--client-secret', $client_secret,        '--response-types', 'code',
+	'--response-mode', 'query',               '--grant-type',     'authorization_code',
+	'--auth-method',   'client_secret_basic', '--scopes',         'openid,profile,email',
+	'--redirect-url',  $redirect_url,         '--callback-addr',  "127.0.0.1:$cb_port",
+	'--pkce',          '--no-browser',        '--no-prompt',
 );
 diag( 'Running: ' . join( ' ', @oauth2c_cmd ) );
 
 $oauth2c_pid = fork();
 die "fork failed: $!" unless defined $oauth2c_pid;
 if ( $oauth2c_pid == 0 ) {
-	open STDOUT, '>', $out_file or POSIX::_exit(127);
+	open STDOUT, '>',  $out_file or POSIX::_exit(127);
 	open STDERR, '>&', \*STDOUT;
-	open STDIN, '<', File::Spec->devnull;
+	open STDIN,  '<',  File::Spec->devnull;
 	$ENV{NO_COLOR} = '1';    # keep the output parseable
 	exec @oauth2c_cmd or POSIX::_exit(127);
 }
@@ -462,14 +456,14 @@ while ( time() < $url_deadline ) {
 		}
 	}
 	last if $auth_url;
-	select( undef, undef, undef, 0.2 );
-}
+	sleep 0.2;
+} ## end while ( time() < $url_deadline )
 ok( $auth_url, 'oauth2c printed the authorization URL' )
 	or do { diag( $read_out->() ); _cleanup_children(); done_testing(); exit 0 };
 
 my $auth_query = Mojo::URL->new($auth_url)->query;
-is( $auth_query->param('client_id'), $client_id, 'authorization URL carries our client_id' );
-is( $auth_query->param('code_challenge_method'), 'S256', 'oauth2c uses PKCE S256' );
+is( $auth_query->param('client_id'),             $client_id, 'authorization URL carries our client_id' );
+is( $auth_query->param('code_challenge_method'), 'S256',     'oauth2c uses PKCE S256' );
 ok( ( $auth_query->param('code_challenge') // '' ) ne '', 'authorization URL carries a code_challenge' );
 
 # ── 3. Play the browser: authorize → login → consent → callback ─────────────
@@ -497,8 +491,7 @@ $tx = $ua->post(
 is( $tx->res->code, 302, 'consent POST accepted' );
 my $cb_url = $tx->res->headers->location // '';
 like( $cb_url, qr{^\Q$redirect_url\E\?}, 'consent redirects to the oauth2c callback' );
-ok( ( Mojo::URL->new($cb_url)->query->param('code') // '' ) ne '',
-	'callback redirect carries an authorization code' );
+ok( ( Mojo::URL->new($cb_url)->query->param('code') // '' ) ne '', 'callback redirect carries an authorization code' );
 
 # Deliver the redirect to oauth2c's callback server; oauth2c then redeems the
 # code at our token endpoint (client_secret_basic + PKCE verifier).
@@ -516,7 +509,7 @@ while ( time() < $exit_deadline ) {
 		$oauth2c_pid    = undef;
 		last;
 	}
-	select( undef, undef, undef, 0.2 );
+	sleep 0.2;
 }
 
 my $output = $read_out->();
@@ -555,7 +548,7 @@ SKIP: {
 	is( $claims->{sub},   'alice',             'id_token sub is the logged-in user' );
 	is( $claims->{email}, 'alice@example.com', 'id_token carries the email claim' );
 	is( $claims->{name},  'Alice Wonderland',  'id_token carries the profile name claim' );
-}
+} ## end SKIP:
 
 _cleanup_children();
 done_testing;

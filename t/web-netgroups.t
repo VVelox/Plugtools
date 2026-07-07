@@ -6,10 +6,10 @@ use warnings;
 # being installed. Must happen before App::Nisaba::Web is loaded.
 use File::Basename ();
 use File::Spec;
+
 BEGIN {
-	my $share = File::Spec->rel2abs(
-		File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' )
-	);
+	my $share
+		= File::Spec->rel2abs( File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' ) );
 	require File::ShareDir;
 	no warnings 'redefine';
 	*File::ShareDir::dist_dir = sub { $share };
@@ -19,9 +19,10 @@ BEGIN {
 
 	# Serve over plain HTTP in tests so the session cookie round-trips.
 	$ENV{NISABA_COOKIE_SECURE} = '0' unless defined $ENV{NISABA_COOKIE_SECURE};
-}
+} ## end BEGIN
 
 use Test::More;
+use Mojo::Util ();
 use Test::Mojo;
 
 eval { require App::Nisaba::Web };
@@ -32,13 +33,16 @@ if ($@) {
 # ── Fake Net::LDAP::Entry ─────────────────────────────────────────────────────
 
 {
+
 	package FakeEntry;
+
 	sub new {
 		my ( $class, %attrs ) = @_;
 		return bless { attrs => \%attrs, _dn => delete $attrs{_dn} // '' }, $class;
 	}
 	sub dn         { return $_[0]->{_dn} }
 	sub attributes { return keys %{ $_[0]->{attrs} } }
+
 	sub get_value {
 		my ( $self, $attr ) = @_;
 		my $v = $self->{attrs}{$attr};
@@ -88,14 +92,10 @@ sub _install_stubs {
 	my %methods = ( %defaults, %overrides );
 
 	my $fake_pt = bless {}, 'FakePT';
-	for my $name ( keys %methods ) {
-		no strict 'refs';
-		no warnings 'redefine';
-		*{ "FakePT::$name" } = $methods{$name};
-	}
+	Mojo::Util::monkey_patch( 'FakePT', %methods );
 
 	$app->helper( pt => sub { $fake_pt } );
-}
+} ## end sub _install_stubs
 
 # Add a same-host Referer to every POST so the middleware check passes
 sub _add_referer_hook {
@@ -109,7 +109,7 @@ sub _add_referer_hook {
 			$tx->req->headers->header( 'X-CSRF-Token' => 'testcsrf' );
 		}
 	);
-}
+} ## end sub _add_referer_hook
 
 my $t = Test::Mojo->new('App::Nisaba::Web');
 _install_stubs( $t->app );
@@ -121,23 +121,21 @@ $t->app->hook( before_dispatch => sub { $_[0]->session( admin_user => 'testadmin
 # ── index ─────────────────────────────────────────────────────────────────────
 
 $t->get_ok('/netgroups')
-  ->status_is(200)
-  ->content_like( qr/alpha/, 'index lists alpha netgroup' )
-  ->content_like( qr/beta/,  'index lists beta netgroup' );
+	->status_is(200)
+	->content_like( qr/alpha/, 'index lists alpha netgroup' )
+	->content_like( qr/beta/,  'index lists beta netgroup' );
 
 # index when getNetgroups dies → flash is stored; appears on the next request
 _install_stubs( $t->app, getNetgroups => sub { die "LDAP down\n" } );
 $t->get_ok('/netgroups')->status_is(200);    # triggers flash, renders empty list
 _install_stubs( $t->app );                   # restore working stubs
 $t->get_ok('/netgroups')
-  ->status_is(200)
-  ->content_like( qr/LDAP down/, 'index shows flash error on subsequent request' );
+	->status_is(200)
+	->content_like( qr/LDAP down/, 'index shows flash error on subsequent request' );
 
 # ── add (GET) ─────────────────────────────────────────────────────────────────
 
-$t->get_ok('/netgroups/add')
-  ->status_is(200)
-  ->content_like( qr/Add Netgroup/, 'add form renders' );
+$t->get_ok('/netgroups/add')->status_is(200)->content_like( qr/Add Netgroup/, 'add form renders' );
 
 # ── create ────────────────────────────────────────────────────────────────────
 
@@ -151,111 +149,87 @@ _install_stubs(
 );
 
 $t->post_ok( '/netgroups', form => { group => 'gamma', description => 'Gamma group' } )
-  ->status_is(302)
-  ->header_like( Location => qr{/netgroups$}, 'create redirects to index' );
+	->status_is(302)
+	->header_like( Location => qr{/netgroups$}, 'create redirects to index' );
 is( $created->{group},       'gamma',       'addNetgroup received correct group name' );
 is( $created->{description}, 'Gamma group', 'addNetgroup received description' );
 
 # create failure → redirect back to add
 _install_stubs( $t->app, addNetgroup => sub { die "create failed\n" } );
 $t->post_ok( '/netgroups', form => { group => 'bad' } )
-  ->status_is(302)
-  ->header_like( Location => qr{/netgroups/add}, 'create failure redirects to add form' );
+	->status_is(302)
+	->header_like( Location => qr{/netgroups/add}, 'create failure redirects to add form' );
 _install_stubs( $t->app );
 
 # ── show ──────────────────────────────────────────────────────────────────────
 
 $t->get_ok('/netgroups/alpha')
-  ->status_is(200)
-  ->content_like( qr/alpha/,          'show renders netgroup name' )
-  ->content_like( qr/Alpha netgroup/, 'show renders description' )
-  ->content_like( qr/host1,user1/,    'show renders triple' )
-  ->content_like( qr/beta/,           'show renders member netgroup' );
+	->status_is(200)
+	->content_like( qr/alpha/,          'show renders netgroup name' )
+	->content_like( qr/Alpha netgroup/, 'show renders description' )
+	->content_like( qr/host1,user1/,    'show renders triple' )
+	->content_like( qr/beta/,           'show renders member netgroup' );
 
 # show when getNetgroupEntry returns undef → redirect to index
 _install_stubs( $t->app, getNetgroupEntry => sub { undef } );
 $t->get_ok('/netgroups/missing')
-  ->status_is(302)
-  ->header_like( Location => qr{/netgroups$}, 'show redirects to index for unknown netgroup' );
+	->status_is(302)
+	->header_like( Location => qr{/netgroups$}, 'show redirects to index for unknown netgroup' );
 _install_stubs( $t->app );
 
 # ── update: description ───────────────────────────────────────────────────────
 
 my $desc_args;
-_install_stubs(
-	$t->app,
-	netgroupDescriptionChange => sub { my ( $self, $args ) = @_; $desc_args = $args },
-);
+_install_stubs( $t->app, netgroupDescriptionChange => sub { my ( $self, $args ) = @_; $desc_args = $args }, );
 $t->post_ok( '/netgroups/alpha', form => { action => 'description', description => 'New desc' } )
-  ->status_is(302)
-  ->header_like( Location => qr{/netgroups/alpha}, 'description update redirects to show' );
+	->status_is(302)
+	->header_like( Location => qr{/netgroups/alpha}, 'description update redirects to show' );
 is( $desc_args->{description}, 'New desc', 'netgroupDescriptionChange got correct description' );
 
 # ── update: triple_add ────────────────────────────────────────────────────────
 
 my $triple_add_args;
-_install_stubs(
-	$t->app,
-	netgroupTripleAdd => sub { my ( $self, $args ) = @_; $triple_add_args = $args },
-);
-$t->post_ok( '/netgroups/alpha',
-	form => { action => 'triple_add', triple => '(newhost,newuser,example.com)' } )
-  ->status_is(302);
-is( $triple_add_args->{triple}, '(newhost,newuser,example.com)',
-	'triple_add passes correct triple' );
+_install_stubs( $t->app, netgroupTripleAdd => sub { my ( $self, $args ) = @_; $triple_add_args = $args }, );
+$t->post_ok( '/netgroups/alpha', form => { action => 'triple_add', triple => '(newhost,newuser,example.com)' } )
+	->status_is(302);
+is( $triple_add_args->{triple}, '(newhost,newuser,example.com)', 'triple_add passes correct triple' );
 
 # ── update: triple_remove ─────────────────────────────────────────────────────
 
 my $triple_rm_args;
-_install_stubs(
-	$t->app,
-	netgroupTripleRemove => sub { my ( $self, $args ) = @_; $triple_rm_args = $args },
-);
-$t->post_ok( '/netgroups/alpha',
-	form => { action => 'triple_remove', triple => '(host1,user1,example.com)' } )
-  ->status_is(302);
-is( $triple_rm_args->{triple}, '(host1,user1,example.com)',
-	'triple_remove passes correct triple' );
+_install_stubs( $t->app, netgroupTripleRemove => sub { my ( $self, $args ) = @_; $triple_rm_args = $args }, );
+$t->post_ok( '/netgroups/alpha', form => { action => 'triple_remove', triple => '(host1,user1,example.com)' } )
+	->status_is(302);
+is( $triple_rm_args->{triple}, '(host1,user1,example.com)', 'triple_remove passes correct triple' );
 
 # ── update: member_add ───────────────────────────────────────────────────────
 
 my $member_add_args;
-_install_stubs(
-	$t->app,
-	netgroupMemberAdd => sub { my ( $self, $args ) = @_; $member_add_args = $args },
-);
-$t->post_ok( '/netgroups/alpha', form => { action => 'member_add', member => 'gamma' } )
-  ->status_is(302);
+_install_stubs( $t->app, netgroupMemberAdd => sub { my ( $self, $args ) = @_; $member_add_args = $args }, );
+$t->post_ok( '/netgroups/alpha', form => { action => 'member_add', member => 'gamma' } )->status_is(302);
 is( $member_add_args->{member}, 'gamma', 'member_add passes correct member' );
 
 # ── update: member_remove ────────────────────────────────────────────────────
 
 my $member_rm_args;
-_install_stubs(
-	$t->app,
-	netgroupMemberRemove => sub { my ( $self, $args ) = @_; $member_rm_args = $args },
-);
-$t->post_ok( '/netgroups/alpha', form => { action => 'member_remove', member => 'beta' } )
-  ->status_is(302);
+_install_stubs( $t->app, netgroupMemberRemove => sub { my ( $self, $args ) = @_; $member_rm_args = $args }, );
+$t->post_ok( '/netgroups/alpha', form => { action => 'member_remove', member => 'beta' } )->status_is(302);
 is( $member_rm_args->{member}, 'beta', 'member_remove passes correct member' );
 
 # ── update: unknown action ────────────────────────────────────────────────────
 
 _install_stubs( $t->app );
 $t->post_ok( '/netgroups/alpha', form => { action => 'bogus' } )
-  ->status_is(302)
-  ->header_like( Location => qr{/netgroups/alpha}, 'unknown action redirects to show' );
+	->status_is(302)
+	->header_like( Location => qr{/netgroups/alpha}, 'unknown action redirects to show' );
 
 # ── delete ────────────────────────────────────────────────────────────────────
 
 my $deleted;
-_install_stubs(
-	$t->app,
-	deleteNetgroup => sub { my ( $self, $args ) = @_; $deleted = $args->{group} },
-);
+_install_stubs( $t->app, deleteNetgroup => sub { my ( $self, $args ) = @_; $deleted = $args->{group} }, );
 $t->post_ok('/netgroups/alpha/delete')
-  ->status_is(302)
-  ->header_like( Location => qr{/netgroups$}, 'delete redirects to index' );
+	->status_is(302)
+	->header_like( Location => qr{/netgroups$}, 'delete redirects to index' );
 is( $deleted, 'alpha', 'deleteNetgroup called with correct group name' );
 
 # ── netgroupbase not configured ───────────────────────────────────────────────
@@ -265,14 +239,14 @@ _install_stubs( $t->app, netgroupbaseConfigured => sub { 0 } );
 
 for my $path (qw( /netgroups /netgroups/add /netgroups/somegroup )) {
 	$t->get_ok($path)
-	  ->status_is(302)
-	  ->header_like( Location => qr{/groups$}, "GET $path redirects to groups when unconfigured" );
+		->status_is(302)
+		->header_like( Location => qr{/groups$}, "GET $path redirects to groups when unconfigured" );
 }
 
 for my $path (qw( /netgroups /netgroups/somegroup /netgroups/somegroup/delete )) {
 	$t->post_ok( $path, form => { action => 'description' } )
-	  ->status_is(302)
-	  ->header_like( Location => qr{/groups$}, "POST $path redirects to groups when unconfigured" );
+		->status_is(302)
+		->header_like( Location => qr{/groups$}, "POST $path redirects to groups when unconfigured" );
 }
 
 _install_stubs( $t->app );

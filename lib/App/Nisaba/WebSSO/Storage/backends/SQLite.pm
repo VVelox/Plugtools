@@ -61,7 +61,7 @@ sub new {
 	if ( $path ne ':memory:' ) {
 		my $dir = File::Basename::dirname($path);
 		if ( !-d $dir ) {
-			File::Path::make_path( $dir, { mode => 0700 } )
+			File::Path::make_path( $dir, { mode => oct('0700') } )
 				or Carp::croak("Failed to create storage directory '$dir': $!");
 		}
 	}

@@ -66,7 +66,7 @@ sub new {
 	my $self = bless {
 		path             => $path,
 		policies         => $args->{policies} || {},
-		now              => $args->{now} || sub { time() },
+		now              => $args->{now}      || sub { time() },
 		cleanup_interval => ( defined $args->{cleanup_interval} ? $args->{cleanup_interval} : 300 ),
 		_last_cleanup    => 0,
 	}, $class;
@@ -74,7 +74,7 @@ sub new {
 	if ( $path ne ':memory:' ) {
 		my $dir = File::Basename::dirname($path);
 		if ( !-d $dir ) {
-			File::Path::make_path( $dir, { mode => 0700 } )
+			File::Path::make_path( $dir, { mode => oct('0700') } )
 				or Carp::croak("Failed to create rate-limiter directory '$dir': $!");
 		}
 	}
@@ -146,8 +146,8 @@ anything.
 sub check {
 	my ( $self, $scope, $id ) = @_;
 	my $now = $self->_now;
-	my $row = $self->{dbh}
-		->selectrow_arrayref( 'SELECT locked_until FROM rate_limit WHERE rlkey = ?', undef, $self->_key( $scope, $id ) );
+	my $row = $self->{dbh}->selectrow_arrayref( 'SELECT locked_until FROM rate_limit WHERE rlkey = ?', undef,
+		$self->_key( $scope, $id ) );
 	if ( $row && defined $row->[0] && $row->[0] > $now ) {
 		return { allowed => 0, retry_after => $row->[0] - $now };
 	}
@@ -172,7 +172,7 @@ sub fail {
 		return { allowed => 0, retry_after => $state->{locked_until} - $now };
 	}
 	return { allowed => 1, retry_after => 0 };
-} ## end sub fail
+}
 
 =head2 hit
 
@@ -208,9 +208,9 @@ sub _record {
 	my ( $count, $window_start, $locked_until );
 	eval {
 		$dbh->begin_work;    # IMMEDIATE: take the write lock up front
-		my $row = $dbh->selectrow_arrayref(
-			'SELECT count, window_start, locked_until FROM rate_limit WHERE rlkey = ?',
-			undef, $key );
+		my $row
+			= $dbh->selectrow_arrayref( 'SELECT count, window_start, locked_until FROM rate_limit WHERE rlkey = ?',
+				undef, $key );
 
 		if ($row) {
 			( $count, $window_start, $locked_until ) = @$row;
@@ -264,7 +264,7 @@ Deletes expired rows and returns the number removed.
 
 sub cleanup {
 	my $self = shift;
-	my $n = $self->{dbh}->do( 'DELETE FROM rate_limit WHERE expires_at <= ?', undef, $self->_now );
+	my $n    = $self->{dbh}->do( 'DELETE FROM rate_limit WHERE expires_at <= ?', undef, $self->_now );
 	return ( $n && $n ne '0E0' ) ? ( $n + 0 ) : 0;
 }
 

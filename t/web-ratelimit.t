@@ -5,18 +5,19 @@ use warnings;
 use File::Basename ();
 use File::Spec;
 use File::Temp ();
+
 BEGIN {
-	my $share = File::Spec->rel2abs(
-		File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' )
-	);
+	my $share
+		= File::Spec->rel2abs( File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' ) );
 	require File::ShareDir;
 	no warnings 'redefine';
 	*File::ShareDir::dist_dir = sub { $share };
 
 	$ENV{NISABA_SECRET}        = 'test-secret-nisaba' unless defined $ENV{NISABA_SECRET};
 	$ENV{NISABA_COOKIE_SECURE} = '0'                  unless defined $ENV{NISABA_COOKIE_SECURE};
-}
+} ## end BEGIN
 use Test::More;
+use Mojo::Util ();
 use Test::Mojo;
 
 # ── Unit: the RateLimiter engine ──────────────────────────────────────────────
@@ -27,7 +28,7 @@ my $now = 1_000;
 my $rl  = App::Nisaba::WebUtil::RateLimiter->new(
 	{
 		path     => ':memory:',
-		now      => sub {$now},
+		now      => sub { $now },
 		policies => {
 			login  => { max => 3, window => 100, lockout => 60 },
 			forgot => { max => 2, window => 100, lockout => 60 },
@@ -65,13 +66,13 @@ ok( $allowed->( 'login', 'carol' ), 'reset clears the lock' );
 $now = 3_000;
 $rl->fail( 'login', 'dave' );
 $rl->fail( 'login', 'dave' );
-$now = 3_200;                     # past the 100s window
+$now = 3_200;    # past the 100s window
 $rl->fail( 'login', 'dave' );
 ok( $allowed->( 'login', 'dave' ), 'failures older than the window do not count toward a lock' );
 
 # hit() mode (request-rate): every call counts, blocks at the threshold
 $now = 4_000;
-ok( $rl->hit( 'forgot', 'e' )->{allowed},  'forgot hit 1 allowed' );
+ok( $rl->hit( 'forgot',  'e' )->{allowed}, 'forgot hit 1 allowed' );
 ok( !$rl->hit( 'forgot', 'e' )->{allowed}, 'forgot hit 2 reaches the limit and blocks' );
 
 # cleanup removes only expired rows
@@ -95,26 +96,22 @@ SKIP: {
 		or skip( "WebSelfService unavailable: $@", 8 );
 
 	my $build = sub {
-		my (%ini) = @_;
-		my $t = Test::Mojo->new('App::Nisaba::WebSelfService');
+		my (%ini)   = @_;
+		my $t       = Test::Mojo->new('App::Nisaba::WebSelfService');
 		my %methods = (
-			error            => sub { 0 },
-			errorString      => sub { '' },
-			errorblank       => sub { },
+			error              => sub { 0 },
+			errorString        => sub { '' },
+			errorblank         => sub { },
 			userVerifyPassword => sub {
 				my ( $s, $a ) = @_;
 				die "bad password\n" unless ( $a->{password} // '' ) eq 'correct';
 			},
 			userSelfInfo           => sub { return { totpStatus => 'inactive' } },
-			smtpAvailable          => sub { 0 },    # login template renders reset_available
+			smtpAvailable          => sub { 0 },                                     # login template renders reset_available
 			passkeySchemaAvailable => sub { 0 },
 		);
-		my $fake = bless { ini => { '' => { %ini } } }, 'FakePT';
-		for my $name ( keys %methods ) {
-			no strict 'refs';
-			no warnings 'redefine';
-			*{"FakePT::$name"} = $methods{$name};
-		}
+		my $fake = bless { ini => { '' => {%ini} } }, 'FakePT';
+		Mojo::Util::monkey_patch( 'FakePT', %methods );
 		$t->app->helper( pt => sub { $fake } );
 
 		# same-origin Referer + valid CSRF on every POST
@@ -129,13 +126,13 @@ SKIP: {
 		);
 		$t->app->hook( before_dispatch => sub { $_[0]->session( csrf_token => 'testcsrf' ) } );
 		return $t;
-	};
+	}; ## end $build = sub
 
 	# Enabled, in-memory store, primary (user+ip) limit of 3; IP backstop high.
 	my $t = $build->(
-		rateLimit          => 1,
-		rateLimitPath      => ':memory:',
-		rateLimitLoginMax  => 3,
+		rateLimit           => 1,
+		rateLimitPath       => ':memory:',
+		rateLimitLoginMax   => 3,
 		rateLimitLoginIpMax => 9999,
 	);
 
@@ -145,18 +142,18 @@ SKIP: {
 	$t->post_ok( '/login', form => { user => 'alice', pass => 'nope' } )->status_is(302);
 	# ...the fourth is throttled.
 	$t->post_ok( '/login', form => { user => 'alice', pass => 'nope' } )
-	  ->status_is(429)
-	  ->header_exists( 'Retry-After', '429 carries a Retry-After header' );
+		->status_is(429)
+		->header_exists( 'Retry-After', '429 carries a Retry-After header' );
 
 	# A different user from the same client is unaffected (separate user+ip bucket).
 	$t->post_ok( '/login', form => { user => 'bob', pass => 'nope' } )
-	  ->status_isnt( 429, 'a different username is not caught by the per-(user,ip) lock' );
+		->status_isnt( 429, 'a different username is not caught by the per-(user,ip) lock' );
 
 	# Fail-closed: an unusable store denies the guarded endpoint with 503.
 	my $bad_dir = File::Temp->newdir;
-	my $tc = $build->( rateLimit => 1, rateLimitPath => $bad_dir->dirname );
+	my $tc      = $build->( rateLimit => 1, rateLimitPath => $bad_dir->dirname );
 	$tc->post_ok( '/login', form => { user => 'alice', pass => 'correct' } )
-	  ->status_is( 503, 'guarded endpoint fails closed when the limiter store is unavailable' );
-}
+		->status_is( 503, 'guarded endpoint fails closed when the limiter store is unavailable' );
+} ## end SKIP:
 
 done_testing();

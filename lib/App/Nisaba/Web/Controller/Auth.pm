@@ -1,6 +1,7 @@
 package App::Nisaba::Web::Controller::Auth;
 
 use Mojo::Base 'Mojolicious::Controller', -signatures;
+use experimental 'signatures';    # redundant at runtime; here so perlcritic recognises signatures
 use Mojo::Util      qw(b64_encode);
 use Net::LDAP::Util qw(escape_filter_value);
 
@@ -117,8 +118,10 @@ sub passkey_login_finish ($self) {
 
 	# Verify user is a member of the admin group
 	unless ( $self->_is_admin($user) ) {
-		return $self->render( json => { error => 'You are not authorised to access the admin portal.' },
-			status => 403 );
+		return $self->render(
+			json   => { error => 'You are not authorised to access the admin portal.' },
+			status => 403
+		);
 	}
 
 	my $url    = $self->req->url->to_abs;
@@ -244,7 +247,7 @@ sub _is_admin ( $self, $user ) {
 	# Find the admin group in LDAP
 	my $grp_mesg = $ldap->search(
 		base   => $pt->{ini}->{''}->{groupbase},
-		filter => '(&(objectClass=posixGroup)(cn=' . escape_filter_value( $admin_grp ) . '))',
+		filter => '(&(objectClass=posixGroup)(cn=' . escape_filter_value($admin_grp) . '))',
 	);
 	my $grp_entry = $grp_mesg->pop_entry;
 	return 0 unless $grp_entry;
@@ -260,7 +263,7 @@ sub _is_admin ( $self, $user ) {
 	if ( defined $grp_gid ) {
 		my $usr_mesg = $ldap->search(
 			base   => $pt->{ini}->{''}->{userbase},
-			filter => '(uid=' . escape_filter_value( $user ) . ')',
+			filter => '(uid=' . escape_filter_value($user) . ')',
 			attrs  => ['gidNumber'],
 		);
 		my $usr_entry = $usr_mesg->pop_entry;

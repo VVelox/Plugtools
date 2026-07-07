@@ -33,8 +33,7 @@ my ( $ret, $err, $entry );
 
 ( $ret, $err ) = pt_try( sub { $pt->addGroup( { group => 'staff', gid => 5000 } ) } );
 is( $err, '', 'fixture group added' );
-( $ret, $err ) = pt_try(
-	sub { $pt->addUser( { user => 'alice', uid => 6000, group => 'staff' } ) } );
+( $ret, $err ) = pt_try( sub { $pt->addUser( { user => 'alice', uid => 6000, group => 'staff' } ) } );
 is( $err, '', 'fixture user added' );
 
 sub fetch_alice {
@@ -49,8 +48,8 @@ is( $err, '', 'userConvertToInetOrgPerson succeeds' );
 
 $entry = fetch_alice();
 my %oc = map { lc($_) => 1 } $entry->get_value('objectClass');
-ok( $oc{inetorgperson},  'inetOrgPerson objectClass added' );
-ok( !$oc{account},       'account objectClass dropped' );
+ok( $oc{inetorgperson}, 'inetOrgPerson objectClass added' );
+ok( !$oc{account},      'account objectClass dropped' );
 is( $entry->get_value('sn'), 'alice', 'sn fallback set from the username' );
 
 # Conversion is idempotent: converting again succeeds without error.
@@ -100,12 +99,26 @@ is( $pt->error, 17, 'change on unknown user sets error 17' );
 
 my @multi = (
 	# [ add-method, remove-method, arg-key, value1, value2, LDAP attribute ]
-	[ 'userMailAdd',              'userMailRemove',              'mail',              'alice@example.com', 'a2@example.com', 'mail' ],
-	[ 'userTelephoneNumberAdd',   'userTelephoneNumberRemove',   'telephoneNumber',   '+1-555-0100',       '+1-555-0101',    'telephoneNumber' ],
-	[ 'userMobileAdd',            'userMobileRemove',            'mobile',            '+1-555-0200',       '+1-555-0201',    'mobile' ],
-	[ 'userPreferredLanguageAdd', 'userPreferredLanguageRemove', 'preferredLanguage', 'en',                'de',             'preferredLanguage' ],
-	[ 'userLabeledURIAdd',        'userLabeledURIRemove',        'labeledURI',        'https://a.example', 'https://b.example', 'labeledURI' ],
-	[ 'userPostalAddressAdd',     'userPostalAddressRemove',     'postalAddress',     '1 First St',        '2 Second St',    'postalAddress' ],
+	[ 'userMailAdd', 'userMailRemove', 'mail', 'alice@example.com', 'a2@example.com', 'mail' ],
+	[
+		'userTelephoneNumberAdd', 'userTelephoneNumberRemove',
+		'telephoneNumber',        '+1-555-0100',
+		'+1-555-0101',            'telephoneNumber'
+	],
+	[ 'userMobileAdd', 'userMobileRemove', 'mobile', '+1-555-0200', '+1-555-0201', 'mobile' ],
+	[
+		'userPreferredLanguageAdd', 'userPreferredLanguageRemove',
+		'preferredLanguage',        'en',
+		'de',                       'preferredLanguage'
+	],
+	[
+		'userLabeledURIAdd', 'userLabeledURIRemove', 'labeledURI', 'https://a.example',
+		'https://b.example', 'labeledURI'
+	],
+	[
+		'userPostalAddressAdd', 'userPostalAddressRemove', 'postalAddress', '1 First St',
+		'2 Second St',          'postalAddress'
+	],
 );
 
 for my $m (@multi) {
@@ -123,7 +136,7 @@ for my $m (@multi) {
 	is( $err, '', "$remove succeeds" );
 	$entry = fetch_alice();
 	is_deeply( [ $entry->get_value($attr) ], [$v1], "$attr keeps the remaining value" );
-}
+} ## end for my $m (@multi)
 
 ( $ret, $err ) = pt_try( sub { $pt->userMailAdd( { user => 'alice' } ) } );
 is( $pt->error, 49, 'missing mail sets error 49 (noMail)' );
@@ -170,7 +183,7 @@ if ( @cn_now == 1 ) {
 	isnt( $err, '', 'removing the last cn fails' );
 	is( $pt->error, 71, 'last cn sets error 71 (lastCN)' );
 } else {
-	fail('expected exactly one cn for the lastCN check, got ' . scalar @cn_now);
+	fail( 'expected exactly one cn for the lastCN check, got ' . scalar @cn_now );
 	fail('lastCN error-code check skipped');
 }
 

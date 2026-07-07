@@ -3,6 +3,7 @@ package App::Nisaba::WebUtil;
 use strict;
 use warnings;
 use Exporter 'import';
+use Mojo::Util                        ();
 use App::Nisaba::WebUtil::RateLimiter ();
 
 our @EXPORT_OK = qw(secure_compare);
@@ -33,19 +34,16 @@ secrets, HMACs, tokens).
 
 The length of C<$a> is compared to C<$b> up front, which is standard practice
 (e.g. Rails' C<secure_compare>); only the per-character comparison needs to be
-constant time.
+constant time. The comparison itself is delegated to
+L<Mojo::Util/secure_compare>; this wrapper adds tolerance of C<undef> operands.
 
 =cut
 
 sub secure_compare {
-	my ( $a, $b ) = @_;
-	return 0 unless defined $a && defined $b;
-	return 0 unless length($a) == length($b);
-
-	my $diff = 0;
-	$diff |= ord( substr( $a, $_, 1 ) ) ^ ord( substr( $b, $_, 1 ) ) for 0 .. length($a) - 1;
-	return $diff == 0;
-} ## end sub secure_compare
+	my ( $x, $y ) = @_;
+	return 0 unless defined $x && defined $y;
+	return Mojo::Util::secure_compare( $x, $y ) ? 1 : 0;
+}
 
 # --------------------------------------------------------------------------- #
 # Rate limiting
@@ -86,9 +84,12 @@ opened, guarded endpoints fail B<closed>.
 # scope => ordered list of sub-limits. 'backstop' sub-limits (the per-IP one)
 # are not cleared on success so a single valid credential can't reset them.
 my %SCOPE_KEYS = (
-	login   => [ { scope => 'login',   parts => [ 'user', 'ip' ] }, { scope => 'login_ip',  parts => ['ip'], backstop => 1 } ],
-	totp    => [ { scope => 'totp',    parts => [ 'user', 'ip' ] }, { scope => 'totp_ip',   parts => ['ip'], backstop => 1 } ],
-	forgot  => [ { scope => 'forgot',  parts => [ 'user', 'ip' ] }, { scope => 'forgot_ip', parts => ['ip'], backstop => 1 } ],
+	login =>
+		[ { scope => 'login', parts => [ 'user', 'ip' ] }, { scope => 'login_ip', parts => ['ip'], backstop => 1 } ],
+	totp =>
+		[ { scope => 'totp', parts => [ 'user', 'ip' ] }, { scope => 'totp_ip', parts => ['ip'], backstop => 1 } ],
+	forgot =>
+		[ { scope => 'forgot', parts => [ 'user', 'ip' ] }, { scope => 'forgot_ip', parts => ['ip'], backstop => 1 } ],
 	passkey => [ { scope => 'passkey', parts => ['ip'] } ],
 	reset   => [ { scope => 'reset',   parts => ['ip'] } ],
 );
@@ -110,13 +111,13 @@ sub install_rate_limiter {
 
 	# Lazily built and memoized, so tests (which override the pt helper after
 	# startup) and the real app both read config from pt at first use.
-	my %S = ( built => 0, enabled => 0, rl => undef );
+	my %S      = ( built => 0, enabled => 0, rl => undef );
 	my $ensure = sub {
 		my ($c) = @_;
 		return \%S if $S{built};
 		$S{built} = 1;
 		my $ini = ( eval { $c->pt->{ini}->{''} } ) || {};
-		my $en = $ini->{rateLimit} // $ENV{NISABA_RATELIMIT} // 1;
+		my $en  = $ini->{rateLimit} // $ENV{NISABA_RATELIMIT} // 1;
 		$S{enabled} = ( $en && $en ne '0' ) ? 1 : 0;
 		if ( $S{enabled} ) {
 			my $path = $ini->{rateLimitPath} // $ENV{NISABA_RATELIMIT_PATH}
@@ -128,24 +129,23 @@ sub install_rate_limiter {
 			$c->app->log->error( 'Rate limiter DB unavailable, failing closed: ' . ( $@ || '' ) ) if !$S{rl};
 		}
 		return \%S;
-	};
+	}; ## end $ensure = sub
 
 	$app->helper( rate_limiter => sub { my $c = shift; $ensure->($c)->{rl} } );
 
 	$app->helper( rate_check => sub { my ( $c, $scope, %p ) = @_; _rl_evaluate( $c, $ensure->($c), $scope, \%p, 0 ) } );
 	$app->helper( rate_hit   => sub { my ( $c, $scope, %p ) = @_; _rl_evaluate( $c, $ensure->($c), $scope, \%p, 1 ) } );
-	$app->helper(
-		rate_fail => sub { my ( $c, $scope, %p ) = @_; _rl_mutate( $c, $ensure->($c), $scope, \%p, 'fail' ); return } );
-	$app->helper(
-		rate_reset => sub { my ( $c, $scope, %p ) = @_; _rl_mutate( $c, $ensure->($c), $scope, \%p, 'reset' ); return }
-	);
+	$app->helper( rate_fail =>
+			sub { my ( $c, $scope, %p ) = @_; _rl_mutate( $c, $ensure->($c), $scope, \%p, 'fail' ); return } );
+	$app->helper( rate_reset =>
+			sub { my ( $c, $scope, %p ) = @_; _rl_mutate( $c, $ensure->($c), $scope, \%p, 'reset' ); return } );
 
 	$app->helper(
 		rate_guard => sub {
 			my ( $c, $scope, %opts ) = @_;
 			my $render = delete $opts{render} || {};
-			my $hit    = delete $opts{hit} ? 1 : 0;
-			my $res    = $hit ? $c->rate_hit( $scope, %opts ) : $c->rate_check( $scope, %opts );
+			my $hit    = delete $opts{hit} ? 1                             : 0;
+			my $res    = $hit              ? $c->rate_hit( $scope, %opts ) : $c->rate_check( $scope, %opts );
 			return 1 if $res->{allowed};
 			_rl_render_block( $c, $res, $render );
 			return 0;
@@ -163,11 +163,11 @@ sub _policies_from_config {
 		my %p;
 		for my $param (qw(max window lockout)) {
 			my $key = 'rateLimit' . $camel . ucfirst($param);
-			my $v = $ini->{$key};
+			my $v   = $ini->{$key};
 			$p{$param} = ( defined $v && $v ne '' ) ? ( $v + 0 ) : $DEFAULT_POLICIES{$scope}{$param};
 		}
 		$pol{$scope} = \%p;
-	}
+	} ## end for my $scope ( keys %DEFAULT_POLICIES )
 	return %pol;
 } ## end sub _policies_from_config
 
@@ -177,8 +177,8 @@ sub _rl_build_id {
 	my ( $sub, $parts, $ip ) = @_;
 	my @vals;
 	for my $p ( @{ $sub->{parts} } ) {
-		push @vals, $ip                             if $p eq 'ip';
-		push @vals, lc( $parts->{user} // '' )      if $p eq 'user';
+		push @vals, $ip                        if $p eq 'ip';
+		push @vals, lc( $parts->{user} // '' ) if $p eq 'user';
 	}
 	return join( "\0", @vals );
 }
@@ -186,14 +186,14 @@ sub _rl_build_id {
 # Returns { allowed => 1|0, retry_after => secs, unavailable => 1? }.
 sub _rl_evaluate {
 	my ( $c, $st, $scope, $parts, $record ) = @_;
-	return { allowed => 1 } unless $st->{enabled};
+	return { allowed => 1 }                                      unless $st->{enabled};
 	return { allowed => 0, unavailable => 1, retry_after => 30 } unless $st->{rl};
 
 	my $ip    = $c->tx->remote_address // '';
 	my $worst = { allowed => 1, retry_after => 0 };
 	for my $sub ( _rl_subscopes($scope) ) {
 		my $id = _rl_build_id( $sub, $parts, $ip );
-		my $r = eval { $record ? $st->{rl}->hit( $sub->{scope}, $id ) : $st->{rl}->check( $sub->{scope}, $id ) };
+		my $r  = eval { $record ? $st->{rl}->hit( $sub->{scope}, $id ) : $st->{rl}->check( $sub->{scope}, $id ) };
 		return { allowed => 0, unavailable => 1, retry_after => 30 } if $@;
 		if ( !$r->{allowed} && ( $r->{retry_after} // 0 ) > $worst->{retry_after} ) {
 			$worst = { allowed => 0, retry_after => $r->{retry_after} };
@@ -223,15 +223,15 @@ sub _rl_render_block {
 	if ( $render->{json} ) {
 		return $c->render(
 			json => {
-				error => ( $res->{unavailable} ? 'service_unavailable' : 'too_many_requests' ),
+				error       => ( $res->{unavailable} ? 'service_unavailable' : 'too_many_requests' ),
 				retry_after => ( $secs + 0 ),
 			},
 			status => $status,
 		);
 	}
 
-	my $msg =
-		$res->{unavailable}
+	my $msg
+		= $res->{unavailable}
 		? 'The service is temporarily unavailable. Please try again shortly.'
 		: 'Too many attempts. Please try again in ' . _rl_fmt_secs($secs) . '.';
 	$c->stash( rate_error => $msg );

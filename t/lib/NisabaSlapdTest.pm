@@ -57,10 +57,8 @@ sub setup {
 	return ( undef, 'could not find the OpenLDAP schema directory (nis.ldif)' )
 		unless $schema_dir;
 
-	my $repo_schemas = File::Spec->catdir(
-		File::Basename::dirname(__FILE__),
-		File::Spec->updir, File::Spec->updir, 'schemas'
-	);
+	my $repo_schemas
+		= File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, File::Spec->updir, 'schemas' );
 	return ( undef, "repo schemas directory not found at $repo_schemas" )
 		unless -d $repo_schemas;
 
@@ -96,7 +94,7 @@ sub setup {
 
 	my %ini = (
 		server       => $uri,
-		port         => 389,                            # ignored for ldapi://
+		port         => 389,                      # ignored for ldapi://
 		bind         => $slapd->admin_user,
 		pass         => $slapd->admin_password,
 		userbase     => "ou=users,$SUFFIX",
@@ -147,7 +145,7 @@ sub _load_schemas {
 			my $mesg = $ldap->add($entry);
 			return "loading stock schema $name failed: " . $mesg->error if $mesg->code;
 		}
-	}
+	} ## end for my $name (qw(cosine inetorgperson nis))
 
 	# Repo schemas (slapd.conf format). openssh-lpk before the rest only by
 	# convention; none of them depend on each other.
@@ -167,7 +165,7 @@ sub _load_schemas {
 			]
 		);
 		return "loading repo schema $name failed: " . $mesg->error if $mesg->code;
-	}
+	} ## end for my $name (qw(openssh-lpk totp passkey oidc))
 
 	return '';
 } ## end sub _load_schemas
@@ -196,10 +194,10 @@ sub _schema_file_to_olc {
 		)
 	{
 		my ( $kind, $def ) = ( lc $1, $2 );
-		$def =~ s/\s+/ /g;      # collapse continuation whitespace
+		$def =~ s/\s+/ /g;    # collapse continuation whitespace
 		if   ( $kind eq 'attributetype' ) { push @attrs, $def }
 		else                              { push @ocs,   $def }
-	}
+	} ## end while ( $text =~ /\b(attributetype|objectclass)\s* )
 
 	return ( undef, undef, 'no attributetype/objectclass definitions found' )
 		unless @attrs || @ocs;
@@ -221,12 +219,12 @@ sub _create_base_tree {
 		return "adding $e->[0] failed: " . $mesg->error if $mesg->code;
 	}
 	return '';
-}
+} ## end sub _create_base_tree
 
 sub teardown {
 	my ($env) = @_;
 	return unless $env;
-	eval { $env->{admin}->unbind } if $env->{admin};
+	eval { $env->{admin}->unbind }  if $env->{admin};
 	eval { $env->{slapd}->DESTROY } if $env->{slapd};
 }
 

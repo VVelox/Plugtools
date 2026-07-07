@@ -47,8 +47,8 @@ is( $err, '', 'addGroup with explicit GID succeeds' );
 
 my ($dn);
 ( $dn, $err ) = pt_try( sub { $pt->findGroupDN('devs') } );
-is( $err, '', 'findGroupDN succeeds' );
-is( $dn, "cn=devs,$groupbase", 'group DN is cn-based under groupbase' );
+is( $err, '',                   'findGroupDN succeeds' );
+is( $dn,  "cn=devs,$groupbase", 'group DN is cn-based under groupbase' );
 
 ( $ret, $err ) = pt_try( sub { $pt->isLDAPgroup('devs') } );
 ok( $ret, 'isLDAPgroup true for existing group' );
@@ -58,8 +58,7 @@ ok( $ret, 'isLDAPgroup true for existing group' );
 is( $err, '', 'addGroup with auto GID succeeds' );
 ( $groups, $err ) = pt_try( sub { $pt->getGroups } );
 my ($autogid_entry) = grep { $_->get_value('cn') eq 'autogid' } @{ $groups // [] };
-is( ( $autogid_entry ? $autogid_entry->get_value('gidNumber') : undef ),
-	1001, 'auto-assigned GID starts at GIDstart' );
+is( ( $autogid_entry ? $autogid_entry->get_value('gidNumber') : undef ), 1001, 'auto-assigned GID starts at GIDstart' );
 
 # Error paths.
 ( $ret, $err ) = pt_try( sub { $pt->addGroup( { group => 'devs' } ) } );
@@ -100,12 +99,12 @@ my ($entry);
 ( $entry, $err ) = pt_try( sub { $pt->getUserEntry( { user => 'alice' } ) } );
 is( $err, '', 'getUserEntry succeeds' );
 isa_ok( $entry, 'Net::LDAP::Entry', 'user entry' );
-is( $entry->get_value('uid'),           'alice',             'uid round-trips' );
-is( $entry->get_value('uidNumber'),     6000,                'uidNumber round-trips' );
-is( $entry->get_value('gidNumber'),     5000,                'gidNumber comes from the primary group' );
-is( $entry->get_value('gecos'),         'Alice Wonderland',  'gecos round-trips' );
-is( $entry->get_value('loginShell'),    '/bin/sh',           'loginShell round-trips' );
-is( $entry->get_value('homeDirectory'), '/home/alice/',      'homeDirectory built from HOMEproto' );
+is( $entry->get_value('uid'),           'alice',            'uid round-trips' );
+is( $entry->get_value('uidNumber'),     6000,               'uidNumber round-trips' );
+is( $entry->get_value('gidNumber'),     5000,               'gidNumber comes from the primary group' );
+is( $entry->get_value('gecos'),         'Alice Wonderland', 'gecos round-trips' );
+is( $entry->get_value('loginShell'),    '/bin/sh',          'loginShell round-trips' );
+is( $entry->get_value('homeDirectory'), '/home/alice/',     'homeDirectory built from HOMEproto' );
 
 ( $dn, $err ) = pt_try( sub { $pt->findUserDN('alice') } );
 is( $err, '', 'findUserDN succeeds' );
@@ -119,8 +118,8 @@ ok( $ret, 'isLDAPuser true for existing user' );
 is( $err, '', 'addUser with defaults succeeds' );
 
 ( $entry, $err ) = pt_try( sub { $pt->getUserEntry( { user => 'bob' } ) } );
-is( $entry->get_value('uidNumber'), 1001, 'auto-assigned UID starts at UIDstart' );
-is( $entry->get_value('gecos'), 'bob', 'gecos defaults to the username' );
+is( $entry->get_value('uidNumber'),  1001,                         'auto-assigned UID starts at UIDstart' );
+is( $entry->get_value('gecos'),      'bob',                        'gecos defaults to the username' );
 is( $entry->get_value('loginShell'), $pt->{ini}{''}{defaultShell}, 'shell defaults from config' );
 
 ( $ret, $err ) = pt_try( sub { $pt->isLDAPgroup('bob') } );
@@ -129,8 +128,7 @@ my ($bob_group);
 ( $bob_group, $err ) = pt_try( sub { $pt->getGroups } );
 my ($bg) = grep { $_->get_value('cn') eq 'bob' } @{ $bob_group // [] };
 ( $entry, $err ) = pt_try( sub { $pt->getUserEntry( { user => 'bob' } ) } );
-is( $entry->get_value('gidNumber'), $bg->get_value('gidNumber'),
-	"user's gidNumber matches the auto-created group" );
+is( $entry->get_value('gidNumber'), $bg->get_value('gidNumber'), "user's gidNumber matches the auto-created group" );
 
 # Error paths.
 ( $ret, $err ) = pt_try( sub { $pt->addUser( { user => 'alice' } ) } );
@@ -218,8 +216,8 @@ is_deeply( [ $ag->get_value('memberUid') ], ['alice'], 'removed member is gone' 
 
 # ── groupDescriptionChange ──────────────────────────────────────────────────
 
-( $ret, $err ) = pt_try(
-	sub { $pt->groupDescriptionChange( { group => 'devs', description => 'Development team' } ) } );
+( $ret, $err )
+	= pt_try( sub { $pt->groupDescriptionChange( { group => 'devs', description => 'Development team' } ) } );
 is( $err, '', 'groupDescriptionChange set succeeds' );
 ( $groups, $err ) = pt_try( sub { $pt->getGroups } );
 my ($devs) = grep { $_->get_value('cn') eq 'devs' } @{ $groups // [] };
@@ -259,24 +257,20 @@ my ($alice_dn);
 my $mod = $env->{anchor}->modify( $alice_dn, replace => { userPassword => 'correct horse' } );
 is( $mod->code, 0, 'userPassword set directly via the anchor connection' );
 
-( $ret, $err ) = pt_try(
-	sub { $pt->userVerifyPassword( { user => 'alice', password => 'correct horse' } ) } );
+( $ret, $err ) = pt_try( sub { $pt->userVerifyPassword( { user => 'alice', password => 'correct horse' } ) } );
 is( $err, '', 'correct password verifies' );
 is( $ret, 1,  'userVerifyPassword returns 1 on success' );
 
-( $ret, $err ) = pt_try(
-	sub { $pt->userVerifyPassword( { user => 'alice', password => 'battery staple' } ) } );
+( $ret, $err ) = pt_try( sub { $pt->userVerifyPassword( { user => 'alice', password => 'battery staple' } ) } );
 isnt( $err, '', 'wrong password is rejected' );
 is( $pt->error, 75, 'wrong password sets error 75 (authFailed)' );
 
 # bob exists but has no userPassword: a simple bind as him must fail.
-( $ret, $err ) = pt_try(
-	sub { $pt->userVerifyPassword( { user => 'bob', password => 'anything' } ) } );
+( $ret, $err ) = pt_try( sub { $pt->userVerifyPassword( { user => 'bob', password => 'anything' } ) } );
 isnt( $err, '', 'user without a stored password is rejected' );
 is( $pt->error, 75, 'passwordless user sets error 75 (authFailed)' );
 
-( $ret, $err ) = pt_try(
-	sub { $pt->userVerifyPassword( { user => 'nosuchuser', password => 'x' } ) } );
+( $ret, $err ) = pt_try( sub { $pt->userVerifyPassword( { user => 'nosuchuser', password => 'x' } ) } );
 isnt( $err, '', 'unknown user is rejected' );
 is( $pt->error, 18, 'unknown user sets error 18 (userNotInLDAP)' );
 
@@ -335,10 +329,8 @@ isnt( $err, '', 'deleteGroup without a name fails' );
 # ── Final state ─────────────────────────────────────────────────────────────
 
 ( $users, $err ) = pt_try( sub { $pt->getUsers } );
-is_deeply( [ sort map { $_->get_value('uid') } @{ $users // [] } ],
-	['alice'], 'only alice remains' );
+is_deeply( [ sort map { $_->get_value('uid') } @{ $users // [] } ], ['alice'], 'only alice remains' );
 ( $groups, $err ) = pt_try( sub { $pt->getGroups } );
-is_deeply( [ sort map { $_->get_value('cn') } @{ $groups // [] } ],
-	['devs'], 'only devs remains' );
+is_deeply( [ sort map { $_->get_value('cn') } @{ $groups // [] } ], ['devs'], 'only devs remains' );
 
 done_testing;

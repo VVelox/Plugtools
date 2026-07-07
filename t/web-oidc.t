@@ -6,18 +6,19 @@ use warnings;
 # being installed. Must happen before App::Nisaba::Web is loaded.
 use File::Basename ();
 use File::Spec;
+
 BEGIN {
-	my $share = File::Spec->rel2abs(
-		File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' )
-	);
+	my $share
+		= File::Spec->rel2abs( File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' ) );
 	require File::ShareDir;
 	no warnings 'redefine';
 	*File::ShareDir::dist_dir = sub { $share };
 
 	$ENV{NISABA_SECRET}        = 'test-secret-nisaba' unless defined $ENV{NISABA_SECRET};
 	$ENV{NISABA_COOKIE_SECURE} = '0'                  unless defined $ENV{NISABA_COOKIE_SECURE};
-}
+} ## end BEGIN
 use Test::More;
+use Mojo::Util ();
 use Test::Mojo;
 
 eval { require App::Nisaba::Web };
@@ -28,6 +29,7 @@ plan skip_all => "App::Nisaba::Web failed to load: $@" if $@;
 
 	package FakeEntry;
 	sub new { my ( $c, %a ) = @_; return bless { attrs => \%a }, $c }
+
 	sub get_value {
 		my ( $self, $attr ) = @_;
 		my $v = $self->{attrs}{$attr};
@@ -60,13 +62,9 @@ sub _install_stubs {
 		oidcClientUpdate   => sub { my ( $s, $a ) = @_; push @updated, $a; return 1 },
 	);
 	my $fake = bless { ini => { '' => {} } }, 'FakePT';
-	for my $name ( keys %methods ) {
-		no strict 'refs';
-		no warnings 'redefine';
-		*{"FakePT::$name"} = $methods{$name};
-	}
+	Mojo::Util::monkey_patch( 'FakePT', %methods );
 	$app->helper( pt => sub { $fake } );
-}
+} ## end sub _install_stubs
 
 my $t = Test::Mojo->new('App::Nisaba::Web');
 _install_stubs( $t->app );
@@ -110,10 +108,9 @@ is( scalar(@updated), 0, 'no update was written when clearing the alg' );
 # ── update: RS256 is accepted and written ─────────────────────────────────────
 
 @updated = ();
-$t->post_ok( '/oidc/testclient', form => { action => 'idTokenSignedResponseAlg', value => 'RS256' } )
-	->status_is(302);
-is( scalar(@updated),          1,       'RS256 update is written' );
-is( $updated[0]{attribute},    'oidcIdTokenSignedResponseAlg', 'correct attribute updated' );
-is( $updated[0]{value},        'RS256', 'RS256 stored as the signing algorithm' );
+$t->post_ok( '/oidc/testclient', form => { action => 'idTokenSignedResponseAlg', value => 'RS256' } )->status_is(302);
+is( scalar(@updated),       1,                              'RS256 update is written' );
+is( $updated[0]{attribute}, 'oidcIdTokenSignedResponseAlg', 'correct attribute updated' );
+is( $updated[0]{value},     'RS256',                        'RS256 stored as the signing algorithm' );
 
 done_testing();

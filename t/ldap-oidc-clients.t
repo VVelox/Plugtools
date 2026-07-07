@@ -68,10 +68,10 @@ my ($entry);
 ( $entry, $err ) = pt_try( sub { $pt->getOIDCClientEntry( { clientId => 'testapp' } ) } );
 is( $err, '', 'getOIDCClientEntry succeeds' );
 isa_ok( $entry, 'Net::LDAP::Entry', 'returned entry' );
-is( $entry->dn, "oidcClientId=testapp,$oidcbase", 'entry DN is under oidcbase' );
-is( $entry->get_value('oidcClientId'),                 'testapp',             'oidcClientId round-trips' );
-is( $entry->get_value('oidcClientSecret'),             's3cret-value',        'oidcClientSecret round-trips' );
-is( $entry->get_value('oidcClientName'),               'Test Application',    'oidcClientName round-trips' );
+is( $entry->dn,                            "oidcClientId=testapp,$oidcbase",  'entry DN is under oidcbase' );
+is( $entry->get_value('oidcClientId'),     'testapp',                         'oidcClientId round-trips' );
+is( $entry->get_value('oidcClientSecret'), 's3cret-value',                    'oidcClientSecret round-trips' );
+is( $entry->get_value('oidcClientName'),   'Test Application',                'oidcClientName round-trips' );
 is( $entry->get_value('oidcTokenEndpointAuthMethod'),  'client_secret_basic', 'authMethod round-trips' );
 is( $entry->get_value('oidcApplicationType'),          'web',                 'applicationType round-trips' );
 is( $entry->get_value('oidcIdTokenSignedResponseAlg'), 'RS256',               'signing alg round-trips' );
@@ -123,8 +123,7 @@ is( $entry, undef, 'lookup of unknown client returns undef' );
 
 ( $ret, $err ) = pt_try(
 	sub {
-		$pt->oidcClientUpdate(
-			{ clientId => 'testapp', attribute => 'oidcClientName', value => 'Renamed App' } );
+		$pt->oidcClientUpdate( { clientId => 'testapp', attribute => 'oidcClientName', value => 'Renamed App' } );
 	}
 );
 is( $err, '', 'oidcClientUpdate replace succeeds' );
@@ -143,8 +142,7 @@ is( $entry->get_value('oidcClientURI'), undef, 'attribute deleted by empty-value
 
 ( $ret, $err ) = pt_try(
 	sub {
-		$pt->oidcClientUpdate(
-			{ clientId => 'nosuchapp', attribute => 'oidcClientName', value => 'X' } );
+		$pt->oidcClientUpdate( { clientId => 'nosuchapp', attribute => 'oidcClientName', value => 'X' } );
 	}
 );
 isnt( $err, '', 'oidcClientUpdate on unknown client fails' );
@@ -220,9 +218,8 @@ my $tricky = 'tricky(app)*name';
 is( $err, '', 'client with filter metacharacters in clientId added' );
 
 ( $entry, $err ) = pt_try( sub { $pt->getOIDCClientEntry( { clientId => $tricky } ) } );
-is( $err, '', 'lookup with metacharacter clientId succeeds' );
-is( ( $entry ? $entry->get_value('oidcClientId') : undef ),
-	$tricky, 'metacharacter clientId round-trips exactly' );
+is( $err,                                                   '',      'lookup with metacharacter clientId succeeds' );
+is( ( $entry ? $entry->get_value('oidcClientId') : undef ), $tricky, 'metacharacter clientId round-trips exactly' );
 
 # The '*' must have been escaped, not treated as a wildcard: a prefix with a
 # bare '*' in it must not match the tricky client.

@@ -1,9 +1,11 @@
 #!perl -T
 
+use strict;
+use warnings;
 use Test::More tests => 1;
 
 BEGIN {
-	use_ok( 'App::Nisaba::Plugins::Dump' );
+	use_ok('App::Nisaba::Plugins::Dump');
 }
 
-diag( "Testing App::Nisaba::Plugins::Dump $App::Nisaba::Plugins::Dump::VERSION, Perl $], $^X" );
+diag("Testing App::Nisaba::Plugins::Dump $App::Nisaba::Plugins::Dump::VERSION, Perl $], $^X");

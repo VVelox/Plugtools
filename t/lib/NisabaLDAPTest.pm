@@ -127,7 +127,7 @@ sub setup {
 sub pt_try {
 	my ( $pt, $code ) = @_;
 	open my $saved_stderr, '>&', \*STDERR or die "cannot dup STDERR: $!";
-	open STDERR, '>', File::Spec->devnull;
+	open STDERR,           '>',  File::Spec->devnull;
 	my $ret = eval { $code->() };
 	open STDERR, '>&', $saved_stderr;
 	close $saved_stderr;
@@ -140,7 +140,7 @@ sub pt_try {
 		return ( $ret, $pt->errorString || ( 'Error code ' . $pt->error ) );
 	}
 	return ( $ret, '' );
-}
+} ## end sub pt_try
 
 # Replace the test server's accept-everything bind() with one that verifies
 # simple binds against the in-memory entry data, so userVerifyPassword-style
@@ -197,7 +197,7 @@ sub _install_bind_verification {
 		my $stored = $entry->get_value('userPassword');
 		return $invalid unless defined $stored && $stored ne '';
 		return $auth->{simple} eq $stored ? $ok : $invalid;
-	};
+	}; ## end *MyLDAPServer::bind = sub
 } ## end sub _install_bind_verification
 
 sub teardown {

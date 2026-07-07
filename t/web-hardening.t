@@ -6,10 +6,10 @@ use warnings;
 # being installed. Must happen before the web modules are loaded.
 use File::Basename ();
 use File::Spec;
+
 BEGIN {
-	my $share = File::Spec->rel2abs(
-		File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' )
-	);
+	my $share
+		= File::Spec->rel2abs( File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' ) );
 	require File::ShareDir;
 	no warnings 'redefine';
 	*File::ShareDir::dist_dir = sub { $share };
@@ -19,7 +19,7 @@ BEGIN {
 
 	# NOTE: deliberately do NOT set NISABA_COOKIE_SECURE here — this test checks
 	# the secure-by-default behaviour and then the explicit opt-out.
-}
+} ## end BEGIN
 use Test::More;
 
 # ── secure_compare ────────────────────────────────────────────────────────────
@@ -27,13 +27,13 @@ use Test::More;
 require_ok('App::Nisaba::WebUtil');
 App::Nisaba::WebUtil->import('secure_compare');
 
-ok( secure_compare( 'abc',        'abc' ),        'equal strings compare true' );
-ok( !secure_compare( 'abc',       'abd' ),        'different same-length strings compare false' );
-ok( !secure_compare( 'abc',       'abcd' ),       'different-length strings compare false' );
-ok( !secure_compare( '',          'x' ),          'empty vs non-empty compare false' );
-ok( secure_compare( '',           '' ),           'two empty strings compare true' );
-ok( !secure_compare( undef,       'x' ),          'undef operand compares false' );
-ok( secure_compare( "\x00a\xff",  "\x00a\xff" ),  'binary-safe equal compare true' );
+ok( secure_compare( 'abc',       'abc' ),       'equal strings compare true' );
+ok( !secure_compare( 'abc',      'abd' ),       'different same-length strings compare false' );
+ok( !secure_compare( 'abc',      'abcd' ),      'different-length strings compare false' );
+ok( !secure_compare( '',         'x' ),         'empty vs non-empty compare false' );
+ok( secure_compare( '',          '' ),          'two empty strings compare true' );
+ok( !secure_compare( undef,      'x' ),         'undef operand compares false' );
+ok( secure_compare( "\x00a\xff", "\x00a\xff" ), 'binary-safe equal compare true' );
 
 # ── session cookie flags ──────────────────────────────────────────────────────
 
@@ -47,8 +47,8 @@ SKIP: {
 		delete $ENV{NISABA_COOKIE_SECURE};
 		my $t = Test::Mojo->new('App::Nisaba::WebSelfService');
 		$t->get_ok('/login')
-		  ->header_like( 'Set-Cookie' => qr/;\s*secure/i,          'session cookie is Secure by default' )
-		  ->header_like( 'Set-Cookie' => qr/;\s*SameSite=Lax/i,    'session cookie is SameSite=Lax' );
+			->header_like( 'Set-Cookie' => qr/;\s*secure/i,       'session cookie is Secure by default' )
+			->header_like( 'Set-Cookie' => qr/;\s*SameSite=Lax/i, 'session cookie is SameSite=Lax' );
 	}
 
 	# Opt-out: NISABA_COOKIE_SECURE=0 drops the Secure flag (plain-HTTP dev).
@@ -56,8 +56,8 @@ SKIP: {
 		local $ENV{NISABA_COOKIE_SECURE} = '0';
 		my $t = Test::Mojo->new('App::Nisaba::WebSelfService');
 		$t->get_ok('/login')
-		  ->header_unlike( 'Set-Cookie' => qr/;\s*secure/i, 'NISABA_COOKIE_SECURE=0 drops the Secure flag' );
+			->header_unlike( 'Set-Cookie' => qr/;\s*secure/i, 'NISABA_COOKIE_SECURE=0 drops the Secure flag' );
 	}
-}
+} ## end SKIP:
 
 done_testing();

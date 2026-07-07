@@ -263,7 +263,7 @@ sub _getLDAPGroupEntry {
 	my ( $self, $ldap, $group ) = @_;
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{groupbase},
-		filter => '(&(objectClass=posixGroup)(cn=' . escape_filter_value( $group ) . '))',
+		filter => '(&(objectClass=posixGroup)(cn=' . escape_filter_value($group) . '))',
 	);
 	return undef if $mesg->{errorMessage} ne '';
 	return $mesg->pop_entry;
@@ -275,7 +275,7 @@ sub _getLDAPUserEntry {
 	my ( $self, $ldap, $user ) = @_;
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{userbase},
-		filter => '(uid=' . escape_filter_value( $user ) . ')',
+		filter => '(uid=' . escape_filter_value($user) . ')',
 	);
 	return undef if $mesg->{errorMessage} ne '';
 	return $mesg->pop_entry;
@@ -929,7 +929,7 @@ sub deleteUser {
 	#check if the primary group exists in LDAP
 	my $gname_mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{groupbase},
-		filter => '(&(objectClass=posixGroup)(gidNumber=' . escape_filter_value( $gid ) . '))',
+		filter => '(&(objectClass=posixGroup)(gidNumber=' . escape_filter_value($gid) . '))',
 	);
 	my $gname_entry = $gname_mesg->pop_entry;
 	my $gname       = defined($gname_entry) ? $gname_entry->get_value('cn') : undef;
@@ -1365,7 +1365,7 @@ sub groupGIDchange {
 	#we now do another search for the purpose of updating any users with the old GID
 	my $mesg3 = $ldap->search(
 		base   => $self->{ini}->{''}->{userbase},
-		filter => '(&(objectClass=posixAccount) (gidNumber=' . escape_filter_value( $gid ) . '))'
+		filter => '(&(objectClass=posixAccount) (gidNumber=' . escape_filter_value($gid) . '))'
 	);
 	if ( $mesg3->{errorMessage} ne '' ) {
 		$self->{error} = 37;
@@ -2133,7 +2133,7 @@ sub removeUserFromGroups {
 	#search and get the first entry
 	my $mesg = $ldap->search(
 		base   => $self->{ini}->{''}->{groupbase},
-		filter => '(&(objectClass=posixGroup) (memberUid=' . escape_filter_value( $user ) . '))'
+		filter => '(&(objectClass=posixGroup) (memberUid=' . escape_filter_value($user) . '))'
 	);
 	my $entry = $mesg->pop_entry;
 

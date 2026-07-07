@@ -6,10 +6,10 @@ use warnings;
 # being installed. Must happen before the web modules are loaded.
 use File::Basename ();
 use File::Spec;
+
 BEGIN {
-	my $share = File::Spec->rel2abs(
-		File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' )
-	);
+	my $share
+		= File::Spec->rel2abs( File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' ) );
 	require File::ShareDir;
 	no warnings 'redefine';
 	*File::ShareDir::dist_dir = sub { $share };
@@ -19,7 +19,7 @@ BEGIN {
 
 	# Serve over plain HTTP in tests so the session cookie round-trips.
 	$ENV{NISABA_COOKIE_SECURE} = '0' unless defined $ENV{NISABA_COOKIE_SECURE};
-}
+} ## end BEGIN
 use Test::More;
 use Test::Mojo;
 

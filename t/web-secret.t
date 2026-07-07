@@ -11,23 +11,17 @@ plan tests => 9;
 # 1. configured value is used
 is(
 	App::Nisaba::WebSecret::resolve( configured => 'cfg', env => 'env' ),
-	'cfg',
-	'configured websecret takes precedence over env',
+	'cfg', 'configured websecret takes precedence over env',
 );
 
 # 2. env is used when configured is undef
 is(
 	App::Nisaba::WebSecret::resolve( configured => undef, env => 'env' ),
-	'env',
-	'NISABA_SECRET used when websecret is not configured',
+	'env', 'NISABA_SECRET used when websecret is not configured',
 );
 
 # 3. env is used when configured is empty string
-is(
-	App::Nisaba::WebSecret::resolve( configured => '', env => 'env' ),
-	'env',
-	'empty websecret falls through to env',
-);
+is( App::Nisaba::WebSecret::resolve( configured => '', env => 'env' ), 'env', 'empty websecret falls through to env', );
 
 # 4-5. no secret at all => dies
 my $got = eval { App::Nisaba::WebSecret::resolve( configured => undef, env => undef ); 1 };
@@ -45,8 +39,7 @@ like( $@, qr/MyApp/, 'app name is included in the die message' );
 # 8. a whitespace/odd but non-empty secret is accepted verbatim (not our job to judge strength here)
 is(
 	App::Nisaba::WebSecret::resolve( configured => '   ', env => undef ),
-	'   ',
-	'non-empty configured value is returned verbatim',
+	'   ', 'non-empty configured value is returned verbatim',
 );
 
 # 9. message points the operator at how to generate one

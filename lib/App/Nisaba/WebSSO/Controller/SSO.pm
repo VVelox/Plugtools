@@ -73,8 +73,8 @@ sub discovery {
 			grant_types_supported                 => ['authorization_code'],
 			subject_types_supported               => ['public'],
 			jwks_uri                              => "$issuer/jwks",
-			id_token_signing_alg_values_supported => [ 'RS256',               'HS256' ],
-			scopes_supported                      => [ 'openid',              'profile', 'email', 'phone', 'address' ],
+			id_token_signing_alg_values_supported => [ 'RS256',  'HS256' ],
+			scopes_supported                      => [ 'openid', 'profile', 'email', 'phone', 'address' ],
 			token_endpoint_auth_methods_supported => [ 'client_secret_basic', 'client_secret_post', 'none', ],
 			claims_supported                      => [
 				'sub',          'name',                  'given_name',         'family_name',
@@ -217,7 +217,7 @@ sub authorize {
 				return $self->_authz_error( $redirect_uri, $state, 'invalid_request',
 					'Public clients must use PKCE with code_challenge_method=S256.' );
 			}
-		}
+		} ## end if ($is_public)
 	} ## end if ($require_pkce)
 
 	# Store the authorization request in session
@@ -425,7 +425,12 @@ sub totp_challenge {
 		return $self->redirect_to('sso_login');
 	}
 
-	return unless $self->rate_guard( 'totp', user => $user, render => { template => 'sso/totp_challenge', layout => 'sso' } );
+	return
+		unless $self->rate_guard(
+			'totp',
+			user   => $user,
+			render => { template => 'sso/totp_challenge', layout => 'sso' }
+		);
 
 	my $code = $self->param('code') // '';
 

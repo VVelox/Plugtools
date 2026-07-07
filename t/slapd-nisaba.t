@@ -75,13 +75,12 @@ is( $err, '', 'addUser accepted by real slapd (posixAccount schema-valid)' );
 
 my ($entry);
 ( $entry, $err ) = pt_try( sub { $pt->getUserEntry( { user => 'alice' } ) } );
-is( $err, '', 'getUserEntry works against slapd' );
+is( $err,                       '',                 'getUserEntry works against slapd' );
 is( $entry->get_value('gecos'), 'Alice Wonderland', 'gecos round-trips through slapd' );
 
 ( $ret, $err ) = pt_try(
 	sub {
-		$pt->addNetgroup(
-			{ group => 'webservers', triples => ['(www1,,example.com)'] } );
+		$pt->addNetgroup( { group => 'webservers', triples => ['(www1,,example.com)'] } );
 	}
 );
 is( $err, '', 'addNetgroup accepted by real slapd (nisNetgroup schema-valid)' );
@@ -103,15 +102,14 @@ is( $err, '', 'addNetgroup accepted by real slapd (nisNetgroup schema-valid)' );
 is( $err, '', 'addOIDCClient accepted by real slapd (oidcRelyingParty schema-valid)' );
 
 ( $entry, $err ) = pt_try( sub { $pt->getOIDCClientEntry( { clientId => 'testapp' } ) } );
-is( $err, '', 'getOIDCClientEntry works against slapd' );
+is( $err,                                '',         'getOIDCClientEntry works against slapd' );
 is( $entry->get_value('oidcClientName'), 'Test App', 'OIDC client attrs round-trip' );
 
 # An attribute the schema does not define must be rejected BY THE SERVER —
 # this exercises App::Nisaba's LDAP-error handling with a genuine slapd error.
 ( $ret, $err ) = pt_try(
 	sub {
-		$pt->oidcClientUpdate(
-			{ clientId => 'testapp', attribute => 'noSuchAttribute', value => 'x' } );
+		$pt->oidcClientUpdate( { clientId => 'testapp', attribute => 'noSuchAttribute', value => 'x' } );
 	}
 );
 isnt( $err, '', 'undefined attribute rejected by real schema enforcement' );
@@ -131,27 +129,22 @@ is( $err, '', 'userSetPass succeeds (SetPassword extended operation)' );
 ok( $ret, 'user has a password after userSetPass' );
 
 # slapd stores the password hashed; verification is real bind authentication.
-( $ret, $err ) = pt_try(
-	sub { $pt->userVerifyPassword( { user => 'alice', password => 'correct horse' } ) } );
+( $ret, $err ) = pt_try( sub { $pt->userVerifyPassword( { user => 'alice', password => 'correct horse' } ) } );
 is( $err, '', 'correct password verifies via real slapd bind' );
 is( $ret, 1,  'userVerifyPassword returns 1' );
 
-( $ret, $err ) = pt_try(
-	sub { $pt->userVerifyPassword( { user => 'alice', password => 'battery staple' } ) } );
+( $ret, $err ) = pt_try( sub { $pt->userVerifyPassword( { user => 'alice', password => 'battery staple' } ) } );
 isnt( $err, '', 'wrong password rejected by real slapd bind' );
 is( $pt->error, 75, 'wrong password sets error 75 (authFailed)' );
 
 # Self-service variant (also SetPassword extop).
-( $ret, $err ) = pt_try(
-	sub { $pt->userSetPassSelf( { user => 'alice', pass => 'new-pass-123' } ) } );
+( $ret, $err ) = pt_try( sub { $pt->userSetPassSelf( { user => 'alice', pass => 'new-pass-123' } ) } );
 is( $err, '', 'userSetPassSelf succeeds' );
 
-( $ret, $err ) = pt_try(
-	sub { $pt->userVerifyPassword( { user => 'alice', password => 'new-pass-123' } ) } );
+( $ret, $err ) = pt_try( sub { $pt->userVerifyPassword( { user => 'alice', password => 'new-pass-123' } ) } );
 is( $err, '', 'password changed by userSetPassSelf verifies' );
 
-( $ret, $err ) = pt_try(
-	sub { $pt->userVerifyPassword( { user => 'alice', password => 'correct horse' } ) } );
+( $ret, $err ) = pt_try( sub { $pt->userVerifyPassword( { user => 'alice', password => 'correct horse' } ) } );
 isnt( $err, '', 'old password no longer verifies after the change' );
 
 # Remove the password.
@@ -161,8 +154,7 @@ is( $err, '', 'userRemovePassword succeeds' );
 ( $ret, $err ) = pt_try( sub { $pt->userHasPassword( { user => 'alice' } ) } );
 ok( !$ret, 'password gone after userRemovePassword' );
 
-( $ret, $err ) = pt_try(
-	sub { $pt->userVerifyPassword( { user => 'alice', password => 'new-pass-123' } ) } );
+( $ret, $err ) = pt_try( sub { $pt->userVerifyPassword( { user => 'alice', password => 'new-pass-123' } ) } );
 isnt( $err, '', 'authentication fails once the password is removed' );
 
 # ── inetOrgPerson conversion against real structural-class rules ────────────

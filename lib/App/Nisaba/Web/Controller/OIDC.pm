@@ -2,9 +2,9 @@ package App::Nisaba::Web::Controller::OIDC;
 
 use Mojo::Base 'Mojolicious::Controller';
 use Crypt::PK::RSA;
-use Crypt::PRNG   qw(random_string_from);
-use MIME::Base64  qw(encode_base64url);
-use Mojo::JSON    qw(encode_json);
+use Crypt::PRNG  qw(random_string_from);
+use MIME::Base64 qw(encode_base64url);
+use Mojo::JSON   qw(encode_json);
 
 sub _pt_call {
 	my ( $self, $code ) = @_;
@@ -159,7 +159,7 @@ sub create {
 	}
 
 	# Generate and store RSA key pair for token signing
-	my $priv_jwks = _generate_jwks();
+	my $priv_jwks  = _generate_jwks();
 	my $jwks_error = $self->_pt_call(
 		sub {
 			$self->pt->oidcClientUpdate(
@@ -257,7 +257,7 @@ sub update {
 		}
 		if ($entry) {
 			my $has_secret = ( $entry->get_value('oidcClientSecret') // '' ) ne '';
-			my $has_jwks   = ( $entry->get_value('oidcJwks') // '' ) ne '';
+			my $has_jwks   = ( $entry->get_value('oidcJwks')         // '' ) ne '';
 			if ( $action eq 'authMethod' && $secret_auth{$value} && !$has_secret ) {
 				$veto = "Auth method '$value' requires a client secret — generate one first.";
 			} elsif ( $action eq 'idTokenSignedResponseAlg' ) {
@@ -273,13 +273,13 @@ sub update {
 					$veto = 'Cannot clear the client secret while the auth method or signing algorithm depends on it.';
 				}
 			}
-		}
+		} ## end if ($entry)
 
 		if ($veto) {
 			$self->flash( error => $veto );
 			return $self->redirect_to( 'oidc_show', clientId => $clientId );
 		}
-	} ## end guard
+	} ## end if ( $action eq 'authMethod' || $action eq...)
 
 	my $error;
 

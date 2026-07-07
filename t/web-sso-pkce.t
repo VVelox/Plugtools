@@ -6,10 +6,10 @@ use warnings;
 # being installed. Must happen before the web module is loaded.
 use File::Basename ();
 use File::Spec;
+
 BEGIN {
-	my $share = File::Spec->rel2abs(
-		File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' )
-	);
+	my $share
+		= File::Spec->rel2abs( File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' ) );
 	require File::ShareDir;
 	no warnings 'redefine';
 	*File::ShareDir::dist_dir = sub { $share };
@@ -19,8 +19,9 @@ BEGIN {
 
 	# NOTE: intentionally do NOT set NISABA_REQUIRE_PKCE — this suite tests the
 	# secure default (enforcement ON).
-}
+} ## end BEGIN
 use Test::More;
+use Mojo::Util ();
 use Test::Mojo;
 
 eval { require App::Nisaba::WebSSO };
@@ -31,6 +32,7 @@ plan skip_all => "App::Nisaba::WebSSO failed to load: $@" if $@;
 
 	package FakeEntry;
 	sub new { my ( $c, %a ) = @_; return bless { attrs => \%a }, $c }
+
 	sub get_value {
 		my ( $self, $attr ) = @_;
 		my $v = $self->{attrs}{$attr};
@@ -42,7 +44,7 @@ plan skip_all => "App::Nisaba::WebSSO failed to load: $@" if $@;
 my $pubapp = FakeEntry->new(
 	oidcClientId                => 'pubapp',
 	oidcRedirectURI             => 'https://pub.example.com/cb',
-	oidcTokenEndpointAuthMethod => 'none',            # public: no client secret
+	oidcTokenEndpointAuthMethod => 'none',                         # public: no client secret
 );
 
 my $confapp = FakeEntry->new(
@@ -70,15 +72,11 @@ sub _build_app {
 			return undef;
 		},
 	);
-	my $fake = bless { ini => { '' => { %ini } } }, 'FakePT';
-	for my $name ( keys %methods ) {
-		no strict 'refs';
-		no warnings 'redefine';
-		*{"FakePT::$name"} = $methods{$name};
-	}
+	my $fake = bless { ini => { '' => {%ini} } }, 'FakePT';
+	Mojo::Util::monkey_patch( 'FakePT', %methods );
 	$t->app->helper( pt => sub { $fake } );
 	return $t;
-}
+} ## end sub _build_app
 
 my $PUB  = 'https://pub.example.com/cb';
 my $CONF = 'https://conf.example.com/cb';
@@ -96,36 +94,36 @@ my $t = _build_app();
 
 # Public client, no PKCE → rejected back to the client with invalid_request.
 $t->get_ok( _authorize( 'pubapp', $PUB, state => 'p1' ) )
-  ->status_is(302)
-  ->header_like( Location => qr{^\Q$PUB\E\?},          'public/no-PKCE error returns to the client' )
-  ->header_like( Location => qr{error=invalid_request}, 'public client without PKCE is rejected' );
+	->status_is(302)
+	->header_like( Location => qr{^\Q$PUB\E\?},           'public/no-PKCE error returns to the client' )
+	->header_like( Location => qr{error=invalid_request}, 'public client without PKCE is rejected' );
 
 # Public client, S256 PKCE → allowed, proceeds to login.
 $t->get_ok( _authorize( 'pubapp', $PUB, state => 'p2', code_challenge => 'abc123', code_challenge_method => 'S256' ) )
-  ->status_is(302)
-  ->header_like( Location => qr{/sso/login}, 'public client with S256 PKCE proceeds to login' );
+	->status_is(302)
+	->header_like( Location => qr{/sso/login}, 'public client with S256 PKCE proceeds to login' );
 
 # Public client, plain PKCE → rejected (S256 required).
 $t->get_ok( _authorize( 'pubapp', $PUB, state => 'p3', code_challenge => 'abc123', code_challenge_method => 'plain' ) )
-  ->status_is(302)
-  ->header_like( Location => qr{error=invalid_request}, 'public client with plain PKCE is rejected' );
+	->status_is(302)
+	->header_like( Location => qr{error=invalid_request}, 'public client with plain PKCE is rejected' );
 
 # Public client, code_challenge but no method (defaults to plain) → rejected.
 $t->get_ok( _authorize( 'pubapp', $PUB, state => 'p4', code_challenge => 'abc123' ) )
-  ->status_is(302)
-  ->header_like( Location => qr{error=invalid_request}, 'public client defaulting to plain is rejected' );
+	->status_is(302)
+	->header_like( Location => qr{error=invalid_request}, 'public client defaulting to plain is rejected' );
 
 # Confidential client, no PKCE → allowed (it authenticates with its secret).
 $t->get_ok( _authorize( 'confapp', $CONF, state => 'c1' ) )
-  ->status_is(302)
-  ->header_like( Location => qr{/sso/login}, 'confidential client without PKCE is allowed' );
+	->status_is(302)
+	->header_like( Location => qr{/sso/login}, 'confidential client without PKCE is allowed' );
 
 # ── Escape hatch: ssoRequirePkce=0 relaxes the requirement ────────────────────
 
 my $t_off = _build_app( ssoRequirePkce => 0 );
 
 $t_off->get_ok( _authorize( 'pubapp', $PUB, state => 'off1' ) )
-  ->status_is(302)
-  ->header_like( Location => qr{/sso/login}, 'ssoRequirePkce=0 lets a public client skip PKCE' );
+	->status_is(302)
+	->header_like( Location => qr{/sso/login}, 'ssoRequirePkce=0 lets a public client skip PKCE' );
 
 done_testing();
