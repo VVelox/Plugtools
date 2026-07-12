@@ -49,23 +49,44 @@ sub _generate_kid {
 	return random_string_from( join( '', 'a' .. 'z', '0' .. '9' ), 16 );
 }
 
-# Generate an RSA key pair and return a JWK Set JSON string (with private key).
-sub _generate_jwks {
+# Generate a new RSA private key as a JWK hashref with kid/use/alg metadata.
+sub _generate_jwk {
 	my $rsa = Crypt::PK::RSA->new;
 	$rsa->generate_key( 256, 65537 );    # 2048-bit key
 
-	my $kid = _generate_kid();
-
-	# export_key_jwk returns a JSON string; decode, add metadata, re-encode
-	my $priv_json = $rsa->export_key_jwk('private');
-	my $priv_hash = Mojo::JSON::decode_json($priv_json);
-	$priv_hash->{kid} = $kid;
+	# export_key_jwk returns a JSON string; decode and add metadata
+	my $priv_hash = Mojo::JSON::decode_json( $rsa->export_key_jwk('private') );
+	$priv_hash->{kid} = _generate_kid();
 	$priv_hash->{use} = 'sig';
 	$priv_hash->{alg} = 'RS256';
+	return $priv_hash;
+} ## end sub _generate_jwk
 
-	my $priv_jwks = encode_json( { keys => [$priv_hash] } );
-	return $priv_jwks;
-} ## end sub _generate_jwks
+# Generate an RSA key pair and return a JWK Set JSON string (with private key).
+sub _generate_jwks {
+	return encode_json( { keys => [ _generate_jwk() ] } );
+}
+
+# Rotate a client's JWK Set: a fresh private key goes first (the SSO provider
+# signs with the first key holding private material), and previous keys are
+# retained as public-only entries so ID tokens signed before the rotation keep
+# verifying against the published JWKS. At most two old keys are kept.
+sub _rotate_jwks {
+	my ($old_json) = @_;
+
+	my @retained;
+	my $old = $old_json ? eval { Mojo::JSON::decode_json($old_json) } : undef;
+	if ( $old && ref $old->{keys} eq 'ARRAY' ) {
+		for my $key ( @{ $old->{keys} } ) {
+			next unless ref $key eq 'HASH';
+			my %pub = map { $_ => $key->{$_} } grep { defined $key->{$_} } qw(kty n e kid use alg);
+			push @retained, \%pub if defined $pub{n} && defined $pub{e};
+			last if @retained >= 2;
+		}
+	}
+
+	return encode_json( { keys => [ _generate_jwk(), @retained ] } );
+} ## end sub _rotate_jwks
 
 sub create {
 	my $self = shift;
@@ -234,13 +255,17 @@ sub update {
 
 	# Reject updates that would leave the client in a state the SSO
 	# provider refuses to serve.
-	my %secret_auth = map { $_ => 1 } qw(client_secret_basic client_secret_post client_secret_jwt);
+	my %secret_auth = map { $_ => 1 } qw(client_secret_basic client_secret_post);
 	if ( $action eq 'authMethod' || $action eq 'idTokenSignedResponseAlg' || $action eq 'clientSecret' ) {
 		my $value = $self->param('value') // '';
 
 		my $veto;
-		if ( $action eq 'authMethod' && !$secret_auth{$value} && $value ne 'private_key_jwt' && $value ne 'none' ) {
-			$veto = "Unknown token endpoint auth method '$value'.";
+		if ( $action eq 'authMethod' && !$secret_auth{$value} && $value ne 'none' ) {
+			# client_secret_jwt / private_key_jwt included: the SSO provider's
+			# token endpoint does not implement them and fails closed on clients
+			# registered for an unimplemented method.
+			$veto = "Unsupported token endpoint auth method '$value' — the SSO provider supports "
+				. 'client_secret_basic, client_secret_post, and none.';
 		} elsif ( $action eq 'idTokenSignedResponseAlg'
 			&& $value ne 'RS256'
 			&& $value ne 'HS256' )
@@ -334,7 +359,11 @@ sub update {
 			);
 		}
 	} elsif ( $action eq 'regenerateKeys' ) {
-		my $new_jwks = _generate_jwks();
+		# Rotate rather than replace: old public keys stay in the set so
+		# already-issued ID tokens keep verifying during the overlap window.
+		my $entry;
+		eval { $entry = $self->pt->getOIDCClientEntry( { clientId => $clientId } ) };
+		my $new_jwks = _rotate_jwks( $entry ? $entry->get_value('oidcJwks') : undef );
 		$error = $self->_pt_call(
 			sub {
 				$self->pt->oidcClientUpdate(
@@ -347,7 +376,7 @@ sub update {
 			}
 		);
 		if ( !$error ) {
-			$self->flash( success => "Signing key pair regenerated." );
+			$self->flash( success => 'Signing key pair rotated; previous public keys retained for verification.' );
 			return $self->redirect_to( 'oidc_show', clientId => $clientId );
 		}
 	} elsif ( exists $single_attrs{$action} ) {

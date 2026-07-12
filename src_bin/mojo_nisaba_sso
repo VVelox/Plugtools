@@ -33,9 +33,30 @@ mojo_nisaba_sso - OpenID Connect SSO provider for App::Nisaba
 
 =head1 DESCRIPTION
 
-Starts the App::Nisaba OpenID Connect SSO provider. This application
-implements the OIDC Authorization Code flow with PKCE support, providing
-a login/consent UI backed by LDAP user accounts.
+Starts the App::Nisaba OpenID Connect SSO provider, a login/consent UI
+backed by LDAP user accounts. It implements:
+
+=over 4
+
+=item * The OIDC Authorization Code flow, with PKCE (S256, mandatory for
+public clients).
+
+=item * Refresh tokens (rotated on every use) for clients registered for
+the C<refresh_token> grant type.
+
+=item * Token revocation (RFC 7009) and introspection (RFC 7662).
+
+=item * OIDC C<prompt> and C<max_age> handling, including C<prompt=none>
+silent authentication.
+
+=item * Per-user remembered consent ("remember this decision"), so
+returning users and silent renewals skip the consent screen.
+
+=item * RP-initiated logout, per-client RSA/HMAC ID-token signing with key
+rotation, and brute-force rate limiting on the authentication and token
+endpoints.
+
+=back
 
 Standard OIDC endpoints:
 
@@ -43,6 +64,9 @@ Standard OIDC endpoints:
     /authorize                          Authorization endpoint
     /token                              Token endpoint
     /userinfo                           UserInfo endpoint
+    /jwks                               JSON Web Key Set (public keys)
+    /revoke                             Token revocation (RFC 7009)
+    /introspect                         Token introspection (RFC 7662)
     /sso/logout                         End-session (RP-initiated logout)
 
 All standard Mojolicious server commands (C<daemon>, C<prefork>, etc.)
@@ -58,6 +82,12 @@ Path to the nisabarc config file. Overridden by C<--pt-config>.
 
 Session secret. Set this to a long random string in production.
 
+=head2 NISABA_COOKIE_SECURE
+
+Set to C<0> to drop the C<Secure> flag from the session cookie for
+plain-HTTP development. Never do this in production. The C<cookieSecure>
+config key takes precedence.
+
 =head1 CONFIG KEYS (nisabarc)
 
 In addition to the standard App::Nisaba LDAP settings, the following
@@ -70,9 +100,15 @@ for the SSO provider to start.
 
 =head2 ssoIssuer
 
-The issuer identifier for this OpenID Provider. This should be the
-base URL of the SSO provider (e.g. C<https://sso.example.com>).
-Defaults to the request URL origin if not set.
+The issuer identifier for this OpenID Provider: the public base URL of the
+SSO provider (e.g. C<https://sso.example.com>). B<Set this in production.>
+When unset the issuer is derived from each request's Host header, which
+behind a reverse proxy produces an issuer relying parties will reject
+(C<iss> mismatch). The value must not contain a path component or a
+trailing slash — the provider's routes are mounted at the server root, so
+an issuer like C<https://example.com/sso> would advertise endpoints that
+do not exist. The provider logs a warning at startup for each of these
+misconfigurations (the unset case only in production mode).
 
 =head2 ssoCodeLifetime
 
@@ -80,16 +116,77 @@ Lifetime in seconds of an authorization code. Defaults to C<600>.
 
 =head2 ssoTokenLifetime
 
-Lifetime in seconds of an access token and ID token. Defaults to C<3600>.
+Lifetime in seconds of an access token. Defaults to C<3600>.
+
+=head2 ssoIdTokenLifetime
+
+Lifetime in seconds of an ID token. Defaults to C<ssoTokenLifetime>.
+
+=head2 ssoRefreshTokenLifetime
+
+Lifetime in seconds of a refresh token. Defaults to C<2592000> (30 days).
+Refresh tokens are only issued to clients whose registration includes the
+C<refresh_token> grant type (see L</CLIENT REGISTRATION>) and are rotated
+on every use.
+
+=head2 ssoConsentLifetime
+
+How long a remembered ("remember this decision") consent lasts, in
+seconds. Defaults to C<0>: remembered consents do not expire.
+
+=head2 ssoRequirePkce
+
+Require PKCE with the S256 method for public clients (those that cannot
+authenticate at the token endpoint). Defaults to C<1>. Disabling this is
+strongly discouraged; it exists only for legacy public clients.
+
+=head2 Rate limiting
+
+The token, revocation, and introspection endpoints share a brute-force
+guard keyed by (client_id, IP) with a per-IP backstop; failed client
+authentications and unknown codes/tokens count toward it, and a blocked
+caller receives HTTP 429 with a C<Retry-After> header. The login, TOTP,
+and passkey endpoints are guarded separately (same mechanism, their own
+keys).
+
+=head3 rateLimit
+
+Master switch, defaults to C<1>. Set to C<0> to disable all rate limiting
+(the C<NISABA_RATELIMIT> environment variable is an alternative).
+
+=head3 rateLimitPath
+
+Path of the shared rate-limiter SQLite database. When rate limiting is
+enabled but the store cannot be opened, guarded endpoints fail closed
+with HTTP 503.
+
+=head3 rateLimitTokenMax / rateLimitTokenWindow / rateLimitTokenLockout
+
+Per-(client, IP) failure limit for the token endpoints: at most C<Max>
+failures (default 10) within C<Window> seconds (default 900) before a
+C<Lockout>-second block (default 900). A successful client authentication
+resets this counter.
+
+=head3 rateLimitTokenIpMax / rateLimitTokenIpWindow / rateLimitTokenIpLockout
+
+The per-IP backstop (defaults: 100 failures / 900 s window / 1800 s
+lockout). Not reset on success, so one valid credential cannot launder an
+IP that is spraying failures.
+
+=head2 cookieSecure
+
+Mark the session cookie C<Secure> (HTTPS-only). Defaults to C<1>; set to
+C<0> only for plain-HTTP development.
 
 =head2 Grant store
 
-Authorization codes and access tokens are redeemed by relying-party back
-ends over server-to-server requests that carry no browser session cookie.
-They are therefore held in a shared, server-side store
-(L<App::Nisaba::WebSSO::Storage>) rather than in the user session, so that
-they work across prefork worker processes and survive restarts. Codes and
-tokens are stored hashed (SHA-256), never in the clear.
+Authorization codes, access tokens, and refresh tokens are redeemed by
+relying-party back ends over server-to-server requests that carry no
+browser session cookie. They are therefore held in a shared, server-side
+store (L<App::Nisaba::WebSSO::Storage>) rather than in the user session,
+so that they work across prefork worker processes and survive restarts.
+Remembered consents live in the same store. Codes and tokens are stored
+hashed (SHA-256), never in the clear.
 
 =head3 ssoStorageBackend
 
@@ -114,14 +211,94 @@ to C<300>. Set to C<0> to disable.
     /.well-known/openid-configuration   OIDC Discovery document
     /jwks                               JSON Web Key Set (public keys)
     /authorize                          Authorization endpoint
-    /token                              Token endpoint
+    /token                              Token endpoint (code + refresh grants)
     /userinfo                           UserInfo endpoint
+    /revoke                             Token revocation, RFC 7009 (POST)
+    /introspect                         Token introspection, RFC 7662 (POST)
     /sso/login                          Login form (GET) and submission (POST)
     /sso/totp                           TOTP challenge (GET/POST)
     /sso/consent                        Consent screen (GET/POST)
     /sso/logout                         End-session / RP-initiated logout (GET/POST)
     /sso/passkeys/login/start           Passkey authentication start (GET)
     /sso/passkeys/login/finish          Passkey authentication finish (POST)
+
+Revocation always answers 200 but only removes tokens issued to the
+authenticated client. Introspection is refused for public clients (it
+would otherwise be a token-validity oracle), and answers
+C<{"active": false}> for unknown, expired, or other clients' tokens.
+
+=head1 CLIENT REGISTRATION
+
+OIDC clients are registered through the admin UI (L<App::Nisaba::Web>) and
+stored as C<oidcRelyingParty> entries under C<oidcbase>. Several
+registration fields are not just metadata — the provider enforces them:
+
+=head2 Redirect URIs
+
+An authorization request's C<redirect_uri> must exactly match one of the
+registered redirect URIs; there is no prefix or wildcard matching.
+
+=head2 Scopes are an allow-list
+
+A client may only request scopes its registration grants. C<openid>
+itself is always permitted, but a request for any other unregistered
+scope is rejected with C<invalid_scope>. A client with no registered
+scopes can only authenticate (C<openid>) and receives no
+profile/email/phone/address claims. B<Register every scope the relying
+party will request> — e.g. a relying party configured to ask for
+C<openid profile email> needs C<profile> and C<email> in its
+registration.
+
+=head2 Token endpoint auth method
+
+The registered method is enforced, including its transport: a
+C<client_secret_basic> client must send its credentials in the
+C<Authorization> header, a C<client_secret_post> client in the request
+body, and C<none> marks a public client (no secret is demanded, and PKCE
+is required at the authorization endpoint instead). Only these three
+methods are implemented; a client registered for anything else (e.g.
+C<private_key_jwt>) is refused at the token endpoint.
+
+=head2 Grant types
+
+Adding C<refresh_token> to the registered grant types is the opt-in for
+refresh tokens: such clients receive a C<refresh_token> in the token
+response and may use C<grant_type=refresh_token>. Refresh tokens are
+rotated on every use — the relying party must store the replacement
+returned by each exchange; the presented token is retired atomically, so
+a replayed (or stolen and already-used) token fails.
+
+=head2 Signing algorithm and keys
+
+Each client has its own signing configuration: C<RS256> (the default when
+unset) signs ID tokens with the client's own RSA key pair, generated at
+registration; C<HS256> signs with the client secret. The public keys of
+all clients are published at C</jwks>, selected by C<kid>. The admin UI's
+"Regenerate Keys" action B<rotates> rather than replaces: the new key
+signs from then on, while up to two previous public keys stay published
+so ID tokens issued before the rotation keep verifying.
+
+=head2 Default max age
+
+A registered C<oidcDefaultMaxAge> is enforced: users whose authentication
+is older than this many seconds are sent back through login before the
+request proceeds (a C<max_age> request parameter overrides it per
+request).
+
+=head2 Post-logout redirect URIs
+
+RP-initiated logout only redirects to a C<post_logout_redirect_uri> that
+is registered on the client; otherwise the provider ends the session but
+shows its own signed-out page.
+
+=head2 Consent
+
+Users are shown a consent screen the first time a client asks for a given
+scope set. Consent is remembered for the browser session, and — when the
+user ticks "remember this decision" — durably (see C<ssoConsentLifetime>),
+in which case returning users skip the consent screen entirely and
+C<prompt=none> silent requests succeed after any fresh login. A request
+with C<prompt=consent> always shows the screen.
 
 =head1 SCOPES AND CLAIMS
 
@@ -227,6 +404,14 @@ copy both. Set the redirect URI to
 C<https://your-app.example.com/redirect_uri> (or whatever
 C<OIDCRedirectURI> you configure below).
 
+=item *
+
+Register B<every scope> the module will request. The provider treats the
+client's registered scopes as an allow-list (see L</CLIENT REGISTRATION>),
+so with the C<OIDCScope "openid profile email"> used below, the client
+registration must include C<profile> and C<email> — otherwise the
+authorization request fails with C<invalid_scope>.
+
 =back
 
 =head2 Minimal Apache configuration
@@ -289,6 +474,31 @@ C<mod_proxy_http> to be loaded.
     OIDCRemoteUserClaim sub
     # or use "email" to set REMOTE_USER to the user's email:
     # OIDCRemoteUserClaim email
+
+=head2 Refresh tokens and session refresh
+
+If the client's registration includes the C<refresh_token> grant type,
+the provider returns a refresh token with each code exchange and
+mod_auth_openidc can use it to refresh the access token near expiry:
+
+    # Refresh the access token this many seconds before it expires.
+    OIDCRefreshAccessTokenBeforeExpiry 60
+
+The provider rotates refresh tokens on every use; mod_auth_openidc
+stores the replacement automatically.
+
+Silent re-authentication (C<prompt=none>) is also supported: it succeeds
+when the user still has an authenticated SSO session and has consented to
+this client/scope combination — durably, if they ticked "remember this
+decision" on the consent screen. Without a matching consent or session
+the provider returns the standard C<login_required> /
+C<consent_required> errors, and the relying party falls back to an
+interactive request.
+
+Note that repeated failed client authentications (or token guesses) at
+the token, revocation, and introspection endpoints are rate limited; a
+blocked client receives HTTP 429 with a C<Retry-After> header (see
+L</Rate limiting>).
 
 =head2 Passing claims to a backend
 

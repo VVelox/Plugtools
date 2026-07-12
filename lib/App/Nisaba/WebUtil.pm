@@ -92,18 +92,22 @@ my %SCOPE_KEYS = (
 		[ { scope => 'forgot', parts => [ 'user', 'ip' ] }, { scope => 'forgot_ip', parts => ['ip'], backstop => 1 } ],
 	passkey => [ { scope => 'passkey', parts => ['ip'] } ],
 	reset   => [ { scope => 'reset',   parts => ['ip'] } ],
+	token   =>
+		[ { scope => 'token', parts => [ 'user', 'ip' ] }, { scope => 'token_ip', parts => ['ip'], backstop => 1 } ],
 );
 
 # Built-in defaults; every value is overridable in the config (see below).
 my %DEFAULT_POLICIES = (
-	login     => { max => 8,  window => 900,  lockout => 900 },
-	login_ip  => { max => 50, window => 900,  lockout => 1800 },
-	totp      => { max => 5,  window => 300,  lockout => 900 },
-	totp_ip   => { max => 50, window => 900,  lockout => 1800 },
-	passkey   => { max => 30, window => 900,  lockout => 900 },
-	reset     => { max => 20, window => 3600, lockout => 3600 },
-	forgot    => { max => 3,  window => 3600, lockout => 3600 },
-	forgot_ip => { max => 10, window => 3600, lockout => 3600 },
+	login     => { max => 8,   window => 900,  lockout => 900 },
+	login_ip  => { max => 50,  window => 900,  lockout => 1800 },
+	totp      => { max => 5,   window => 300,  lockout => 900 },
+	totp_ip   => { max => 50,  window => 900,  lockout => 1800 },
+	passkey   => { max => 30,  window => 900,  lockout => 900 },
+	reset     => { max => 20,  window => 3600, lockout => 3600 },
+	forgot    => { max => 3,   window => 3600, lockout => 3600 },
+	forgot_ip => { max => 10,  window => 3600, lockout => 3600 },
+	token     => { max => 10,  window => 900,  lockout => 900 },
+	token_ip  => { max => 100, window => 900,  lockout => 1800 },
 );
 
 sub install_rate_limiter {

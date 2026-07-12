@@ -7,6 +7,7 @@ use Mojo::JSON   qw(decode_json);
 use MIME::Base64 ();
 use Digest::SHA  qw(sha256);
 use Crypt::PK::RSA;
+use Crypt::PRNG          qw(random_bytes);
 use App::Nisaba::WebUtil qw(secure_compare);
 
 # --------------------------------------------------------------------------- #
@@ -23,19 +24,13 @@ sub _pt_call {
 	return '';
 }
 
-# Generate a random base64url string
+# Generate a random base64url string. Crypt::PRNG croaks rather than
+# returning weak/short output if the underlying entropy source fails.
 sub _random_b64url {
 	my ($len) = @_;
 	$len //= 32;
-	my $bytes = '';
-	open my $fh, '<:raw', '/dev/urandom' or return undef;
-	read $fh, $bytes, $len;
-	close $fh;
-	my $b64 = MIME::Base64::encode_base64( $bytes, '' );
-	$b64 =~ tr|+/|-_|;
-	$b64 =~ s/=+$//;
-	return $b64;
-} ## end sub _random_b64url
+	return _b64url_encode( random_bytes($len) );
+}
 
 # Base64url encode without padding
 sub _b64url_encode {
@@ -64,19 +59,24 @@ sub discovery {
 
 	$self->render(
 		json => {
-			issuer                                => $issuer,
-			authorization_endpoint                => "$issuer/authorize",
-			token_endpoint                        => "$issuer/token",
-			userinfo_endpoint                     => "$issuer/userinfo",
-			end_session_endpoint                  => "$issuer/sso/logout",
-			response_types_supported              => ['code'],
-			grant_types_supported                 => ['authorization_code'],
-			subject_types_supported               => ['public'],
-			jwks_uri                              => "$issuer/jwks",
-			id_token_signing_alg_values_supported => [ 'RS256',  'HS256' ],
-			scopes_supported                      => [ 'openid', 'profile', 'email', 'phone', 'address' ],
-			token_endpoint_auth_methods_supported => [ 'client_secret_basic', 'client_secret_post', 'none', ],
-			claims_supported                      => [
+			issuer                                        => $issuer,
+			authorization_endpoint                        => "$issuer/authorize",
+			token_endpoint                                => "$issuer/token",
+			userinfo_endpoint                             => "$issuer/userinfo",
+			end_session_endpoint                          => "$issuer/sso/logout",
+			revocation_endpoint                           => "$issuer/revoke",
+			introspection_endpoint                        => "$issuer/introspect",
+			response_types_supported                      => ['code'],
+			response_modes_supported                      => ['query'],
+			grant_types_supported                         => [ 'authorization_code',  'refresh_token' ],
+			revocation_endpoint_auth_methods_supported    => [ 'client_secret_basic', 'client_secret_post', 'none' ],
+			introspection_endpoint_auth_methods_supported => [ 'client_secret_basic', 'client_secret_post' ],
+			subject_types_supported                       => ['public'],
+			jwks_uri                                      => "$issuer/jwks",
+			id_token_signing_alg_values_supported         => [ 'RS256',  'HS256' ],
+			scopes_supported                              => [ 'openid', 'profile', 'email', 'phone', 'address' ],
+			token_endpoint_auth_methods_supported         => [ 'client_secret_basic', 'client_secret_post', 'none', ],
+			claims_supported                              => [
 				'sub',          'name',                  'given_name',         'family_name',
 				'middle_name',  'nickname',              'preferred_username', 'profile',
 				'picture',      'website',               'email',              'email_verified',
@@ -186,6 +186,62 @@ sub authorize {
 		return $self->_authz_error( $redirect_uri, $state, 'invalid_scope', 'The openid scope is required.' );
 	}
 
+	# The client's registered oidcScope values are an allow-list. openid itself
+	# is always permitted (no OIDC client can function without it); every other
+	# requested scope must be registered, so a client can never obtain
+	# profile/email/phone/address claims its registration never granted. A
+	# client with no registered scopes gets openid only.
+	my %allowed_scopes = map { $_ => 1 } $client_entry->get_value('oidcScope');
+	$allowed_scopes{openid} = 1;
+	my @denied_scopes = grep { !$allowed_scopes{$_} } @scopes;
+	if (@denied_scopes) {
+		return $self->_authz_error( $redirect_uri, $state, 'invalid_scope',
+			'Scope not registered for this client: ' . join( ' ', @denied_scopes ) . '.' );
+	}
+
+	# response_mode (OAuth 2.0 Multiple Response Types): only the default
+	# 'query' encoding for the code flow is implemented. Reject anything else
+	# rather than silently answering in an encoding the client did not ask for.
+	my $response_mode = $self->param('response_mode') // '';
+	if ( $response_mode ne '' && $response_mode ne 'query' ) {
+		return $self->_authz_error( $redirect_uri, $state, 'invalid_request',
+			"Unsupported response_mode '$response_mode'; only 'query' is supported." );
+	}
+
+	# prompt (OIDC Core 3.1.2.1). none must stand alone, and this is a
+	# single-account provider so select_account can never be satisfied.
+	my $prompt  = $self->param('prompt') // '';
+	my %prompts = map { $_ => 1 } split /\s+/, $prompt;
+	for my $p ( sort keys %prompts ) {
+		unless ( $p eq 'none' || $p eq 'login' || $p eq 'consent' || $p eq 'select_account' ) {
+			return $self->_authz_error( $redirect_uri, $state, 'invalid_request', "Unknown prompt value '$p'." );
+		}
+	}
+	if ( $prompts{none} && keys(%prompts) > 1 ) {
+		return $self->_authz_error( $redirect_uri, $state, 'invalid_request',
+			'prompt=none cannot be combined with other prompt values.' );
+	}
+	if ( $prompts{select_account} ) {
+		return $self->_authz_error( $redirect_uri, $state, 'account_selection_required',
+			'Account selection is not supported.' );
+	}
+
+	# max_age: request parameter, falling back to the client's registered
+	# oidcDefaultMaxAge. The End-User must have authenticated within this many
+	# seconds; a staler session is sent back through login. (auth_time is
+	# always included in the ID token, so oidcRequireAuthTime is satisfied
+	# unconditionally.)
+	my $max_age = $self->param('max_age');
+	$max_age = $client_entry->get_value('oidcDefaultMaxAge') if !defined $max_age || $max_age eq '';
+	undef $max_age unless defined $max_age && $max_age =~ /\A\d+\z/;
+
+	# A code_challenge_method without a code_challenge is malformed — reject it
+	# rather than silently issuing a code with no PKCE binding.
+	if ( $code_challenge eq '' && $code_challenge_method ne '' ) {
+		return $self->_authz_error( $redirect_uri, $state, 'invalid_request',
+			'code_challenge_method requires a code_challenge.' );
+	}
+
 	# RFC 7636 Section 4.3: reject unsupported code_challenge_method
 	if (   $code_challenge ne ''
 		&& $code_challenge_method ne ''
@@ -220,26 +276,71 @@ sub authorize {
 		} ## end if ($is_public)
 	} ## end if ($require_pkce)
 
-	# Store the authorization request in session
-	$self->session(
-		sso_authz => {
-			client_id             => $client_id,
-			redirect_uri          => $redirect_uri,
-			scope                 => $scope,
-			state                 => $state,
-			nonce                 => $nonce,
-			code_challenge        => $code_challenge,
-			code_challenge_method => $code_challenge_method,
-		}
+	my %authz = (
+		client_id             => $client_id,
+		redirect_uri          => $redirect_uri,
+		scope                 => $scope,
+		state                 => $state,
+		nonce                 => $nonce,
+		code_challenge        => $code_challenge,
+		code_challenge_method => $code_challenge_method,
+		created               => time(),
 	);
+	$authz{max_age} = $max_age + 0 if defined $max_age;
+	# prompt=login — and max_age=0, which OIDC defines as equivalent — demand
+	# an authentication fresher than this request, even if a session exists.
+	$authz{min_auth_time} = time() if $prompts{login} || ( defined $max_age && $max_age == 0 );
+	# prompt=consent demands the consent screen even when a matching grant is
+	# already remembered.
+	$authz{force_consent} = 1 if $prompts{consent};
 
-	# If user is already authenticated, go straight to consent
-	if ( $self->session('sso_user') ) {
-		return $self->redirect_to('sso_consent');
+	# prompt=none: no UI may be shown. Succeed silently only when the session
+	# is already authenticated (and fresh enough) and the user has already
+	# consented — in this session or durably — to this client/scope
+	# combination; otherwise return the specific error the RP needs to fall
+	# back to an interactive request.
+	if ( $prompts{none} ) {
+		unless ( $self->_authz_auth_ok( \%authz ) ) {
+			return $self->_authz_error( $redirect_uri, $state, 'login_required',
+				'No suitable authenticated session; interaction is required.' );
+		}
+		unless ( $self->_consent_covers( \%authz ) ) {
+			return $self->_authz_error( $redirect_uri, $state, 'consent_required',
+				'Consent has not been granted; interaction is required.' );
+		}
+		return $self->_issue_code( \%authz );
+	} ## end if ( $prompts{none} )
+
+	# Store the authorization request server-side in the session, keyed by a
+	# request ID carried through the login/consent redirects. Keying by rid
+	# lets several authorization requests (e.g. two browser tabs) proceed
+	# concurrently without clobbering each other. A per-session monotonic
+	# sequence orders the requests exactly; the created timestamp alone has
+	# one-second resolution, which ties under rapid requests.
+	my $seq = ( $self->session('sso_authz_seq') // 0 ) + 1;
+	$self->session( sso_authz_seq => $seq );
+	$authz{seq} = $seq;
+
+	my $rid     = _random_b64url(16);
+	my $pending = $self->session('sso_authz');
+	$pending = {} unless ref $pending eq 'HASH';
+	$pending->{$rid} = \%authz;
+
+	# Cap the number of in-flight requests so the session cookie stays small;
+	# beyond the cap the oldest are dropped.
+	my @rids = sort { ( $pending->{$b}{seq} // 0 ) <=> ( $pending->{$a}{seq} // 0 ) }
+		grep { ref $pending->{$_} eq 'HASH' } keys %$pending;
+	delete @{$pending}{ @rids[ 5 .. $#rids ] } if @rids > 5;
+	$self->session( sso_authz => $pending );
+
+	# If the user is already authenticated (and the authentication is fresh
+	# enough for this request), move the request forward — which skips the
+	# consent screen entirely when a matching grant is already remembered.
+	# Otherwise go to login.
+	if ( $self->_authz_auth_ok( \%authz ) ) {
+		return $self->_advance_authz( $rid, \%authz );
 	}
-
-	# Otherwise, redirect to login
-	$self->redirect_to('sso_login');
+	$self->redirect_to( $self->url_for('sso_login')->query( rid => $rid ) );
 } ## end sub authorize
 
 # --------------------------------------------------------------------------- #
@@ -248,7 +349,8 @@ sub authorize {
 
 sub login_form {
 	my $self = shift;
-	unless ( $self->session('sso_authz') ) {
+	my ( $rid, $authz ) = $self->_pending_authz;
+	unless ($authz) {
 		return $self->render(
 			template          => 'sso/error',
 			layout            => 'sso',
@@ -256,13 +358,16 @@ sub login_form {
 			error_description => 'Please start from the application you want to sign in to.',
 		);
 	}
+	$self->stash( sso_rid => $rid );
 	$self->render( template => 'sso/login', layout => 'sso' );
 } ## end sub login_form
 
 sub login {
-	my $self = shift;
-	my $user = $self->param('user') // '';
-	my $pass = $self->param('pass') // '';
+	my $self  = shift;
+	my $user  = $self->param('user') // '';
+	my $pass  = $self->param('pass') // '';
+	my ($rid) = $self->_pending_authz;
+	$self->stash( sso_rid => $rid // '' );
 
 	return unless $self->rate_guard( 'login', user => $user, render => { template => 'sso/login', layout => 'sso' } );
 
@@ -270,7 +375,7 @@ sub login {
 	if ($err) {
 		$self->rate_fail( 'login', user => $user );
 		$self->flash( error => 'Invalid username or password.' );
-		return $self->redirect_to('sso_login');
+		return $self->redirect_to( $self->url_for('sso_login')->query( rid => $rid // '' ) );
 	}
 	$self->rate_reset( 'login', user => $user );
 
@@ -279,12 +384,14 @@ sub login {
 	$self->_pt_call( sub { $info = $self->pt->userSelfInfo( { user => $user } ) } );
 	if ( $info && ( $info->{totpStatus} // '' ) eq 'active' ) {
 		$self->session( sso_totp_pending_user => $user );
-		return $self->redirect_to('sso_totp_challenge');
+		return $self->redirect_to( $self->url_for('sso_totp_challenge')->query( rid => $rid // '' ) );
 	}
 
 	$self->session( sso_user      => $user );
 	$self->session( sso_auth_time => time() );
-	$self->redirect_to('sso_consent');
+	my ( undef, $authz ) = $self->_pending_authz;
+	return $self->_advance_authz( $rid, $authz ) if defined $rid && $authz;
+	$self->redirect_to( $self->url_for('sso_consent')->query( rid => $rid // '' ) );
 } ## end sub login
 
 # --------------------------------------------------------------------------- #
@@ -412,17 +519,21 @@ sub passkey_login_finish {
 
 sub totp_challenge_form {
 	my $self = shift;
+	my ($rid) = $self->_pending_authz;
 	unless ( $self->session('sso_totp_pending_user') ) {
-		return $self->redirect_to('sso_login');
+		return $self->redirect_to( $self->url_for('sso_login')->query( rid => $rid // '' ) );
 	}
+	$self->stash( sso_rid => $rid // '' );
 	$self->render( template => 'sso/totp_challenge', layout => 'sso' );
 }
 
 sub totp_challenge {
-	my $self = shift;
-	my $user = $self->session('sso_totp_pending_user');
+	my $self  = shift;
+	my $user  = $self->session('sso_totp_pending_user');
+	my ($rid) = $self->_pending_authz;
+	$self->stash( sso_rid => $rid // '' );
 	unless ($user) {
-		return $self->redirect_to('sso_login');
+		return $self->redirect_to( $self->url_for('sso_login')->query( rid => $rid // '' ) );
 	}
 
 	return
@@ -439,14 +550,16 @@ sub totp_challenge {
 	if ( $err || !$ok ) {
 		$self->rate_fail( 'totp', user => $user );
 		$self->flash( error => 'Invalid TOTP code. Please try again.' );
-		return $self->redirect_to('sso_totp_challenge');
+		return $self->redirect_to( $self->url_for('sso_totp_challenge')->query( rid => $rid // '' ) );
 	}
 	$self->rate_reset( 'totp', user => $user );
 
 	delete $self->session->{sso_totp_pending_user};
 	$self->session( sso_user      => $user );
 	$self->session( sso_auth_time => time() );
-	$self->redirect_to('sso_consent');
+	my ( undef, $authz ) = $self->_pending_authz;
+	return $self->_advance_authz( $rid, $authz ) if defined $rid && $authz;
+	$self->redirect_to( $self->url_for('sso_consent')->query( rid => $rid // '' ) );
 } ## end sub totp_challenge
 
 # --------------------------------------------------------------------------- #
@@ -456,7 +569,7 @@ sub totp_challenge {
 sub consent_form {
 	my $self = shift;
 
-	my $authz = $self->session('sso_authz');
+	my ( $rid, $authz ) = $self->_pending_authz;
 	unless ($authz) {
 		return $self->render(
 			template          => 'sso/error',
@@ -466,10 +579,13 @@ sub consent_form {
 		);
 	}
 
+	# Re-authentication constraints (max_age / prompt=login) gate the consent
+	# screen too, so they cannot be bypassed by navigating here directly.
 	my $user = $self->session('sso_user');
-	unless ($user) {
-		return $self->redirect_to('sso_login');
+	unless ( $user && $self->_authz_auth_ok($authz) ) {
+		return $self->redirect_to( $self->url_for('sso_login')->query( rid => $rid ) );
 	}
+	$self->stash( sso_rid => $rid );
 
 	# Look up client for display info
 	my $client_entry;
@@ -506,11 +622,17 @@ sub consent_form {
 sub consent {
 	my $self = shift;
 
-	my $authz = $self->session('sso_authz');
-	my $user  = $self->session('sso_user');
+	my ( $rid, $authz ) = $self->_pending_authz;
+	my $user = $self->session('sso_user');
 	unless ( $authz && $user ) {
 		return $self->redirect_to('sso_login');
 	}
+	unless ( $self->_authz_auth_ok($authz) ) {
+		return $self->redirect_to( $self->url_for('sso_login')->query( rid => $rid ) );
+	}
+
+	# This request is settled either way; drop it from the pending map.
+	delete $self->session->{sso_authz}{$rid};
 
 	my $decision = $self->param('decision') // '';
 	if ( $decision ne 'allow' ) {
@@ -521,38 +643,32 @@ sub consent {
 		);
 	}
 
-	# Generate authorization code
-	my $code = _random_b64url(32);
+	# Remember the granted client/scope combination for this session so a
+	# later prompt=none (silent) request can succeed without UI.
+	my $consents = $self->session('sso_consents');
+	$consents = {} unless ref $consents eq 'HASH';
+	my %granted = map { $_ => 1 } split( /\s+/, $consents->{ $authz->{client_id} } // '' ),
+		split( /\s+/, $authz->{scope} // '' );
+	$consents->{ $authz->{client_id} } = join ' ', sort keys %granted;
+	$self->session( sso_consents => $consents );
 
-	# Store code details in the shared server-side store so the token endpoint
-	# (called server-to-server by the relying party, with no browser cookie)
-	# can redeem it. The TTL here is a GC backstop; the token endpoint enforces
-	# the protocol expiry from issued_at against the current configured lifetime.
-	my $code_lifetime = $self->pt->{ini}->{''}->{ssoCodeLifetime} // 600;
-	$self->sso_storage->put(
-		'code', $code,
-		{
-			client_id             => $authz->{client_id},
-			redirect_uri          => $authz->{redirect_uri},
-			scope                 => $authz->{scope},
-			nonce                 => $authz->{nonce},
-			user                  => $user,
-			issued_at             => time(),
-			auth_time             => ( $self->session('sso_auth_time') // time() ),
-			code_challenge        => $authz->{code_challenge},
-			code_challenge_method => $authz->{code_challenge_method},
-		},
-		$code_lifetime,
-	);
+	# When asked to, also persist the grant in the shared store so it survives
+	# this browser session: later visits skip the consent screen and silent
+	# (prompt=none) requests succeed after any fresh login.
+	if ( $self->param('remember') ) {
+		my $key      = $user . "\0" . $authz->{client_id};
+		my $existing = $self->sso_storage->get( 'consent', $key );
+		my %all      = map { $_ => 1 } split( /\s+/, ( ( $existing && $existing->{scopes} ) // '' ) ),
+			split( /\s+/, $authz->{scope} // '' );
+		my $ttl = $self->pt->{ini}->{''}->{ssoConsentLifetime} // 0;
+		$self->sso_storage->put(
+			'consent', $key,
+			{ scopes => join( ' ', sort keys %all ), granted_at => time() },
+			( $ttl && $ttl > 0 ) ? $ttl : undef,
+		);
+	} ## end if ( $self->param('remember') )
 
-	# Clean up authorization session
-	delete $self->session->{sso_authz};
-
-	# Redirect to client with code
-	my $url = Mojo::URL->new( $authz->{redirect_uri} );
-	$url->query->merge( code  => $code );
-	$url->query->merge( state => $authz->{state} ) if $authz->{state} ne '';
-	$self->redirect_to($url);
+	$self->_issue_code($authz);
 } ## end sub consent
 
 # --------------------------------------------------------------------------- #
@@ -593,6 +709,29 @@ sub logout_post {
 	my $cid   = $self->param('client_id')                // '';
 
 	my $info = $self->_verify_id_token_hint($hint);
+
+	# /sso/logout is exempt from the app-wide CSRF middleware so relying
+	# parties may POST to the end-session endpoint cross-site (OIDC
+	# RP-Initiated Logout 1.0). That is only safe when the request
+	# authenticates itself with a verifiable id_token_hint; anything else must
+	# be our own confirmation form, which carries the session's CSRF token.
+	# A cross-site POST without either gets the confirmation page, not a
+	# logout.
+	unless ( $info && $info->{verified} ) {
+		my $expected = $self->session('csrf_token');
+		my $got      = $self->req->headers->header('X-CSRF-Token');
+		$got = $self->param('csrf_token') unless defined $got && $got ne '';
+		unless ( defined $expected && $expected ne '' && defined $got && secure_compare( $got, $expected ) ) {
+			return $self->render(
+				template                 => 'sso/logout_confirm',
+				layout                   => 'sso',
+				post_logout_redirect_uri => $post,
+				state                    => $state,
+				client_id                => $cid,
+			);
+		}
+	} ## end unless ( $info && $info->{verified} )
+
 	return $self->_perform_logout( $post, $state, $info, $cid );
 } ## end sub logout_post
 
@@ -603,22 +742,56 @@ sub logout_post {
 sub token {
 	my $self = shift;
 
-	my $grant_type = $self->param('grant_type') // '';
-	if ( $grant_type ne 'authorization_code' ) {
+	# RFC 6749 Section 3.2 / 4.1.3: token request parameters arrive in the
+	# request body (application/x-www-form-urlencoded). Query-string
+	# parameters are deliberately ignored so authorization codes and client
+	# secrets never end up in access or proxy logs.
+	my $params = $self->req->body_params;
+
+	my $grant_type = $params->param('grant_type') // '';
+	unless ( $grant_type eq 'authorization_code' || $grant_type eq 'refresh_token' ) {
 		return $self->render(
 			json   => { error => 'unsupported_grant_type' },
 			status => 400,
 		);
 	}
 
-	my $code         = $self->param('code')         // '';
-	my $redirect_uri = $self->param('redirect_uri') // '';
-	my $client_id    = $self->param('client_id')    // '';
+	# Client authentication happens before any grant is touched, so a failed
+	# authentication cannot burn a legitimate authorization code or refresh
+	# token.
+	my ( $client_id, $client_entry ) = $self->_authenticate_client($params);
+	return unless defined $client_id;
 
-	# Client authentication: check Authorization header for client_secret_basic
-	my $client_secret = $self->param('client_secret')      // '';
-	my $auth_header   = $self->req->headers->authorization // '';
-	my $used_basic    = 0;
+	if ( $grant_type eq 'refresh_token' ) {
+		return $self->_token_refresh( $params, $client_id, $client_entry );
+	}
+	return $self->_token_authorization_code( $params, $client_id, $client_entry );
+} ## end sub token
+
+# Shared client authentication for the server-to-server endpoints (/token,
+# /revoke, /introspect). Reads client_id/secret from the Authorization header
+# (client_secret_basic) or the request body (client_secret_post), applies the
+# token-scope rate limit, resolves the client entry (fail closed), and
+# enforces the registered token endpoint auth method:
+#   - none: public client, no authentication (PKCE is enforced at the
+#     authorization endpoint instead).
+#   - client_secret_basic / client_secret_post: the secret must arrive by
+#     the registered transport and match.
+#   - unset: legacy default — a client with a stored secret must present it
+#     by either transport; one without a secret is treated as public.
+#   - anything else (private_key_jwt, client_secret_jwt, ...) is not
+#     implemented by this provider: fail closed rather than skipping
+#     authentication.
+# Returns ( $client_id, $client_entry ) on success; renders the appropriate
+# error response and returns an empty list on failure.
+sub _authenticate_client {
+	my ( $self, $params ) = @_;
+
+	my $client_id   = $params->param('client_id')        // '';
+	my $body_secret = $params->param('client_secret')    // '';
+	my $auth_header = $self->req->headers->authorization // '';
+	my $used_basic  = 0;
+	my $basic_secret;
 	if ( $auth_header =~ /^Basic\s+(.+)$/i ) {
 		$used_basic = 1;
 		my $decoded = MIME::Base64::decode_base64($1);
@@ -632,14 +805,87 @@ sub token {
 			$hdr_secret =~ s/\+/ /g;
 			$hdr_secret = url_unescape($hdr_secret);
 		}
-		$client_id     = $hdr_id     // $client_id;
-		$client_secret = $hdr_secret // $client_secret;
+		$client_id    = $hdr_id // $client_id;
+		$basic_secret = $hdr_secret;
 	} ## end if ( $auth_header =~ /^Basic\s+(.+)$/i )
+
+	# Brute-force guard, keyed by (client_id, IP) with an IP backstop.
+	return () unless $self->rate_guard( 'token', user => $client_id, render => { json => 1 } );
+
+	# Resolve the client entry. This must fail closed: the secret check below
+	# depends on it, so a lookup that errors out (e.g. a transient LDAP
+	# failure) is a server_error, and an unknown client is invalid_client —
+	# never fall through with authentication unchecked.
+	my $client_entry;
+	my $lookup_err
+		= $self->_pt_call( sub { $client_entry = $self->pt->getOIDCClientEntry( { clientId => $client_id } ) } );
+	if ($lookup_err) {
+		$self->render(
+			json   => { error => 'server_error', error_description => 'Unable to resolve client.' },
+			status => 500,
+		);
+		return ();
+	}
+	unless ($client_entry) {
+		$self->rate_fail( 'token', user => $client_id );
+		$self->res->headers->www_authenticate('Basic realm="token"') if $used_basic;
+		$self->render(
+			json   => { error => 'invalid_client', error_description => 'Client authentication failed.' },
+			status => 401,
+		);
+		return ();
+	}
+
+	my $auth_method   = $client_entry->get_value('oidcTokenEndpointAuthMethod') // '';
+	my $stored_secret = $client_entry->get_value('oidcClientSecret')            // '';
+
+	my $auth_failed;
+	if ( $auth_method eq 'none' ) {
+		$auth_failed = 0;
+	} elsif ( $auth_method eq 'client_secret_basic' ) {
+		$auth_failed
+			= $stored_secret eq ''
+			|| !$used_basic
+			|| !secure_compare( $basic_secret // '', $stored_secret );
+	} elsif ( $auth_method eq 'client_secret_post' ) {
+		$auth_failed
+			= $stored_secret eq ''
+			|| $used_basic
+			|| !secure_compare( $body_secret, $stored_secret );
+	} elsif ( $auth_method eq '' ) {
+		my $presented = $used_basic ? ( $basic_secret // '' ) : $body_secret;
+		$auth_failed = ( $stored_secret ne '' ) && !secure_compare( $presented, $stored_secret );
+	} else {
+		$auth_failed = 1;
+	}
+
+	if ($auth_failed) {
+		$self->rate_fail( 'token', user => $client_id );
+		# RFC 6749 Section 5.2: if the client authenticated via the
+		# Authorization header, a 401 MUST carry a WWW-Authenticate header.
+		$self->res->headers->www_authenticate('Basic realm="token"') if $used_basic;
+		$self->render(
+			json   => { error => 'invalid_client', error_description => 'Client authentication failed.' },
+			status => 401,
+		);
+		return ();
+	} ## end if ($auth_failed)
+	$self->rate_reset( 'token', user => $client_id );
+
+	return ( $client_id, $client_entry );
+} ## end sub _authenticate_client
+
+sub _token_authorization_code {
+	my ( $self, $params, $client_id, $client_entry ) = @_;
+
+	my $code         = $params->param('code')         // '';
+	my $redirect_uri = $params->param('redirect_uri') // '';
 
 	# Look up the authorization code in the shared store and atomically delete
 	# it: consume() enforces one-time use across concurrent worker processes.
 	my $code_data = $self->sso_storage->consume( 'code', $code );
 	unless ($code_data) {
+		$self->rate_fail( 'token', user => $client_id );
 		return $self->render(
 			json   => { error => 'invalid_grant', error_description => 'Authorization code not found or expired.' },
 			status => 400,
@@ -655,7 +901,7 @@ sub token {
 		);
 	}
 
-	# Validate client_id matches
+	# The code must have been issued to the authenticated client
 	if ( $client_id ne $code_data->{client_id} ) {
 		return $self->render(
 			json   => { error => 'invalid_grant', error_description => 'client_id mismatch.' },
@@ -682,7 +928,7 @@ sub token {
 
 	# Validate PKCE code_verifier if code_challenge was provided
 	if ( $code_data->{code_challenge} && $code_data->{code_challenge} ne '' ) {
-		my $code_verifier = $self->param('code_verifier') // '';
+		my $code_verifier = $params->param('code_verifier') // '';
 		unless ($code_verifier) {
 			return $self->render(
 				json   => { error => 'invalid_grant', error_description => 'code_verifier required.' },
@@ -706,54 +952,41 @@ sub token {
 		}
 	} ## end if ( $code_data->{code_challenge} && $code_data...)
 
-	# Validate client_secret for confidential clients
-	my $client_entry;
-	$self->_pt_call( sub { $client_entry = $self->pt->getOIDCClientEntry( { clientId => $client_id } ) } );
-	if ($client_entry) {
-		my $stored_secret = $client_entry->get_value('oidcClientSecret') // '';
-		if ( $stored_secret ne '' && !secure_compare( $client_secret, $stored_secret ) ) {
-			# RFC 6749 Section 5.2: if the client authenticated via the
-			# Authorization header, a 401 MUST carry a WWW-Authenticate header.
-			$self->res->headers->www_authenticate('Basic realm="token"') if $used_basic;
-			return $self->render(
-				json   => { error => 'invalid_client', error_description => 'Client authentication failed.' },
-				status => 401,
-			);
-		}
-	} ## end if ($client_entry)
-
-	# Generate access token
-	my $access_token   = _random_b64url(32);
-	my $token_lifetime = $self->pt->{ini}->{''}->{ssoTokenLifetime} // 3600;
-
-	# Store the access token in the shared store so the UserInfo endpoint (also
-	# called server-to-server) can resolve it. TTL is a GC backstop; UserInfo
-	# enforces the protocol expiry from issued_at.
-	$self->sso_storage->put(
-		'token',
-		$access_token,
-		{
-			user      => $code_data->{user},
-			scope     => $code_data->{scope},
-			client_id => $client_id,
-			issued_at => time(),
-		},
-		$token_lifetime,
-	);
-
-	# Build ID token. Returns undef if the client is configured for a signing
-	# algorithm that the server cannot satisfy (missing/unusable key material);
-	# never silently downgrade to an unsigned token in that case.
+	# Build the ID token before minting the access token so a signing failure
+	# leaves nothing behind: the code is consumed either way, but no orphan
+	# access token may remain valid in the store after a server_error response.
+	# Returns undef if the client is configured for a signing algorithm that
+	# the server cannot satisfy (missing/unusable key material); never
+	# silently downgrade to an unsigned token in that case.
 	my $id_token
 		= $self->_build_id_token( $code_data->{user}, $client_id, $code_data->{nonce}, $code_data->{scope},
 			$code_data->{auth_time},
-		);
+			$client_entry, );
 	unless ( defined $id_token ) {
 		return $self->render(
 			json   => { error => 'server_error', error_description => 'Unable to sign ID token.' },
 			status => 500,
 		);
 	}
+
+	my $access_token = $self->_issue_access_token( $code_data->{user}, $code_data->{scope}, $client_id );
+
+	# Issue a refresh token only when the client's registration allows the
+	# refresh_token grant.
+	my %grant_types = map { $_ => 1 } $client_entry->get_value('oidcGrantType');
+	my $refresh_token;
+	if ( $grant_types{refresh_token} ) {
+		$refresh_token = $self->_issue_refresh_token(
+			{
+				user      => $code_data->{user},
+				scope     => $code_data->{scope},
+				client_id => $client_id,
+				auth_time => $code_data->{auth_time},
+			}
+		);
+	} ## end if ( $grant_types{refresh_token} )
+
+	my $token_lifetime = $self->pt->{ini}->{''}->{ssoTokenLifetime} // 3600;
 
 	# RFC 6749 Section 5.1: responses containing tokens MUST include these headers
 	$self->res->headers->cache_control('no-store');
@@ -766,9 +999,236 @@ sub token {
 			expires_in   => ( $token_lifetime + 0 ),    # RFC 6749 5.1: MUST be a JSON number
 			id_token     => $id_token,
 			scope        => $code_data->{scope},
+			( defined $refresh_token ? ( refresh_token => $refresh_token ) : () ),
 		}
 	);
-} ## end sub token
+} ## end sub _token_authorization_code
+
+sub _token_refresh {
+	my ( $self, $params, $client_id, $client_entry ) = @_;
+
+	# The client registration must allow the refresh_token grant.
+	my %grant_types = map { $_ => 1 } $client_entry->get_value('oidcGrantType');
+	unless ( $grant_types{refresh_token} ) {
+		return $self->render(
+			json =>
+				{ error => 'unauthorized_client', error_description => 'Client may not use the refresh_token grant.' },
+			status => 400,
+		);
+	}
+
+	my $presented = $params->param('refresh_token') // '';
+	if ( $presented eq '' ) {
+		return $self->render(
+			json   => { error => 'invalid_request', error_description => 'refresh_token is required.' },
+			status => 400,
+		);
+	}
+
+	# Rotation: consume() atomically retires the presented token, so a replay
+	# of a rotated-out (possibly stolen) refresh token fails.
+	my $rt_data = $self->sso_storage->consume( 'refresh', $presented );
+	unless ($rt_data) {
+		$self->rate_fail( 'token', user => $client_id );
+		return $self->render(
+			json   => { error => 'invalid_grant', error_description => 'Refresh token not found or expired.' },
+			status => 400,
+		);
+	}
+
+	my $rt_lifetime = $self->pt->{ini}->{''}->{ssoRefreshTokenLifetime} // 2592000;
+	if ( ( time() - $rt_data->{issued_at} ) > $rt_lifetime ) {
+		return $self->render(
+			json   => { error => 'invalid_grant', error_description => 'Refresh token expired.' },
+			status => 400,
+		);
+	}
+
+	# The refresh token must have been issued to the authenticated client
+	if ( $client_id ne ( $rt_data->{client_id} // '' ) ) {
+		$self->rate_fail( 'token', user => $client_id );
+		return $self->render(
+			json   => { error => 'invalid_grant', error_description => 'client_id mismatch.' },
+			status => 400,
+		);
+	}
+
+	# Optional scope narrowing (RFC 6749 Section 6): the requested scope must
+	# be a subset of the originally granted one. The refresh token itself
+	# keeps the original grant, so narrowing one exchange is not permanent.
+	my $scope = $params->param('scope') // '';
+	if ( $scope ne '' ) {
+		my %orig = map { $_ => 1 } split /\s+/, ( $rt_data->{scope} // '' );
+		if ( grep { !$orig{$_} } split /\s+/, $scope ) {
+			return $self->render(
+				json   => { error => 'invalid_scope', error_description => 'Scope exceeds the original grant.' },
+				status => 400,
+			);
+		}
+	} else {
+		$scope = $rt_data->{scope} // '';
+	}
+
+	# New ID token (OIDC Core 12.2): same sub, auth_time carried over from the
+	# original authentication, fresh iat, and no nonce.
+	my $id_token
+		= $self->_build_id_token( $rt_data->{user}, $client_id, '', $scope, $rt_data->{auth_time}, $client_entry, );
+	unless ( defined $id_token ) {
+		return $self->render(
+			json   => { error => 'server_error', error_description => 'Unable to sign ID token.' },
+			status => 500,
+		);
+	}
+
+	my $access_token = $self->_issue_access_token( $rt_data->{user}, $scope, $client_id );
+
+	# Rotate: the old token is already retired; hand out a successor carrying
+	# the original (un-narrowed) grant.
+	my $new_refresh_token = $self->_issue_refresh_token(
+		{
+			user      => $rt_data->{user},
+			scope     => $rt_data->{scope},
+			client_id => $client_id,
+			auth_time => $rt_data->{auth_time},
+		}
+	);
+
+	my $token_lifetime = $self->pt->{ini}->{''}->{ssoTokenLifetime} // 3600;
+
+	$self->res->headers->cache_control('no-store');
+	$self->res->headers->header( 'Pragma' => 'no-cache' );
+
+	$self->render(
+		json => {
+			access_token  => $access_token,
+			token_type    => 'Bearer',
+			expires_in    => ( $token_lifetime + 0 ),
+			id_token      => $id_token,
+			scope         => $scope,
+			refresh_token => $new_refresh_token,
+		}
+	);
+} ## end sub _token_refresh
+
+# Mint and store an access token. TTL is a GC backstop; UserInfo and
+# introspection enforce the protocol expiry from issued_at.
+sub _issue_access_token {
+	my ( $self, $user, $scope, $client_id ) = @_;
+	my $access_token   = _random_b64url(32);
+	my $token_lifetime = $self->pt->{ini}->{''}->{ssoTokenLifetime} // 3600;
+	$self->sso_storage->put(
+		'token',
+		$access_token,
+		{
+			user      => $user,
+			scope     => $scope,
+			client_id => $client_id,
+			issued_at => time(),
+		},
+		$token_lifetime,
+	);
+	return $access_token;
+} ## end sub _issue_access_token
+
+# Mint and store a refresh token carrying the original grant.
+sub _issue_refresh_token {
+	my ( $self, $grant ) = @_;
+	my $refresh_token = _random_b64url(32);
+	my $rt_lifetime   = $self->pt->{ini}->{''}->{ssoRefreshTokenLifetime} // 2592000;
+	$self->sso_storage->put( 'refresh', $refresh_token, { %$grant, issued_at => time() }, $rt_lifetime );
+	return $refresh_token;
+}
+
+# --------------------------------------------------------------------------- #
+# Token revocation (RFC 7009)
+# --------------------------------------------------------------------------- #
+
+sub revoke {
+	my $self = shift;
+
+	my $params = $self->req->body_params;
+	my ( $client_id, $client_entry ) = $self->_authenticate_client($params);
+	return unless defined $client_id;
+
+	# RFC 7009 Section 2.2: respond 200 whether or not the token exists — an
+	# unknown or foreign token reveals nothing. Only tokens issued to the
+	# authenticated client are actually removed. token_type_hint is treated as
+	# just that, a hint: both kinds are checked regardless.
+	my $token = $params->param('token') // '';
+	if ( $token ne '' ) {
+		for my $kind (qw(token refresh)) {
+			my $data = $self->sso_storage->get( $kind, $token );
+			next unless $data;
+			$self->sso_storage->delete( $kind, $token ) if ( $data->{client_id} // '' ) eq $client_id;
+		}
+	}
+
+	$self->res->headers->cache_control('no-store');
+	return $self->render( json => {}, status => 200 );
+} ## end sub revoke
+
+# --------------------------------------------------------------------------- #
+# Token introspection (RFC 7662)
+# --------------------------------------------------------------------------- #
+
+sub introspect {
+	my $self = shift;
+
+	my $params = $self->req->body_params;
+	my ( $client_id, $client_entry ) = $self->_authenticate_client($params);
+	return unless defined $client_id;
+
+	# RFC 7662 Section 2.1: introspection must not be open to callers that
+	# cannot authenticate — an unauthenticated endpoint is a token-validity
+	# oracle. Public clients (auth method none / no secret) are refused.
+	my $auth_method = $client_entry->get_value('oidcTokenEndpointAuthMethod') // '';
+	my $has_secret  = ( $client_entry->get_value('oidcClientSecret') // '' ) ne '';
+	if ( $auth_method eq 'none' || !$has_secret ) {
+		return $self->render(
+			json =>
+				{ error => 'invalid_client', error_description => 'Introspection requires a confidential client.' },
+			status => 401,
+		);
+	}
+
+	$self->res->headers->cache_control('no-store');
+
+	my $token = $params->param('token') // '';
+	my ( $data, $kind );
+	if ( $token ne '' ) {
+		for my $k (qw(token refresh)) {
+			my $d = $self->sso_storage->get( $k, $token );
+			if ($d) { ( $data, $kind ) = ( $d, $k ); last }
+		}
+	}
+
+	# Unknown, expired, or foreign tokens are simply "not active" (RFC 7662
+	# Section 2.2) — never leak another client's token metadata.
+	my $lifetime
+		= ( $kind // '' ) eq 'refresh'
+		? ( $self->pt->{ini}->{''}->{ssoRefreshTokenLifetime} // 2592000 )
+		: ( $self->pt->{ini}->{''}->{ssoTokenLifetime} // 3600 );
+	unless ( $data
+		&& ( $data->{client_id} // '' ) eq $client_id
+		&& ( time() - ( $data->{issued_at} // 0 ) ) <= $lifetime )
+	{
+		return $self->render( json => { active => Mojo::JSON->false } );
+	}
+
+	return $self->render(
+		json => {
+			active     => Mojo::JSON->true,
+			scope      => ( $data->{scope} // '' ),
+			client_id  => $data->{client_id},
+			username   => $data->{user},
+			sub        => $data->{user},
+			token_type => ( $kind eq 'refresh' ? 'refresh_token' : 'Bearer' ),
+			iat        => ( $data->{issued_at} + 0 ),
+			exp        => ( $data->{issued_at} + $lifetime + 0 ),
+			iss        => $self->sso_issuer,
+		}
+	);
+} ## end sub introspect
 
 # --------------------------------------------------------------------------- #
 # UserInfo endpoint
@@ -818,6 +1278,111 @@ sub userinfo {
 # --------------------------------------------------------------------------- #
 # Private helpers
 # --------------------------------------------------------------------------- #
+
+# Resolve the pending authorization request for this hop. Prefers the rid
+# request parameter (set on every redirect between authorize, login, TOTP and
+# consent); with no rid, falls back to the most recently started pending
+# request (direct navigation, and the pre-rid behaviour). Returns
+# ( $rid, $authz ) or an empty list.
+sub _pending_authz {
+	my ($self) = @_;
+	my $pending = $self->session('sso_authz');
+	return () unless ref $pending eq 'HASH';
+	my $rid = $self->param('rid') // '';
+	if ( $rid ne '' ) {
+		my $authz = $pending->{$rid};
+		return ( ref $authz eq 'HASH' ) ? ( $rid, $authz ) : ();
+	}
+	my ($newest) = sort { ( $pending->{$b}{seq} // 0 ) <=> ( $pending->{$a}{seq} // 0 ) }
+		grep { ref $pending->{$_} eq 'HASH' } keys %$pending;
+	return defined $newest ? ( $newest, $pending->{$newest} ) : ();
+} ## end sub _pending_authz
+
+# Is the session's authentication acceptable for this pending request? The
+# user must be logged in and the recorded auth_time must satisfy the request's
+# max_age (request param or oidcDefaultMaxAge) and min_auth_time (prompt=login)
+# constraints.
+sub _authz_auth_ok {
+	my ( $self, $authz ) = @_;
+	return 0 unless $self->session('sso_user');
+	my $auth_time = $self->session('sso_auth_time');
+	return 0 if !defined $auth_time;
+	return 0 if defined $authz->{max_age}       && ( time() - $auth_time ) > $authz->{max_age};
+	return 0 if defined $authz->{min_auth_time} && $auth_time < $authz->{min_auth_time};
+	return 1;
+}
+
+# The scopes this user has granted the client, as a hash: the union of the
+# consents recorded in this browser session and the durable per-user consents
+# in the shared store ("remember this decision").
+sub _consented_scopes {
+	my ( $self, $user, $client_id ) = @_;
+	my %granted;
+	my $consents = $self->session('sso_consents');
+	if ( ref $consents eq 'HASH' ) {
+		$granted{$_} = 1 for split /\s+/, ( $consents->{$client_id} // '' );
+	}
+	if ( defined $user && $user ne '' && defined $client_id && $client_id ne '' ) {
+		my $durable = $self->sso_storage->get( 'consent', $user . "\0" . $client_id );
+		$granted{$_} = 1 for split /\s+/, ( ( $durable && $durable->{scopes} ) // '' );
+	}
+	return %granted;
+} ## end sub _consented_scopes
+
+# Does an existing consent (session or durable) cover every scope of this
+# pending request?
+sub _consent_covers {
+	my ( $self, $authz ) = @_;
+	my %granted = $self->_consented_scopes( $self->session('sso_user'), $authz->{client_id} );
+	return !grep { !$granted{$_} } split /\s+/, ( $authz->{scope} // '' );
+}
+
+# Move an authenticated pending request forward: issue the code immediately
+# when the user has already granted this client the requested scopes and the
+# request does not force a fresh consent (prompt=consent); otherwise show the
+# consent screen.
+sub _advance_authz {
+	my ( $self, $rid, $authz ) = @_;
+	if ( !$authz->{force_consent} && $self->_consent_covers($authz) ) {
+		delete $self->session->{sso_authz}{$rid};
+		return $self->_issue_code($authz);
+	}
+	return $self->redirect_to( $self->url_for('sso_consent')->query( rid => $rid ) );
+}
+
+# Mint an authorization code for an approved request and redirect back to the
+# client. Shared by the consent handler and the prompt=none (silent) path.
+sub _issue_code {
+	my ( $self, $authz ) = @_;
+
+	my $code = _random_b64url(32);
+
+	# Store code details in the shared server-side store so the token endpoint
+	# (called server-to-server by the relying party, with no browser cookie)
+	# can redeem it. The TTL here is a GC backstop; the token endpoint enforces
+	# the protocol expiry from issued_at against the current configured lifetime.
+	my $code_lifetime = $self->pt->{ini}->{''}->{ssoCodeLifetime} // 600;
+	$self->sso_storage->put(
+		'code', $code,
+		{
+			client_id             => $authz->{client_id},
+			redirect_uri          => $authz->{redirect_uri},
+			scope                 => $authz->{scope},
+			nonce                 => $authz->{nonce},
+			user                  => $self->session('sso_user'),
+			issued_at             => time(),
+			auth_time             => ( $self->session('sso_auth_time') // time() ),
+			code_challenge        => $authz->{code_challenge},
+			code_challenge_method => $authz->{code_challenge_method},
+		},
+		$code_lifetime,
+	);
+
+	my $url = Mojo::URL->new( $authz->{redirect_uri} );
+	$url->query->merge( code  => $code );
+	$url->query->merge( state => $authz->{state} ) if ( $authz->{state} // '' ) ne '';
+	return $self->redirect_to($url);
+} ## end sub _issue_code
 
 sub _authz_error {
 	my ( $self, $redirect_uri, $state, $error, $description ) = @_;
@@ -873,14 +1438,24 @@ sub _verify_id_token_hint {
 
 	if ( $alg eq 'RS256' ) {
 		my $jwks_json = $client_entry->get_value('oidcJwks');
-		if ($jwks_json) {
-			my $jwks = eval { decode_json($jwks_json) };
-			if ( $jwks && $jwks->{keys} && @{ $jwks->{keys} } ) {
+		my $jwks      = $jwks_json ? eval { decode_json($jwks_json) } : undef;
+		if ( $jwks && ref $jwks->{keys} eq 'ARRAY' ) {
+			# Select the verification key by the token's kid so hints signed
+			# with a rotated-out-but-retained key still verify; with no kid (or
+			# no match) fall back to trying every key in the set.
+			my @keys       = grep { ref $_ eq 'HASH' } @{ $jwks->{keys} };
+			my $kid        = $header      ? $header->{kid}                             : undef;
+			my @candidates = defined $kid ? grep { ( $_->{kid} // '' ) eq $kid } @keys : ();
+			@candidates = @keys unless @candidates;
+			for my $key (@candidates) {
 				my $rsa = Crypt::PK::RSA->new;
-				eval { $rsa->import_key( $jwks->{keys}[0] ) };
-				$verified = 1 if !$@ && eval { $rsa->verify_message( $sig, $signing_input, 'SHA256', 'v1.5' ) };
+				next unless eval { $rsa->import_key($key); 1 };
+				if ( eval { $rsa->verify_message( $sig, $signing_input, 'SHA256', 'v1.5' ) } ) {
+					$verified = 1;
+					last;
+				}
 			}
-		}
+		} ## end if ( $jwks && ref $jwks->{keys} eq 'ARRAY')
 	} elsif ( $alg eq 'HS256' ) {
 		my $secret = $client_entry->get_value('oidcClientSecret') // '';
 		if ( $secret ne '' ) {
@@ -930,11 +1505,14 @@ sub _perform_logout {
 } ## end sub _perform_logout
 
 sub _build_id_token {
-	my ( $self, $user, $client_id, $nonce, $scope, $auth_time ) = @_;
+	my ( $self, $user, $client_id, $nonce, $scope, $auth_time, $client_entry ) = @_;
 
-	my $issuer   = $self->sso_issuer;
-	my $now      = time();
-	my $lifetime = $self->pt->{ini}->{''}->{ssoTokenLifetime} // 3600;
+	my $issuer = $self->sso_issuer;
+	my $now    = time();
+
+	# The ID token's validity is configurable separately from the access
+	# token's (ssoIdTokenLifetime); it falls back to ssoTokenLifetime.
+	my $lifetime = $self->pt->{ini}->{''}->{ssoIdTokenLifetime} // $self->pt->{ini}->{''}->{ssoTokenLifetime} // 3600;
 
 	# JWT payload
 	my %payload = (
@@ -972,42 +1550,41 @@ sub _build_id_token {
 	my $json_payload = Mojo::JSON::encode_json( \%payload );
 	my $body         = _b64url_encode($json_payload);
 
-	# Determine signing algorithm from client entry
-	my $client_entry;
-	eval { $client_entry = $self->pt->getOIDCClientEntry( { clientId => $client_id } ) };
-
-	# Default to 'none' only so that an unconfigured/unknown client is refused
-	# below rather than silently signed; we never actually emit an unsigned token.
-	my $alg = 'none';
-	my $jwks_json;
-	if ($client_entry) {
-		$alg       = $client_entry->get_value('oidcIdTokenSignedResponseAlg') // 'none';
-		$jwks_json = $client_entry->get_value('oidcJwks');
-	}
+	# Determine the signing algorithm from the client entry (resolved and
+	# validated by the caller). OIDC Core 2: when the client did not register
+	# id_token_signed_response_alg, the default is RS256.
+	my $alg = $client_entry->get_value('oidcIdTokenSignedResponseAlg');
+	$alg = 'RS256' if !defined $alg || $alg eq '';
+	my $jwks_json = $client_entry->get_value('oidcJwks');
 
 	if ( $alg eq 'RS256' ) {
-		# Sign with the client's RSA private key
+		# Sign with the newest private key in the client's JWKS. Key rotation
+		# keeps older keys in the set as public-only entries (for verification
+		# overlap), so pick the first key that still has private material.
 		my $jwks = $jwks_json ? eval { decode_json($jwks_json) } : undef;
-		if ( $jwks && $jwks->{keys} && @{ $jwks->{keys} } ) {
-			my $jwk    = $jwks->{keys}[0];
-			my $kid    = $jwk->{kid} // '';
-			my $header = _b64url_encode( Mojo::JSON::encode_json( { alg => 'RS256', typ => 'JWT', kid => $kid } ) );
-			my $signing_input = "$header.$body";
+		if ( $jwks && ref $jwks->{keys} eq 'ARRAY' ) {
+			my ($jwk) = grep { ref $_ eq 'HASH' && defined $_->{d} } @{ $jwks->{keys} };
+			if ($jwk) {
+				my $kid = $jwk->{kid} // '';
+				my $header
+					= _b64url_encode( Mojo::JSON::encode_json( { alg => 'RS256', typ => 'JWT', kid => $kid } ) );
+				my $signing_input = "$header.$body";
 
-			my $rsa = Crypt::PK::RSA->new;
-			eval { $rsa->import_key($jwk) };
-			if ( !$@ ) {
-				my $sig     = $rsa->sign_message( $signing_input, 'SHA256', 'v1.5' );
-				my $sig_b64 = _b64url_encode($sig);
-				return "$signing_input.$sig_b64";
-			}
-		} ## end if ( $jwks && $jwks->{keys} && @{ $jwks->{...}})
+				my $rsa = Crypt::PK::RSA->new;
+				eval { $rsa->import_key($jwk) };
+				if ( !$@ ) {
+					my $sig     = $rsa->sign_message( $signing_input, 'SHA256', 'v1.5' );
+					my $sig_b64 = _b64url_encode($sig);
+					return "$signing_input.$sig_b64";
+				}
+			} ## end if ($jwk)
+		} ## end if ( $jwks && ref $jwks->{keys} eq 'ARRAY')
 
 		# Client requires RS256 but no usable key: do NOT downgrade to none.
 		return undef;
 	} elsif ( $alg eq 'HS256' ) {
 		# Sign with the client secret using HMAC-SHA256
-		my $secret = $client_entry ? ( $client_entry->get_value('oidcClientSecret') // '' ) : '';
+		my $secret = $client_entry->get_value('oidcClientSecret') // '';
 		if ( $secret ne '' ) {
 			my $header        = _b64url_encode('{"alg":"HS256","typ":"JWT"}');
 			my $signing_input = "$header.$body";
@@ -1021,8 +1598,8 @@ sub _build_id_token {
 		return undef;
 	} ## end elsif ( $alg eq 'HS256' )
 
-	# 'none' (unsigned), unset, or any unknown/unsupported algorithm: refuse to
-	# issue a token rather than emit an unsigned or downgraded one. The token
+	# 'none' (unsigned) or any unknown/unsupported algorithm: refuse to issue
+	# a token rather than emit an unsigned or downgraded one. The token
 	# endpoint turns this undef into a server_error.
 	return undef;
 } ## end sub _build_id_token

@@ -3,7 +3,7 @@
 <div class="card border-secondary mt-4">
   <div class="card-header text-danger fw-bold">Sign In</div>
   <div class="card-body">
-    <form method="post" action="<%= url_for('sso_login_post') %>">
+    <form method="post" action="<%= url_for('sso_login_post')->query(rid => stash('sso_rid') // '') %>">
       <%= csrf_field %>
       <div class="mb-3">
         <label class="form-label" for="user">Username</label>
@@ -98,9 +98,9 @@
       if (!finResp.ok) throw new Error(result.error || 'Login failed');
 
       if (result.totp_required) {
-        window.location.href = '<%= url_for('sso_totp_challenge') %>';
+        window.location.href = '<%= url_for('sso_totp_challenge')->query(rid => stash('sso_rid') // '') %>';
       } else {
-        window.location.href = '<%= url_for('sso_consent') %>';
+        window.location.href = '<%= url_for('sso_consent')->query(rid => stash('sso_rid') // '') %>';
       }
     } catch (err) {
       status.textContent = err.message;

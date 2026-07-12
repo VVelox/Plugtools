@@ -1,12 +1,15 @@
 package App::Nisaba::WebSSO;
 
 use Mojo::Base 'Mojolicious';
+use Mojo::URL;
 use App::Nisaba;
 use App::Nisaba::WebSecret;
 use App::Nisaba::WebCSRF;
 use App::Nisaba::WebUtil ();
 use App::Nisaba::WebSSO::Storage;
 use File::ShareDir 'dist_dir';
+
+=encoding UTF-8
 
 =head1 NAME
 
@@ -28,13 +31,109 @@ our $VERSION = '0.0.1';
 =head1 DESCRIPTION
 
 A Mojolicious web application that implements an OpenID Connect Provider
-(OP) backed by LDAP via App::Nisaba. Provides the standard OIDC endpoints
-for the Authorization Code flow with PKCE support.
+(OP) backed by LDAP via App::Nisaba: the Authorization Code flow with
+PKCE, refresh tokens (rotated on every use), token revocation (RFC 7009)
+and introspection (RFC 7662), C<prompt>/C<max_age> handling including
+C<prompt=none> silent authentication, per-user remembered consent,
+RP-initiated logout, and per-client ID-token signing with key rotation.
 
 OIDC client registrations are stored as C<oidcRelyingParty> entries in
-LDAP under the configured C<oidcbase>.
+LDAP under the configured C<oidcbase>. Several registration fields are
+enforced, not just stored — registered scopes are an allow-list, the
+token endpoint auth method binds the credential transport, and the
+C<refresh_token> grant type is the opt-in for refresh tokens. See the
+L<mojo_nisaba_sso> documentation for the full operator-facing details.
+
+=head1 CONFIGURATION
+
+Read from the App::Nisaba INI config (default section).
+
+=over 4
+
+=item * ssoIssuer - the public base URL of this provider, e.g.
+C<https://sso.example.com>. B<Set this in production.> When unset the issuer
+is derived from each request's Host header, which behind a reverse proxy
+produces an issuer relying parties will reject (C<iss> mismatch). The value
+must not contain a path component: the provider's routes are mounted at the
+server root, so an issuer like C<https://example.com/sso> would advertise
+endpoints that do not exist. Serve the provider on its own hostname.
+
+=item * ssoCodeLifetime - authorization code validity in seconds (default 600).
+
+=item * ssoTokenLifetime - access token validity in seconds (default 3600).
+
+=item * ssoIdTokenLifetime - ID token validity in seconds; defaults to
+C<ssoTokenLifetime>.
+
+=item * ssoRefreshTokenLifetime - refresh token validity in seconds (default
+2592000, 30 days). Refresh tokens are only issued to clients whose
+registration includes the C<refresh_token> grant type, and are rotated on
+every use.
+
+=item * ssoConsentLifetime - how long a remembered ("remember this decision")
+consent lasts, in seconds. Default 0: remembered consents do not expire.
+
+=item * ssoRequirePkce - require PKCE (S256) for public clients (default 1;
+disabling is strongly discouraged).
+
+=item * ssoStorageBackend / ssoStoragePath / ssoStorageCleanupInterval - the
+shared grant store, see L<App::Nisaba::WebSSO::Storage>.
+
+=item * rateLimit / rateLimitPath / rateLimitToken* / rateLimitTokenIp* -
+brute-force rate limiting for the token, revocation, and introspection
+endpoints (and the login/TOTP/passkey UI); see L<mojo_nisaba_sso> for the
+per-key details.
+
+=item * cookieSecure - mark the session cookie Secure (default 1); disable
+only for plain-HTTP development.
+
+=back
 
 =head1 METHODS
+
+=head2 issuer_config_warnings
+
+    my @warnings = App::Nisaba::WebSSO::issuer_config_warnings( $issuer, $mode );
+
+Returns warning strings for a problematic C<ssoIssuer> value. An unset issuer
+is only flagged when C<$mode> is C<production> (Host-header derivation is fine
+for ad-hoc development); an issuer with a path component, a trailing slash, or
+a non-http(s) scheme is always flagged. Logged at startup so the resulting
+relying-party C<iss> mismatches are debuggable.
+
+=cut
+
+sub issuer_config_warnings {
+	my ( $issuer, $mode ) = @_;
+	my @warnings;
+
+	if ( !defined $issuer || $issuer eq '' ) {
+		push @warnings,
+			  'ssoIssuer is not configured: the OIDC issuer will be derived from each request\'s Host header. '
+			. 'Behind a reverse proxy this produces an issuer relying parties will reject (iss mismatch). '
+			. 'Set ssoIssuer to the public URL of this provider.'
+			if ( $mode // '' ) eq 'production';
+		return @warnings;
+	}
+
+	my $url = Mojo::URL->new($issuer);
+	if ( ( $url->scheme // '' ) !~ /\Ahttps?\z/ ) {
+		push @warnings, "ssoIssuer '$issuer' is not an absolute http(s) URL.";
+		return @warnings;
+	}
+	if ( $url->path->to_string =~ m{[^/]} ) {
+		push @warnings,
+			  "ssoIssuer '$issuer' contains a path component, but the provider's routes are mounted at the "
+			. 'server root: the endpoints advertised in discovery will not match the actual routes. '
+			. 'Serve the provider on its own hostname without a path.';
+	} elsif ( $issuer =~ m{/\z} ) {
+		push @warnings,
+			"ssoIssuer '$issuer' ends with a slash: advertised endpoint URLs would contain double slashes. "
+			. 'Remove the trailing slash.';
+	}
+
+	return @warnings;
+} ## end sub issuer_config_warnings
 
 =head2 startup
 
@@ -54,6 +153,12 @@ sub startup {
 	my %pt_args;
 	$pt_args{config} = $ENV{NISABA_CONFIG} if $ENV{NISABA_CONFIG};
 	my $pt = App::Nisaba->new( \%pt_args );
+
+	# Flag issuer misconfiguration loudly: relying parties validate iss
+	# strictly and the failure mode (a silently Host-header-derived issuer, or
+	# advertised endpoints that don't exist) is confusing to debug from the RP
+	# side.
+	$self->log->warn($_) for issuer_config_warnings( $pt->{ini}->{''}->{ssoIssuer}, $self->mode );
 
 	# Session secret — from config or NISABA_SECRET. Refuses to start rather
 	# than sign sessions with a predictable default (see App::Nisaba::WebSecret).
@@ -136,9 +241,15 @@ sub startup {
 	# CSRF: reject state-changing requests whose origin isn't our own. The OIDC
 	# token and UserInfo endpoints are exempt: relying parties call them
 	# server-to-server with client credentials / a Bearer token and no browser
-	# cookie, so the CSRF threat and its headers don't apply there.
-	App::Nisaba::WebCSRF::install_origin_check( $self, exempt_paths => [ '/token', '/userinfo' ] );
-	App::Nisaba::WebCSRF::install_token_check( $self, exempt_paths => [ '/token', '/userinfo' ] );
+	# cookie, so the CSRF threat and its headers don't apply there. The
+	# end-session endpoint is also exempt because OIDC RP-Initiated Logout
+	# allows relying parties to POST to it cross-site; the logout handler does
+	# its own protection (a verifiable id_token_hint authenticates the request,
+	# and anything else must carry the session's CSRF token or is answered
+	# with the confirmation page instead of a logout).
+	my @csrf_exempt = ( '/token', '/userinfo', '/revoke', '/introspect', '/sso/logout' );
+	App::Nisaba::WebCSRF::install_origin_check( $self, exempt_paths => \@csrf_exempt );
+	App::Nisaba::WebCSRF::install_token_check( $self, exempt_paths => \@csrf_exempt );
 
 	# Brute-force rate limiting for the auth endpoints.
 	App::Nisaba::WebUtil::install_rate_limiter($self);
@@ -178,6 +289,11 @@ sub startup {
 
 	# Token endpoint (POST only, used by RPs)
 	$r->post('/token')->to('s_s_o#token')->name('sso_token');
+
+	# Token revocation (RFC 7009) and introspection (RFC 7662), both
+	# server-to-server with client authentication
+	$r->post('/revoke')->to('s_s_o#revoke')->name('sso_revoke');
+	$r->post('/introspect')->to('s_s_o#introspect')->name('sso_introspect');
 
 	# UserInfo endpoint (GET and POST per spec)
 	$r->get('/userinfo')->to('s_s_o#userinfo')->name('sso_userinfo_get');

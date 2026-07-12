@@ -35,7 +35,7 @@
             <option value="RS256" selected>RS256</option>
             <option value="HS256">HS256</option>
           </select>
-          <div class="form-text"><code>RS256</code> uses the server's RSA key. <code>HS256</code> uses the client secret (HMAC), so it requires a confidential client.</div>
+          <div class="form-text"><code>RS256</code> signs with an RSA key pair generated for this client (published at <code>/jwks</code>). <code>HS256</code> uses the client secret (HMAC), so it requires a confidential client.</div>
         </div>
         <div class="col">
           <label class="form-label">Client Type</label>
@@ -66,13 +66,16 @@
             <label class="form-label">Scopes</label>
             <input type="text" name="scopes" class="form-control"
                    placeholder="openid profile email" value="openid">
-            <div class="form-text">Space-separated. <code>openid</code> is required for OIDC.</div>
+            <div class="form-text">Space-separated <strong>allow-list</strong>: the client may only request
+              scopes listed here (<code>openid</code> is always permitted). Include every scope the
+              application will ask for, e.g. <code>profile email</code>.</div>
           </div>
           <div class="col">
             <label class="form-label">Grant Types</label>
             <input type="text" name="grantTypes" class="form-control"
                    placeholder="authorization_code refresh_token" value="authorization_code">
-            <div class="form-text">Space-separated. Common: <code>authorization_code</code>, <code>refresh_token</code>.</div>
+            <div class="form-text">Space-separated. Add <code>refresh_token</code> to issue refresh tokens
+              (rotated on every use) alongside <code>authorization_code</code>.</div>
           </div>
         </div>
 

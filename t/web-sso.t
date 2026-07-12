@@ -97,7 +97,7 @@ my $client_public = FakeEntry->new(
 	oidcClientId                 => 'testapp',
 	oidcClientName               => 'Test Application',
 	oidcRedirectURI              => ['https://testapp.example.com/callback'],
-	oidcScope                    => [ 'openid', 'profile', 'email' ],
+	oidcScope                    => [ 'openid', 'profile', 'email', 'phone', 'address' ],
 	oidcGrantType                => ['authorization_code'],
 	oidcResponseType             => ['code'],
 	oidcApplicationType          => 'web',
@@ -116,8 +116,8 @@ my $client_confidential = FakeEntry->new(
 	oidcClientSecret             => 's3cret',
 	oidcIdTokenSignedResponseAlg => 'HS256',
 	oidcRedirectURI              => ['https://secretapp.example.com/callback'],
-	oidcScope                    => [ 'openid', 'profile' ],
-	oidcGrantType                => ['authorization_code'],
+	oidcScope                    => [ 'openid',             'profile' ],
+	oidcGrantType                => [ 'authorization_code', 'refresh_token' ],
 	oidcResponseType             => ['code'],
 	oidcApplicationType          => 'web',
 	oidcTokenEndpointAuthMethod  => 'client_secret_basic',
@@ -502,7 +502,7 @@ $t->post_ok(
 		client_id    => 'wrong_client',
 		redirect_uri => 'https://testapp.example.com/callback',
 	}
-)->status_is(400)->json_is( '/error' => 'invalid_grant', 'wrong client_id returns invalid_grant' );
+)->status_is(401)->json_is( '/error' => 'invalid_client', 'unknown client_id fails client authentication' );
 
 # ── Token endpoint: confidential client with wrong secret ────────────────────
 
@@ -527,7 +527,9 @@ $t->post_ok(
 	}
 )->status_is(401)->json_is( '/error' => 'invalid_client', 'wrong secret returns invalid_client' );
 
-# ── Token endpoint: confidential client with correct secret ──────────────────
+# ── Token endpoint: registered auth method binds the transport ───────────────
+# secretapp is registered client_secret_basic; the correct secret sent as a
+# body parameter (client_secret_post transport) must be rejected.
 
 $t->reset_session;
 _install_stubs( $t->app );
@@ -548,7 +550,10 @@ $t->post_ok(
 		client_secret => 's3cret',
 		redirect_uri  => 'https://secretapp.example.com/callback',
 	}
-)->status_is(200)->json_has( '/access_token', 'correct secret gets access_token' );
+)->status_is(401)->json_is(
+	'/error' => 'invalid_client',
+	'correct secret via the wrong transport (post for a basic client) is rejected'
+);
 
 # ── Token endpoint: client_secret_basic via Authorization header ─────────────
 
@@ -830,10 +835,14 @@ $t->get_ok(
 $t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
 $t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
 
-# Second authorize with existing sso_user session → straight to consent
+# Second authorize with an existing session and an already-granted consent →
+# no UI at all: straight back to the client with a code.
 $t->get_ok(
 	'/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=pre2'
-)->status_is(302)->header_like( Location => qr{/sso/consent}, 'already-authenticated user skips login' );
+)->status_is(302)->header_like(
+	Location => qr{^https://testapp\.example\.com/callback},
+	'already-authenticated, already-consented user skips login and consent'
+)->header_like( Location => qr/state=pre2/, 'skipped flow still returns the request state' );
 
 # ── Token endpoint: redirect_uri mismatch ────────────────────────────────────
 
@@ -1052,6 +1061,7 @@ my $client_hs256 = FakeEntry->new(
 	oidcApplicationType          => 'web',
 	oidcTokenEndpointAuthMethod  => 'client_secret_basic',
 	oidcIdTokenSignedResponseAlg => 'HS256',
+	oidcPostLogoutRedirectURI    => ['https://hs256app.example.com/loggedout'],
 );
 
 $t->reset_session;
@@ -1219,54 +1229,89 @@ $t->get_ok( '/userinfo', { Authorization => "Bearer $tokexp_token" } )
 	->json_is( '/error' => 'invalid_token', 'expired token cleaned from session' );
 
 # ── client_secret_post in isolation ─────────────────────────────────────────
-# Test form-based client_secret (not Authorization header) for confidential client
+# A client registered client_secret_post authenticates with the secret as a
+# form parameter — and only that way.
 
-$t->reset_session;
-_install_stubs( $t->app );
+my $client_post = FakeEntry->new(
+	_dn                          => 'oidcClientId=postapp,ou=oidc,dc=example,dc=com',
+	oidcClientId                 => 'postapp',
+	oidcClientName               => 'Post App',
+	oidcClientSecret             => 'p0st-s3cret',
+	oidcIdTokenSignedResponseAlg => 'HS256',
+	oidcRedirectURI              => ['https://postapp.example.com/callback'],
+	oidcScope                    => ['openid'],
+	oidcGrantType                => ['authorization_code'],
+	oidcResponseType             => ['code'],
+	oidcApplicationType          => 'web',
+	oidcTokenEndpointAuthMethod  => 'client_secret_post',
+);
 
-$t->get_ok(
-	'/authorize?client_id=secretapp&redirect_uri=https://secretapp.example.com/callback&response_type=code&scope=openid&state=csp1'
-)->status_is(302);
-$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
-$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
-my $csp_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+sub _install_stubs_postapp {
+	my ($app) = @_;
+	_install_stubs(
+		$app,
+		getOIDCClientEntry => sub {
+			my ( $self, $args ) = @_;
+			return $client_post if ( $args->{clientId} // '' ) eq 'postapp';
+			return undef;
+		},
+	);
+} ## end sub _install_stubs_postapp
+
+my $get_postapp_code = sub {
+	$t->reset_session;
+	$t->get_ok( '/authorize?client_id=postapp&redirect_uri=https://postapp.example.com/callback'
+			. '&response_type=code&scope=openid&state=csp1' )->status_is(302);
+	$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+	$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+	return Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+};
+
+_install_stubs_postapp( $t->app );
 
 # Wrong secret via form parameter
+my $csp_code = $get_postapp_code->();
 $t->post_ok(
 	'/token',
 	form => {
 		grant_type    => 'authorization_code',
 		code          => $csp_code,
-		client_id     => 'secretapp',
+		client_id     => 'postapp',
 		client_secret => 'wrongsecret',
-		redirect_uri  => 'https://secretapp.example.com/callback',
+		redirect_uri  => 'https://postapp.example.com/callback',
 	}
 )->status_is(401)->json_is( '/error' => 'invalid_client', 'client_secret_post: wrong secret rejected' );
 
 # Correct secret via form parameter (need a new code since previous was consumed)
-$t->reset_session;
-_install_stubs( $t->app );
-
-$t->get_ok(
-	'/authorize?client_id=secretapp&redirect_uri=https://secretapp.example.com/callback&response_type=code&scope=openid&state=csp2'
-)->status_is(302);
-$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
-$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
-my $csp_code2 = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
-
+my $csp_code2 = $get_postapp_code->();
 $t->post_ok(
 	'/token',
 	form => {
 		grant_type    => 'authorization_code',
 		code          => $csp_code2,
-		client_id     => 'secretapp',
-		client_secret => 's3cret',
-		redirect_uri  => 'https://secretapp.example.com/callback',
+		client_id     => 'postapp',
+		client_secret => 'p0st-s3cret',
+		redirect_uri  => 'https://postapp.example.com/callback',
 	}
 	)
 	->status_is(200)
 	->json_has( '/access_token', 'client_secret_post: correct secret accepted via form param' )
 	->json_is( '/token_type' => 'Bearer' );
+
+# Correct secret via the Basic header is the wrong transport for this client.
+my $csp_code3  = $get_postapp_code->();
+my $post_basic = 'Basic ' . MIME::Base64::encode_base64( 'postapp:p0st-s3cret', '' );
+$t->post_ok(
+	'/token',
+	{ Authorization => $post_basic },
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $csp_code3,
+		redirect_uri => 'https://postapp.example.com/callback',
+	}
+)->status_is(401)->json_is( '/error' => 'invalid_client', 'client_secret_post: Basic transport is rejected' );
+
+_install_stubs( $t->app );
 
 # ── client_secret_basic: malformed Authorization header ─────────────────────
 
@@ -1684,10 +1729,12 @@ $t->get_ok(
 $t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
 $t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
 
-# Session is active: a second authorize skips login.
+# Session is active: a second authorize completes without any login UI.
 $t->get_ok(
 	'/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=lo2'
-)->status_is(302)->header_like( Location => qr{/sso/consent}, 'logout: session active before logout' );
+	)
+	->status_is(302)
+	->header_like( Location => qr{^https://testapp\.example\.com/callback}, 'logout: session active before logout' );
 
 # Log out.
 $t->post_ok('/sso/logout')->status_is(200)->content_like( qr/signed out/i, 'logout: logged-out page shown' );
@@ -1783,6 +1830,1498 @@ my $forged = _b64url_encode('{"alg":"none","typ":"JWT"}') . '.'
 $t->get_ok("/sso/logout?id_token_hint=$forged&post_logout_redirect_uri=https://testapp.example.com/callback")
 	->status_is(200)
 	->content_like( qr/Sign Out/i, 'unsigned id_token_hint requires confirmation' );
+
+# ── Token endpoint: client resolution fails closed ──────────────────────────
+# The secret check depends on the client entry, so the token endpoint must
+# refuse to proceed when the client cannot be resolved — a lookup error is a
+# server_error and a vanished client is invalid_client. It must never fall
+# through with authentication unchecked.
+
+# A lookup that errors out (e.g. LDAP down between code issuance and
+# redemption) → server_error.
+$t->reset_session;
+_install_stubs( $t->app );
+$t->get_ok(
+	'/authorize?client_id=secretapp&redirect_uri=https://secretapp.example.com/callback&response_type=code&scope=openid&state=fc1'
+)->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $fc_code1 = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+_install_stubs( $t->app, getOIDCClientEntry => sub { die "LDAP unavailable\n" } );
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type    => 'authorization_code',
+		code          => $fc_code1,
+		client_id     => 'secretapp',
+		client_secret => 's3cret',
+		redirect_uri  => 'https://secretapp.example.com/callback',
+	}
+	)
+	->status_is(500)
+	->json_is( '/error' => 'server_error', 'client lookup error at token time fails closed with server_error' );
+
+# A client deregistered since the code was issued → invalid_client, even when
+# the caller presents the (formerly) correct secret.
+$t->reset_session;
+_install_stubs( $t->app );
+$t->get_ok(
+	'/authorize?client_id=secretapp&redirect_uri=https://secretapp.example.com/callback&response_type=code&scope=openid&state=fc2'
+)->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $fc_code2 = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+_install_stubs( $t->app, getOIDCClientEntry => sub { return undef } );
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type    => 'authorization_code',
+		code          => $fc_code2,
+		client_id     => 'secretapp',
+		client_secret => 's3cret',
+		redirect_uri  => 'https://secretapp.example.com/callback',
+	}
+	)
+	->status_is(401)
+	->json_is( '/error' => 'invalid_client', 'client gone at token time fails closed with invalid_client' );
+
+_install_stubs( $t->app );
+
+# ── Unregistered signing alg defaults to RS256 (OIDC Core 2) ────────────────
+# A client entry with no oidcIdTokenSignedResponseAlg gets RS256, the spec
+# default — provided it has a usable key. Without key material it still fails
+# closed rather than emitting an unsigned token.
+
+# Signs with the same key pair as testapp so the signature can be verified here.
+my $client_default_alg = FakeEntry->new(
+	_dn                         => 'oidcClientId=defaultalg,ou=oidc,dc=example,dc=com',
+	oidcClientId                => 'defaultalg',
+	oidcRedirectURI             => ['https://defaultalg.example.com/cb'],
+	oidcScope                   => ['openid'],
+	oidcGrantType               => ['authorization_code'],
+	oidcResponseType            => ['code'],
+	oidcTokenEndpointAuthMethod => 'none',
+	# deliberately no oidcIdTokenSignedResponseAlg
+	oidcJwks => $testapp_jwks_json,
+);
+
+# No alg registered and no key material at all.
+my $client_default_nokey = FakeEntry->new(
+	_dn                         => 'oidcClientId=defaultnokey,ou=oidc,dc=example,dc=com',
+	oidcClientId                => 'defaultnokey',
+	oidcRedirectURI             => ['https://defaultnokey.example.com/cb'],
+	oidcScope                   => ['openid'],
+	oidcGrantType               => ['authorization_code'],
+	oidcResponseType            => ['code'],
+	oidcTokenEndpointAuthMethod => 'none',
+	# deliberately no oidcIdTokenSignedResponseAlg and no oidcJwks
+);
+
+$t->reset_session;
+_install_stubs(
+	$t->app,
+	getOIDCClientEntry => sub {
+		my ( $self, $args ) = @_;
+		return $client_default_alg   if ( $args->{clientId} // '' ) eq 'defaultalg';
+		return $client_default_nokey if ( $args->{clientId} // '' ) eq 'defaultnokey';
+		return undef;
+	},
+);
+
+$t->get_ok(
+	'/authorize?client_id=defaultalg&redirect_uri=https://defaultalg.example.com/cb&response_type=code&scope=openid&state=da1&nonce=danonce1'
+)->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $da_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $da_code,
+		client_id    => 'defaultalg',
+		redirect_uri => 'https://defaultalg.example.com/cb',
+	}
+)->status_is(200)->json_has( '/id_token', 'client without a registered signing alg completes the token exchange' );
+
+my $da_id_token = $t->tx->res->json->{id_token};
+my @da_parts    = split /\./, $da_id_token;
+is( scalar @da_parts, 3, 'default-alg id_token is a signed JWT' );
+my $da_header = decode_json( _b64url_decode( $da_parts[0] ) );
+is( $da_header->{alg}, 'RS256',       'unregistered signing alg defaults to RS256' );
+is( $da_header->{kid}, 'testapp-kid', 'default-alg id_token carries the key id' );
+ok(
+	$testapp_rsa->verify_message( _b64url_decode( $da_parts[2] ), "$da_parts[0].$da_parts[1]", 'SHA256', 'v1.5' ),
+	'default-alg id_token signature verifies with the client key',
+);
+my $da_payload = decode_json( _b64url_decode( $da_parts[1] ) );
+is( $da_payload->{sub},   'alice',      'default-alg id_token sub correct' );
+is( $da_payload->{aud},   'defaultalg', 'default-alg id_token aud correct' );
+is( $da_payload->{nonce}, 'danonce1',   'default-alg id_token nonce correct' );
+
+# ── Failed signing leaves no orphan access token ─────────────────────────────
+# The ID token is built before the access token is minted: when signing fails
+# the exchange is a server_error, the code is consumed, and no access token
+# may remain valid in the shared store.
+
+sub _stored_token_count {
+	my ($count)
+		= $TEST_STORAGE->{backend}{dbh}->selectrow_array(q{SELECT COUNT(*) FROM oidc_store WHERE skey LIKE 'token:%'});
+	return $count;
+}
+
+$t->reset_session;
+$t->get_ok(
+	'/authorize?client_id=defaultnokey&redirect_uri=https://defaultnokey.example.com/cb&response_type=code&scope=openid&state=nk1'
+)->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $nk_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+my $tokens_before = _stored_token_count();
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $nk_code,
+		client_id    => 'defaultnokey',
+		redirect_uri => 'https://defaultnokey.example.com/cb',
+	}
+)->status_is(500)->json_is( '/error' => 'server_error', 'default RS256 with no key material fails closed' );
+is( _stored_token_count(), $tokens_before, 'failed signing stores no orphan access token' );
+
+# The code was still consumed — replaying it is invalid_grant, not another 500.
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $nk_code,
+		client_id    => 'defaultnokey',
+		redirect_uri => 'https://defaultnokey.example.com/cb',
+	}
+)->status_is(400)->json_is( '/error' => 'invalid_grant', 'code from failed exchange is consumed' );
+
+_install_stubs( $t->app );
+
+# ── Authorization: registered scopes are an allow-list ──────────────────────
+# A client may only request scopes its registration grants (openid itself is
+# always permitted). secretapp registers only openid+profile, so email is
+# denied even though the provider supports it.
+
+$t->reset_session;
+_install_stubs( $t->app );
+
+$t->get_ok(
+	'/authorize?client_id=secretapp&redirect_uri=https://secretapp.example.com/callback&response_type=code&scope=openid+profile+email&state=sc1'
+	)
+	->status_is(302)
+	->header_like( Location => qr/error=invalid_scope/, 'unregistered scope redirects with invalid_scope' )
+	->header_like( Location => qr/email/,               'error names the denied scope' )
+	->header_like( Location => qr/state=sc1/,           'state preserved in invalid_scope redirect' );
+
+# A client with no registered scopes at all may still authenticate (openid)
+# but gets nothing more.
+my $client_noscope = FakeEntry->new(
+	_dn                          => 'oidcClientId=noscope,ou=oidc,dc=example,dc=com',
+	oidcClientId                 => 'noscope',
+	oidcRedirectURI              => ['https://noscope.example.com/cb'],
+	oidcGrantType                => ['authorization_code'],
+	oidcResponseType             => ['code'],
+	oidcTokenEndpointAuthMethod  => 'none',
+	oidcIdTokenSignedResponseAlg => 'RS256',
+	oidcJwks                     => $testapp_jwks_json,
+	# deliberately no oidcScope
+);
+
+$t->reset_session;
+_install_stubs(
+	$t->app,
+	getOIDCClientEntry => sub {
+		my ( $self, $args ) = @_;
+		return $client_noscope if ( $args->{clientId} // '' ) eq 'noscope';
+		return undef;
+	},
+);
+
+$t->get_ok(
+	'/authorize?client_id=noscope&redirect_uri=https://noscope.example.com/cb&response_type=code&scope=openid&state=sc2'
+	)
+	->status_is(302)
+	->header_like( Location => qr{/sso/login}, 'client without registered scopes can still request openid' );
+
+$t->get_ok(
+	'/authorize?client_id=noscope&redirect_uri=https://noscope.example.com/cb&response_type=code&scope=openid+profile&state=sc3'
+	)
+	->status_is(302)
+	->header_like( Location => qr/error=invalid_scope/, 'client without registered scopes is denied profile' );
+
+_install_stubs( $t->app );
+
+# ── Token endpoint: query-string parameters are ignored ─────────────────────
+# RFC 6749 3.2: token request parameters belong in the POST body. Parameters
+# smuggled in the query string (where they would land in access logs) must not
+# be honoured.
+
+$t->reset_session;
+$t->get_ok(
+	'/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=qs1'
+)->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $qs_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+# A fully valid token request carried only in the query string is not seen at
+# all — grant_type is missing from the body, so this fails before the code is
+# even looked up.
+$t->post_ok( '/token?grant_type=authorization_code&code='
+		. $qs_code
+		. '&client_id=testapp&redirect_uri=https%3A%2F%2Ftestapp.example.com%2Fcallback' )
+	->status_is(400)
+	->json_is( '/error' => 'unsupported_grant_type', 'token request in the query string is ignored' );
+
+# The same request in the body succeeds — proving the query attempt had no
+# side effects (the code was not consumed).
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $qs_code,
+		client_id    => 'testapp',
+		redirect_uri => 'https://testapp.example.com/callback',
+	}
+)->status_is(200)->json_has( '/access_token', 'same parameters in the body still redeem the code' );
+
+# A client secret supplied via the query string does not authenticate the
+# client.
+$t->reset_session;
+$t->get_ok(
+	'/authorize?client_id=secretapp&redirect_uri=https://secretapp.example.com/callback&response_type=code&scope=openid&state=qs2'
+)->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $qs_code2 = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+$t->post_ok(
+	'/token?client_secret=s3cret',
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $qs_code2,
+		client_id    => 'secretapp',
+		redirect_uri => 'https://secretapp.example.com/callback',
+	}
+	)
+	->status_is(401)
+	->json_is( '/error' => 'invalid_client', 'client_secret in the query string does not authenticate' );
+
+# ── Token endpoint: registered auth method is authoritative ─────────────────
+
+# A client registered for an auth method this provider does not implement
+# (private_key_jwt) fails closed instead of skipping authentication.
+my $client_jwt_auth = FakeEntry->new(
+	_dn                          => 'oidcClientId=jwtapp,ou=oidc,dc=example,dc=com',
+	oidcClientId                 => 'jwtapp',
+	oidcClientSecret             => 'jwt-s3cret',
+	oidcIdTokenSignedResponseAlg => 'HS256',
+	oidcRedirectURI              => ['https://jwtapp.example.com/cb'],
+	oidcScope                    => ['openid'],
+	oidcGrantType                => ['authorization_code'],
+	oidcResponseType             => ['code'],
+	oidcTokenEndpointAuthMethod  => 'private_key_jwt',
+);
+
+# A client registered none is public per its registration: a leftover stored
+# secret must not be demanded at the token endpoint.
+my $client_none_secret = FakeEntry->new(
+	_dn                          => 'oidcClientId=nonesecret,ou=oidc,dc=example,dc=com',
+	oidcClientId                 => 'nonesecret',
+	oidcClientSecret             => 'leftover-s3cret',
+	oidcIdTokenSignedResponseAlg => 'RS256',
+	oidcJwks                     => $testapp_jwks_json,
+	oidcRedirectURI              => ['https://nonesecret.example.com/cb'],
+	oidcScope                    => ['openid'],
+	oidcGrantType                => ['authorization_code'],
+	oidcResponseType             => ['code'],
+	oidcTokenEndpointAuthMethod  => 'none',
+);
+
+$t->reset_session;
+_install_stubs(
+	$t->app,
+	getOIDCClientEntry => sub {
+		my ( $self, $args ) = @_;
+		return $client_jwt_auth    if ( $args->{clientId} // '' ) eq 'jwtapp';
+		return $client_none_secret if ( $args->{clientId} // '' ) eq 'nonesecret';
+		return undef;
+	},
+);
+
+$t->get_ok(
+	'/authorize?client_id=jwtapp&redirect_uri=https://jwtapp.example.com/cb&response_type=code&scope=openid&state=am1')
+	->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $am_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type    => 'authorization_code',
+		code          => $am_code,
+		client_id     => 'jwtapp',
+		client_secret => 'jwt-s3cret',
+		redirect_uri  => 'https://jwtapp.example.com/cb',
+	}
+	)
+	->status_is(401)
+	->json_is( '/error' => 'invalid_client', 'unimplemented auth method (private_key_jwt) fails closed' );
+
+$t->reset_session;
+$t->get_ok(
+	'/authorize?client_id=nonesecret&redirect_uri=https://nonesecret.example.com/cb&response_type=code&scope=openid&state=am2'
+)->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $am_code2 = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $am_code2,
+		client_id    => 'nonesecret',
+		redirect_uri => 'https://nonesecret.example.com/cb',
+	}
+	)
+	->status_is(200)
+	->json_has( '/access_token', 'client registered none is not asked for its leftover stored secret' );
+
+_install_stubs( $t->app );
+
+# ── Authorization: code_challenge_method without code_challenge ─────────────
+# Malformed PKCE: naming a method while omitting the challenge must not
+# silently issue a code with no PKCE binding.
+
+$t->reset_session;
+$t->get_ok(
+	'/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=pk1&code_challenge_method=S256'
+	)
+	->status_is(302)
+	->header_like( Location => qr/error=invalid_request/, 'method without challenge redirects with invalid_request' )
+	->header_like( Location => qr/state=pk1/,             'state preserved in the error redirect' );
+
+# ── prompt / max_age / response_mode (OIDC Core 3.1.2.1) ────────────────────
+
+$t->reset_session;
+_install_stubs( $t->app );
+
+my $authz_base
+	= '/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid';
+
+# prompt=none with no authenticated session → login_required error redirect, no UI
+$t->get_ok("$authz_base&state=pn1&prompt=none")
+	->status_is(302)
+	->header_like( Location => qr{^https://testapp\.example\.com/callback}, 'prompt=none errors to the client' )
+	->header_like( Location => qr/error=login_required/, 'prompt=none without a session is login_required' )
+	->header_like( Location => qr/state=pn1/,            'state preserved on login_required' );
+
+# Unknown prompt value → invalid_request
+$t->get_ok("$authz_base&state=pn2&prompt=bogus")
+	->status_is(302)
+	->header_like( Location => qr/error=invalid_request/, 'unknown prompt value is invalid_request' );
+
+# prompt=none combined with another value → invalid_request
+$t->get_ok("$authz_base&state=pn3&prompt=none+login")
+	->status_is(302)
+	->header_like( Location => qr/error=invalid_request/, 'prompt=none combined with login is invalid_request' );
+
+# prompt=select_account cannot be satisfied → account_selection_required
+$t->get_ok("$authz_base&state=pn4&prompt=select_account")
+	->status_is(302)
+	->header_like( Location => qr/error=account_selection_required/, 'select_account is refused explicitly' );
+
+# response_mode: anything other than query is rejected; query itself proceeds
+$t->get_ok("$authz_base&state=rm1&response_mode=fragment")
+	->status_is(302)
+	->header_like( Location => qr/error=invalid_request/, 'response_mode=fragment is rejected' );
+$t->get_ok("$authz_base&state=rm2&response_mode=query")
+	->status_is(302)
+	->header_like( Location => qr{/sso/login}, 'response_mode=query proceeds normally' );
+
+# Authenticate and consent (openid only) to set up session state for the
+# silent-flow tests.
+$t->get_ok("$authz_base&state=pn5")->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+
+# prompt=none now succeeds silently for the already-consented client/scope
+$t->get_ok("$authz_base&state=pn6&nonce=pnnonce1&prompt=none")
+	->status_is(302)
+	->header_like( Location => qr{^https://testapp\.example\.com/callback}, 'silent request returns to the client' )
+	->header_unlike( Location => qr/error=/, 'silent request carries no error' );
+my $pn_url  = Mojo::URL->new( $t->tx->res->headers->location );
+my $pn_code = $pn_url->query->param('code');
+ok( $pn_code, 'prompt=none issued a code with no UI' );
+is( $pn_url->query->param('state'), 'pn6', 'prompt=none preserves state' );
+
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $pn_code,
+		client_id    => 'testapp',
+		redirect_uri => 'https://testapp.example.com/callback',
+	}
+)->status_is(200)->json_has( '/id_token', 'silently issued code redeems normally' );
+my @pn_parts   = split /\./, $t->tx->res->json->{id_token};
+my $pn_payload = decode_json( _b64url_decode( $pn_parts[1] ) );
+is( $pn_payload->{nonce}, 'pnnonce1', 'silent flow id_token carries the request nonce' );
+
+# prompt=none for a scope this session has not consented to → consent_required
+$t->get_ok(
+	'/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid+profile&state=pn7&prompt=none'
+	)
+	->status_is(302)
+	->header_like( Location => qr/error=consent_required/, 'silent request for unconsented scope is consent_required' );
+
+# prompt=login forces re-authentication despite the existing session. (A
+# login within the same second as the request is tolerated as "fresh", so put
+# the session's auth_time strictly in the past first.)
+sleep 1;
+$t->get_ok("$authz_base&state=pl1&prompt=login")
+	->status_is(302)
+	->header_like( Location => qr{/sso/login}, 'prompt=login goes back to login despite the session' );
+my $pl_rid = Mojo::URL->new( $t->tx->res->headers->location )->query->param('rid');
+ok( $pl_rid, 'prompt=login flow carries a request id' );
+
+# ...and the consent screen cannot be reached directly for that request
+$t->get_ok("/sso/consent?rid=$pl_rid")
+	->status_is(302)
+	->header_like( Location => qr{/sso/login}, 'consent for a prompt=login request bounces back to login' );
+
+# A fresh login satisfies it, and — since this session already consented to
+# this client/scope — the flow completes without re-prompting for consent.
+$t->post_ok( "/sso/login?rid=$pl_rid", form => { user => 'alice', pass => 'correct' } )
+	->status_is(302)
+	->header_like( Location => qr{^https://testapp\.example\.com/callback}, 'prompt=login flow completes' )
+	->header_like( Location => qr/state=pl1/,                               'prompt=login flow returns its state' );
+
+# max_age=0 (equivalent to prompt=login) also forces re-authentication
+sleep 1;    # make the session's auth_time strictly older than the request
+$t->get_ok("$authz_base&state=ma1&max_age=0")
+	->status_is(302)
+	->header_like( Location => qr{/sso/login}, 'max_age=0 forces re-authentication' );
+
+# A client registered with oidcDefaultMaxAge=0 gets the same treatment with no
+# max_age request parameter at all.
+my $client_maxage = FakeEntry->new(
+	_dn                          => 'oidcClientId=maxageapp,ou=oidc,dc=example,dc=com',
+	oidcClientId                 => 'maxageapp',
+	oidcRedirectURI              => ['https://maxageapp.example.com/cb'],
+	oidcScope                    => ['openid'],
+	oidcGrantType                => ['authorization_code'],
+	oidcResponseType             => ['code'],
+	oidcTokenEndpointAuthMethod  => 'none',
+	oidcIdTokenSignedResponseAlg => 'RS256',
+	oidcJwks                     => $testapp_jwks_json,
+	oidcDefaultMaxAge            => 0,
+);
+_install_stubs(
+	$t->app,
+	getOIDCClientEntry => sub {
+		my ( $self, $args ) = @_;
+		return $client_maxage if ( $args->{clientId} // '' ) eq 'maxageapp';
+		return $client_public if ( $args->{clientId} // '' ) eq 'testapp';
+		return undef;
+	},
+);
+$t->get_ok(
+	'/authorize?client_id=maxageapp&redirect_uri=https://maxageapp.example.com/cb&response_type=code&scope=openid&state=ma2'
+	)
+	->status_is(302)
+	->header_like( Location => qr{/sso/login}, 'registered oidcDefaultMaxAge=0 forces re-authentication' );
+
+_install_stubs( $t->app );
+
+# ── Concurrent authorization requests do not clobber each other ─────────────
+# Two "tabs" start flows before either finishes; each completes against its
+# own request id with its own state and nonce.
+
+$t->reset_session;
+_install_stubs( $t->app );
+
+$t->get_ok("$authz_base&state=tabA&nonce=nonceA")->status_is(302);
+my $rid_a = Mojo::URL->new( $t->tx->res->headers->location )->query->param('rid');
+$t->get_ok("$authz_base&state=tabB&nonce=nonceB")->status_is(302);
+my $rid_b = Mojo::URL->new( $t->tx->res->headers->location )->query->param('rid');
+ok( $rid_a && $rid_b && $rid_a ne $rid_b, 'each authorize request gets its own request id' );
+
+$t->post_ok( "/sso/login?rid=$rid_a", form => { user => 'alice', pass => 'correct' } )
+	->status_is(302)
+	->header_like( Location => qr/rid=\Q$rid_a\E/, 'login keeps working on tab A\'s request' );
+
+# Consenting on tab A completes tab A's request...
+$t->post_ok( "/sso/consent?rid=$rid_a", form => { decision => 'allow' } )->status_is(302);
+my $url_a = Mojo::URL->new( $t->tx->res->headers->location );
+is( $url_a->query->param('state'), 'tabA', 'tab A completion carries tab A\'s state' );
+my $code_a = $url_a->query->param('code');
+
+# ...while tab B's request is still pending and completes independently
+$t->get_ok("/sso/consent?rid=$rid_b")->status_is(200)->content_like( qr/Test Application/, 'tab B still pending' );
+$t->post_ok( "/sso/consent?rid=$rid_b", form => { decision => 'allow' } )->status_is(302);
+my $url_b = Mojo::URL->new( $t->tx->res->headers->location );
+is( $url_b->query->param('state'), 'tabB', 'tab B completion carries tab B\'s state' );
+my $code_b = $url_b->query->param('code');
+
+for my $pair ( [ $code_a, 'nonceA' ], [ $code_b, 'nonceB' ] ) {
+	my ( $code, $nonce ) = @$pair;
+	$t->post_ok(
+		'/token',
+		form => {
+			grant_type   => 'authorization_code',
+			code         => $code,
+			client_id    => 'testapp',
+			redirect_uri => 'https://testapp.example.com/callback',
+		}
+	)->status_is(200);
+	my @parts = split /\./, $t->tx->res->json->{id_token};
+	is( decode_json( _b64url_decode( $parts[1] ) )->{nonce}, $nonce, "code for $nonce maps to its own request" );
+} ## end for my $pair ( [ $code_a, 'nonceA' ], [ $code_b...])
+
+# A settled request cannot be revisited (back button)
+$t->get_ok("/sso/consent?rid=$rid_a")
+	->status_is(200)
+	->content_like( qr/No Authorization Request/, 'a completed request id is gone' );
+
+# ── Key rotation: sign with the newest private key, verify old hints by kid ──
+# A rotated JWKS holds the previous key as a public-only entry alongside the
+# new private key. Signing must pick the private key regardless of position;
+# hint verification must select the right key by kid.
+
+my $rot_old_rsa = Crypt::PK::RSA->new;
+$rot_old_rsa->generate_key( 256, 65537 );
+my $rot_old_pub = decode_json( $rot_old_rsa->export_key_jwk('public') );
+$rot_old_pub->{kid} = 'rot-old';
+$rot_old_pub->{use} = 'sig';
+$rot_old_pub->{alg} = 'RS256';
+
+my $rot_new_rsa = Crypt::PK::RSA->new;
+$rot_new_rsa->generate_key( 256, 65537 );
+my $rot_new_priv = decode_json( $rot_new_rsa->export_key_jwk('private') );
+$rot_new_priv->{kid} = 'rot-new';
+$rot_new_priv->{use} = 'sig';
+$rot_new_priv->{alg} = 'RS256';
+
+# Public-only key first, to prove signing skips keys without private material.
+my $rot_jwks_json = Mojo::JSON::encode_json( { keys => [ $rot_old_pub, $rot_new_priv ] } );
+
+my $client_rot = FakeEntry->new(
+	_dn                          => 'oidcClientId=rotapp,ou=oidc,dc=example,dc=com',
+	oidcClientId                 => 'rotapp',
+	oidcRedirectURI              => ['https://rotapp.example.com/cb'],
+	oidcPostLogoutRedirectURI    => ['https://rotapp.example.com/loggedout'],
+	oidcScope                    => ['openid'],
+	oidcGrantType                => ['authorization_code'],
+	oidcResponseType             => ['code'],
+	oidcTokenEndpointAuthMethod  => 'none',
+	oidcIdTokenSignedResponseAlg => 'RS256',
+	oidcJwks                     => $rot_jwks_json,
+);
+
+$t->reset_session;
+_install_stubs(
+	$t->app,
+	getOIDCClientEntry => sub {
+		my ( $self, $args ) = @_;
+		return $client_rot if ( $args->{clientId} // '' ) eq 'rotapp';
+		return undef;
+	},
+);
+
+$t->get_ok(
+	'/authorize?client_id=rotapp&redirect_uri=https://rotapp.example.com/cb&response_type=code&scope=openid&state=rot1')
+	->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $rot_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $rot_code,
+		client_id    => 'rotapp',
+		redirect_uri => 'https://rotapp.example.com/cb',
+	}
+)->status_is(200)->json_has('/id_token');
+
+my @rot_parts  = split /\./, $t->tx->res->json->{id_token};
+my $rot_header = decode_json( _b64url_decode( $rot_parts[0] ) );
+is( $rot_header->{kid}, 'rot-new', 'signing picks the private key, not the retained public-only key' );
+ok(
+	$rot_new_rsa->verify_message(
+		_b64url_decode( $rot_parts[2] ), "$rot_parts[0].$rot_parts[1]", 'SHA256', 'v1.5'
+	),
+	'rotated-set id_token verifies with the new key',
+);
+
+# An id_token_hint signed with the retained OLD key (kid rot-old) still
+# verifies at logout, so RP-initiated logout survives a rotation.
+my $old_hint_header  = _b64url_encode('{"alg":"RS256","typ":"JWT","kid":"rot-old"}');
+my $old_hint_payload = _b64url_encode(
+	Mojo::JSON::encode_json(
+		{ iss => 'http://localhost', aud => 'rotapp', sub => 'alice', iat => time() - 10, exp => time() + 3600 }
+	)
+);
+my $old_hint_sig
+	= _b64url_encode( $rot_old_rsa->sign_message( "$old_hint_header.$old_hint_payload", 'SHA256', 'v1.5' ) );
+my $old_hint = "$old_hint_header.$old_hint_payload.$old_hint_sig";
+
+$t->get_ok(
+	"/sso/logout?id_token_hint=$old_hint&post_logout_redirect_uri=https://rotapp.example.com/loggedout&state=rot9")
+	->status_is(302)
+	->header_is(
+		Location => 'https://rotapp.example.com/loggedout?state=rot9',
+		'hint signed with the rotated-out key still verifies (selected by kid)'
+	);
+
+_install_stubs( $t->app );
+
+# ── End-session endpoint accepts a cross-site POST with a verified hint ─────
+# /sso/logout is exempt from the CSRF middleware so relying parties can POST
+# to it (OIDC RP-Initiated Logout); the id_token_hint itself authenticates the
+# request. A cross-site POST without a verified hint cannot force a logout —
+# it is answered with the confirmation page instead.
+
+{
+	# No referer/CSRF-token UA hooks: these requests have the shape of a
+	# cross-site (RP-initiated) POST.
+	my $t_x = Test::Mojo->new('App::Nisaba::WebSSO');
+	_install_stubs(
+		$t_x->app,
+		getOIDCClientEntry => sub {
+			my ( $self, $args ) = @_;
+			return $client_rs256 if ( $args->{clientId} // '' ) eq 'rs256app';
+			return undef;
+		},
+	);
+
+	$t_x->post_ok(
+		'/sso/logout',
+		form => {
+			id_token_hint            => $lo_id_token,
+			post_logout_redirect_uri => 'https://rs256app.example.com/loggedout',
+			state                    => 'xpost1',
+		}
+	)->status_is(302)->header_is(
+		Location => 'https://rs256app.example.com/loggedout?state=xpost1',
+		'cross-site POST with a verified hint performs RP-initiated logout'
+	);
+
+	$t_x->post_ok(
+		'/sso/logout',
+		form => {
+			client_id                => 'rs256app',
+			post_logout_redirect_uri => 'https://rs256app.example.com/loggedout',
+		}
+		)
+		->status_is(200)
+		->content_like( qr/Sign Out/, 'cross-site POST without a hint gets the confirmation page, not a logout' );
+}
+
+# ── ssoIdTokenLifetime: ID token validity separate from the access token ────
+
+$t->reset_session;
+_install_stubs( $t->app );
+$t->app->helper(
+	pt => sub {
+		my $fake_pt = bless {
+			ini => {
+				'' => {
+					ssoIssuer               => 'http://localhost',
+					ssoTokenLifetime        => 1800,
+					ssoIdTokenLifetime      => 120,
+					ssoCodeLifetime         => 600,
+					passkeyRpId             => '',
+					passkeyUserVerification => 'preferred',
+				},
+			},
+			},
+			'FakePT';
+		return $fake_pt;
+	}
+);
+
+$t->get_ok(
+	'/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=idtl1'
+)->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $idtl_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $idtl_code,
+		client_id    => 'testapp',
+		redirect_uri => 'https://testapp.example.com/callback',
+	}
+)->status_is(200)->json_is( '/expires_in' => 1800, 'access token keeps ssoTokenLifetime' );
+
+my @idtl_parts   = split /\./, $t->tx->res->json->{id_token};
+my $idtl_payload = decode_json( _b64url_decode( $idtl_parts[1] ) );
+is( $idtl_payload->{exp} - $idtl_payload->{iat}, 120, 'id_token validity uses ssoIdTokenLifetime' );
+
+_install_stubs( $t->app );
+
+# ── issuer_config_warnings ───────────────────────────────────────────────────
+
+{
+	my @unset = App::Nisaba::WebSSO::issuer_config_warnings( undef, 'production' );
+	is( scalar @unset, 1, 'unset issuer warns in production mode' );
+	like( $unset[0], qr/Host header/, 'unset-issuer warning explains the Host-header fallback' );
+
+	is( scalar App::Nisaba::WebSSO::issuer_config_warnings( undef, 'development' ),
+		0, 'unset issuer is quiet in development mode' );
+	is( scalar App::Nisaba::WebSSO::issuer_config_warnings( 'https://sso.example.com', 'production' ),
+		0, 'a clean issuer produces no warnings' );
+
+	my @path = App::Nisaba::WebSSO::issuer_config_warnings( 'https://sso.example.com/sso', 'production' );
+	is( scalar @path, 1, 'issuer with a path component warns' );
+	like( $path[0], qr/path component/, 'path-component warning names the problem' );
+
+	my @slash = App::Nisaba::WebSSO::issuer_config_warnings( 'https://sso.example.com/', 'production' );
+	is( scalar @slash, 1, 'issuer with a trailing slash warns' );
+	like( $slash[0], qr/trailing slash/, 'trailing-slash warning names the problem' );
+
+	my @scheme = App::Nisaba::WebSSO::issuer_config_warnings( 'ldap://sso.example.com', 'production' );
+	is( scalar @scheme, 1, 'non-http(s) issuer warns' );
+}
+
+# ── Refresh tokens (RFC 6749 Section 6, OIDC Core 12) ───────────────────────
+# Issued only to clients whose registration includes the refresh_token grant,
+# rotated on every use.
+
+$t->reset_session;
+_install_stubs( $t->app );
+
+# Discovery advertises the new capabilities.
+$t->get_ok('/.well-known/openid-configuration')
+	->status_is(200)
+	->json_is( '/revocation_endpoint'     => 'http://localhost/revoke',     'discovery advertises revocation' )
+	->json_is( '/introspection_endpoint'  => 'http://localhost/introspect', 'discovery advertises introspection' )
+	->json_is( '/grant_types_supported/1' => 'refresh_token', 'discovery advertises the refresh_token grant' );
+
+my $sec_basic = 'Basic ' . MIME::Base64::encode_base64( 'secretapp:s3cret', '' );
+
+my $get_secretapp_grant = sub {
+	my ($state) = @_;
+	$t->reset_session;
+	$t->get_ok( '/authorize?client_id=secretapp&redirect_uri=https://secretapp.example.com/callback'
+			. "&response_type=code&scope=openid+profile&state=$state&nonce=rtnonce-$state" )->status_is(302);
+	$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+	$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+	my $code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+	$t->post_ok(
+		'/token',
+		{ Authorization => $sec_basic },
+		form => {
+			grant_type   => 'authorization_code',
+			code         => $code,
+			redirect_uri => 'https://secretapp.example.com/callback',
+		}
+	)->status_is(200);
+	return $t->tx->res->json;
+}; ## end $get_secretapp_grant = sub
+
+my $grant1 = $get_secretapp_grant->('rt1');
+ok( $grant1->{refresh_token}, 'refresh_token issued to a client registered for the grant' );
+my $orig_id_payload = decode_json( _b64url_decode( ( split /\./, $grant1->{id_token} )[1] ) );
+
+# Redeem the refresh token: fresh access token + rotated refresh token.
+$t->post_ok(
+	'/token',
+	{ Authorization => $sec_basic },
+	form => {
+		grant_type    => 'refresh_token',
+		refresh_token => $grant1->{refresh_token},
+	}
+	)
+	->status_is(200)
+	->json_has( '/access_token', 'refresh grant returns a new access token' )
+	->json_is( '/scope' => 'openid profile', 'refresh grant keeps the original scope by default' )
+	->json_has( '/refresh_token', 'refresh grant returns a rotated refresh token' );
+my $refreshed = $t->tx->res->json;
+isnt( $refreshed->{refresh_token}, $grant1->{refresh_token}, 'refresh token is rotated on use' );
+isnt( $refreshed->{access_token},  $grant1->{access_token},  'a fresh access token is minted' );
+
+my $ref_id_payload = decode_json( _b64url_decode( ( split /\./, $refreshed->{id_token} )[1] ) );
+is( $ref_id_payload->{sub}, 'alice', 'refreshed id_token keeps the subject' );
+ok( !exists $ref_id_payload->{nonce}, 'refreshed id_token carries no nonce (OIDC Core 12.2)' );
+is( $ref_id_payload->{auth_time}, $orig_id_payload->{auth_time},
+	'refreshed id_token preserves the original auth_time' );
+
+# The new access token works at UserInfo.
+$t->get_ok( '/userinfo', { Authorization => "Bearer $refreshed->{access_token}" } )
+	->status_is(200)
+	->json_is( '/sub' => 'alice', 'refreshed access token resolves at UserInfo' );
+
+# The rotated-out refresh token is dead.
+$t->post_ok(
+	'/token',
+	{ Authorization => $sec_basic },
+	form => {
+		grant_type    => 'refresh_token',
+		refresh_token => $grant1->{refresh_token},
+	}
+)->status_is(400)->json_is( '/error' => 'invalid_grant', 'replaying a rotated-out refresh token fails' );
+
+# Scope narrowing: a subset is allowed, an expansion is refused.
+$t->post_ok(
+	'/token',
+	{ Authorization => $sec_basic },
+	form => {
+		grant_type    => 'refresh_token',
+		refresh_token => $refreshed->{refresh_token},
+		scope         => 'openid',
+	}
+)->status_is(200)->json_is( '/scope' => 'openid', 'refresh grant may narrow the scope' );
+my $narrowed = $t->tx->res->json;
+
+$t->post_ok(
+	'/token',
+	{ Authorization => $sec_basic },
+	form => {
+		grant_type    => 'refresh_token',
+		refresh_token => $narrowed->{refresh_token},
+		scope         => 'openid profile email',
+	}
+)->status_is(400)->json_is( '/error' => 'invalid_scope', 'refresh grant cannot expand beyond the original grant' );
+
+# A client not registered for the grant gets neither a refresh token...
+$t->reset_session;
+$t->get_ok(
+	'/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=nort1'
+)->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $nort_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $nort_code,
+		client_id    => 'testapp',
+		redirect_uri => 'https://testapp.example.com/callback',
+	}
+)->status_is(200)->json_hasnt( '/refresh_token', 'no refresh token for a client without the refresh_token grant' );
+my $nort_access = $t->tx->res->json->{access_token};
+
+# ...nor use of the grant type.
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type    => 'refresh_token',
+		refresh_token => 'whatever',
+		client_id     => 'testapp',
+	}
+	)
+	->status_is(400)
+	->json_is( '/error' => 'unauthorized_client', 'refresh grant refused for a client not registered for it' );
+
+# ── Token revocation (RFC 7009) ──────────────────────────────────────────────
+
+my $grant2 = $get_secretapp_grant->('rev1');
+
+# Revoking the access token kills it at UserInfo.
+$t->post_ok( '/revoke', { Authorization => $sec_basic }, form => { token => $grant2->{access_token} } )
+	->status_is( 200, 'revocation of an access token answers 200' );
+$t->get_ok( '/userinfo', { Authorization => "Bearer $grant2->{access_token}" } )
+	->status_is( 401, 'revoked access token no longer resolves at UserInfo' );
+
+# Revoking the refresh token kills the refresh grant.
+$t->post_ok( '/revoke', { Authorization => $sec_basic }, form => { token => $grant2->{refresh_token} } )
+	->status_is( 200, 'revocation of a refresh token answers 200' );
+$t->post_ok(
+	'/token',
+	{ Authorization => $sec_basic },
+	form => {
+		grant_type    => 'refresh_token',
+		refresh_token => $grant2->{refresh_token},
+	}
+)->status_is(400)->json_is( '/error' => 'invalid_grant', 'revoked refresh token cannot be redeemed' );
+
+# A foreign token is answered 200 (nothing revealed) but NOT revoked.
+$t->post_ok( '/revoke', { Authorization => $sec_basic }, form => { token => $nort_access } )
+	->status_is( 200, 'revoking a foreign token still answers 200' );
+$t->get_ok( '/userinfo', { Authorization => "Bearer $nort_access" } )
+	->status_is( 200, 'a foreign token is not actually revoked' );
+
+# Revocation requires client authentication.
+my $rev_bad_basic = 'Basic ' . MIME::Base64::encode_base64( 'secretapp:wrong', '' );
+$t->post_ok( '/revoke', { Authorization => $rev_bad_basic }, form => { token => $nort_access } )
+	->status_is(401)
+	->json_is( '/error' => 'invalid_client', 'revocation requires valid client credentials' );
+
+# ── Token introspection (RFC 7662) ───────────────────────────────────────────
+
+my $grant3 = $get_secretapp_grant->('intro1');
+
+$t->post_ok( '/introspect', { Authorization => $sec_basic }, form => { token => $grant3->{access_token} } )
+	->status_is(200)
+	->json_is( '/active'     => Mojo::JSON->true, 'own access token introspects as active' )
+	->json_is( '/sub'        => 'alice' )
+	->json_is( '/username'   => 'alice' )
+	->json_is( '/client_id'  => 'secretapp' )
+	->json_is( '/scope'      => 'openid profile' )
+	->json_is( '/token_type' => 'Bearer' )
+	->json_has('/exp')
+	->json_has('/iat')
+	->json_is( '/iss' => 'http://localhost', 'introspection response names the issuer' );
+
+$t->post_ok( '/introspect', { Authorization => $sec_basic }, form => { token => $grant3->{refresh_token} } )
+	->status_is(200)
+	->json_is( '/active'     => Mojo::JSON->true, 'own refresh token introspects as active' )
+	->json_is( '/token_type' => 'refresh_token' );
+
+# Foreign and unknown tokens are simply inactive — no metadata leaks.
+$t->post_ok( '/introspect', { Authorization => $sec_basic }, form => { token => $nort_access } )
+	->status_is(200)
+	->json_is( '/active' => Mojo::JSON->false, 'a foreign token introspects as inactive' )
+	->json_hasnt( '/sub', 'no claims leak for a foreign token' );
+$t->post_ok( '/introspect', { Authorization => $sec_basic }, form => { token => 'no-such-token' } )
+	->status_is(200)
+	->json_is( '/active' => Mojo::JSON->false, 'an unknown token introspects as inactive' );
+
+# A public client cannot introspect at all (token-validity oracle).
+$t->post_ok( '/introspect', form => { client_id => 'testapp', token => $nort_access } )
+	->status_is(401)
+	->json_is( '/error' => 'invalid_client', 'introspection is refused for public clients' );
+
+# A revoked token introspects as inactive.
+$t->post_ok( '/introspect', { Authorization => $sec_basic }, form => { token => $grant2->{access_token} } )
+	->status_is(200)
+	->json_is( '/active' => Mojo::JSON->false, 'a revoked token introspects as inactive' );
+
+# ── Durable consent ("remember this decision") ───────────────────────────────
+# A remembered grant survives the browser session: after a fresh login in a
+# brand-new session, login completes the flow with no consent screen, and
+# prompt=none succeeds without any interactive consent in that session.
+
+my $client_remember = FakeEntry->new(
+	_dn                          => 'oidcClientId=rememberapp,ou=oidc,dc=example,dc=com',
+	oidcClientId                 => 'rememberapp',
+	oidcClientName               => 'Remember App',
+	oidcRedirectURI              => ['https://rememberapp.example.com/cb'],
+	oidcScope                    => [ 'openid', 'profile' ],
+	oidcGrantType                => ['authorization_code'],
+	oidcResponseType             => ['code'],
+	oidcTokenEndpointAuthMethod  => 'none',
+	oidcIdTokenSignedResponseAlg => 'RS256',
+	oidcJwks                     => $testapp_jwks_json,
+);
+
+$t->reset_session;
+_install_stubs(
+	$t->app,
+	getOIDCClientEntry => sub {
+		my ( $self, $args ) = @_;
+		return $client_remember if ( $args->{clientId} // '' ) eq 'rememberapp';
+		return $client_public   if ( $args->{clientId} // '' ) eq 'testapp';
+		return undef;
+	},
+);
+
+my $remember_authz = '/authorize?client_id=rememberapp&redirect_uri=https://rememberapp.example.com/cb'
+	. '&response_type=code&scope=openid+profile';
+
+# Session 1: consent interactively, ticking "remember this decision".
+$t->get_ok("$remember_authz&state=rem1")->status_is(302);
+$t->post_ok( '/sso/login', form => { user => 'alice', pass => 'correct' } )->status_is(302);
+$t->get_ok( $t->tx->res->headers->location )
+	->status_is(200)
+	->content_like( qr/Remember this decision/, 'consent page offers to remember the decision' );
+$t->post_ok( '/sso/consent', form => { decision => 'allow', remember => 1 } )
+	->status_is(302)
+	->header_like( Location => qr{^https://rememberapp\.example\.com/cb}, 'remembered consent flow completes' );
+
+# Session 2 (fresh browser session): login completes the flow directly.
+$t->reset_session;
+$t->get_ok("$remember_authz&state=rem2")
+	->status_is(302)
+	->header_like( Location => qr{/sso/login}, 'new session still requires authentication' );
+$t->post_ok( '/sso/login', form => { user => 'alice', pass => 'correct' } )->status_is(302)->header_like(
+	Location => qr{^https://rememberapp\.example\.com/cb},
+	'durable consent skips the consent screen after a fresh login'
+)->header_like( Location => qr/state=rem2/, 'skipped flow returns its state' );
+
+# prompt=none succeeds in this session even though no interactive consent
+# happened here — the durable grant covers it.
+$t->get_ok("$remember_authz&state=rem3&prompt=none")
+	->status_is(302)
+	->header_like( Location => qr{^https://rememberapp\.example\.com/cb}, 'silent request returns to the client' )
+	->header_unlike( Location => qr/error=/, 'durable consent satisfies prompt=none across sessions' );
+
+# prompt=consent forces the consent screen despite the durable grant.
+$t->get_ok("$remember_authz&state=rem4&prompt=consent")
+	->status_is(302)
+	->header_like( Location => qr{/sso/consent}, 'prompt=consent forces the consent screen' );
+
+# A consent that was NOT remembered does not survive the session: testapp was
+# consented (without remember) many times above, yet a new session still gets
+# the consent screen.
+$t->reset_session;
+$t->get_ok(
+	'/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=rem5'
+)->status_is(302);
+$t->post_ok( '/sso/login', form => { user => 'alice', pass => 'correct' } )
+	->status_is(302)
+	->header_like( Location => qr{/sso/consent}, 'unremembered consent does not persist across sessions' );
+
+_install_stubs( $t->app );
+
+# ── Token endpoint: cross-client code redemption is refused ─────────────────
+# A correctly authenticated client cannot redeem an authorization code issued
+# to a different client (code substitution).
+
+$t->reset_session;
+_install_stubs( $t->app );
+
+$t->get_ok(
+	'/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=xc1'
+)->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $xc_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+$t->post_ok(
+	'/token',
+	{ Authorization => $sec_basic },
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $xc_code,
+		redirect_uri => 'https://testapp.example.com/callback',
+	}
+	)
+	->status_is(400)
+	->json_is( '/error' => 'invalid_grant', q{authenticated client cannot redeem another client's code} )
+	->json_like( '/error_description' => qr/client_id mismatch/, 'mismatch is reported as such' );
+
+# ── Token endpoint: unset auth method (legacy default) ──────────────────────
+# A client with no registered oidcTokenEndpointAuthMethod falls back to the
+# legacy rule: with a stored secret it must present it (either transport);
+# without one it is treated as public.
+
+my $client_legacy_secret = FakeEntry->new(
+	_dn                          => 'oidcClientId=legacysecret,ou=oidc,dc=example,dc=com',
+	oidcClientId                 => 'legacysecret',
+	oidcClientSecret             => 'legacy-s3cret',
+	oidcIdTokenSignedResponseAlg => 'HS256',
+	oidcRedirectURI              => ['https://legacysecret.example.com/cb'],
+	oidcScope                    => ['openid'],
+	oidcGrantType                => ['authorization_code'],
+	oidcResponseType             => ['code'],
+	# deliberately no oidcTokenEndpointAuthMethod
+);
+my $client_legacy_public = FakeEntry->new(
+	_dn                          => 'oidcClientId=legacypublic,ou=oidc,dc=example,dc=com',
+	oidcClientId                 => 'legacypublic',
+	oidcIdTokenSignedResponseAlg => 'RS256',
+	oidcJwks                     => $testapp_jwks_json,
+	oidcRedirectURI              => ['https://legacypublic.example.com/cb'],
+	oidcScope                    => ['openid'],
+	oidcGrantType                => ['authorization_code'],
+	oidcResponseType             => ['code'],
+	# deliberately no oidcTokenEndpointAuthMethod and no secret
+);
+
+_install_stubs(
+	$t->app,
+	getOIDCClientEntry => sub {
+		my ( $self, $args ) = @_;
+		return $client_legacy_secret if ( $args->{clientId} // '' ) eq 'legacysecret';
+		return $client_legacy_public if ( $args->{clientId} // '' ) eq 'legacypublic';
+		return undef;
+	},
+);
+
+my $get_legacy_code = sub {
+	my ( $client_id, $state ) = @_;
+	$t->reset_session;
+	$t->get_ok( "/authorize?client_id=$client_id&redirect_uri=https://$client_id.example.com/cb"
+			. "&response_type=code&scope=openid&state=$state" )->status_is(302);
+	$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+	$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+	return Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+};
+
+# With a stored secret: either transport authenticates...
+my $leg_code = $get_legacy_code->( 'legacysecret', 'leg1' );
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type    => 'authorization_code',
+		code          => $leg_code,
+		client_id     => 'legacysecret',
+		client_secret => 'legacy-s3cret',
+		redirect_uri  => 'https://legacysecret.example.com/cb',
+	}
+)->status_is(200)->json_has( '/access_token', 'unset method: secret accepted via post transport' );
+
+my $leg_code2 = $get_legacy_code->( 'legacysecret', 'leg2' );
+my $leg_basic = 'Basic ' . MIME::Base64::encode_base64( 'legacysecret:legacy-s3cret', '' );
+$t->post_ok(
+	'/token',
+	{ Authorization => $leg_basic },
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $leg_code2,
+		redirect_uri => 'https://legacysecret.example.com/cb',
+	}
+)->status_is(200)->json_has( '/access_token', 'unset method: secret accepted via basic transport' );
+
+# ...and the secret is still mandatory.
+my $leg_code3 = $get_legacy_code->( 'legacysecret', 'leg3' );
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $leg_code3,
+		client_id    => 'legacysecret',
+		redirect_uri => 'https://legacysecret.example.com/cb',
+	}
+)->status_is(401)->json_is( '/error' => 'invalid_client', 'unset method: missing secret is refused' );
+
+# Without a stored secret the client is treated as public. Token responses
+# also carry the RFC 6749 5.1 cache headers.
+my $leg_code4 = $get_legacy_code->( 'legacypublic', 'leg4' );
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $leg_code4,
+		client_id    => 'legacypublic',
+		redirect_uri => 'https://legacypublic.example.com/cb',
+	}
+	)
+	->status_is(200)
+	->json_has( '/access_token', 'unset method without a secret is treated as public' )
+	->header_is( 'Cache-Control' => 'no-store', 'token response is marked no-store' )
+	->header_is( 'Pragma'        => 'no-cache', 'token response is marked no-cache' );
+
+_install_stubs( $t->app );
+
+# ── Token endpoint: Basic credentials are form-urlencoded (RFC 6749 2.3.1) ──
+# A secret with reserved characters must round-trip through the required
+# URL-encoding in the Authorization header.
+
+my $enc_secret = 'p@ss word%100:x';
+my $client_enc = FakeEntry->new(
+	_dn                          => 'oidcClientId=encapp,ou=oidc,dc=example,dc=com',
+	oidcClientId                 => 'encapp',
+	oidcClientSecret             => $enc_secret,
+	oidcIdTokenSignedResponseAlg => 'HS256',
+	oidcRedirectURI              => ['https://encapp.example.com/cb'],
+	oidcScope                    => ['openid'],
+	oidcGrantType                => ['authorization_code'],
+	oidcResponseType             => ['code'],
+	oidcTokenEndpointAuthMethod  => 'client_secret_basic',
+);
+
+$t->reset_session;
+_install_stubs(
+	$t->app,
+	getOIDCClientEntry => sub {
+		my ( $self, $args ) = @_;
+		return $client_enc if ( $args->{clientId} // '' ) eq 'encapp';
+		return undef;
+	},
+);
+
+$t->get_ok(
+	'/authorize?client_id=encapp&redirect_uri=https://encapp.example.com/cb&response_type=code&scope=openid&state=enc1')
+	->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $enc_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+my $enc_basic = 'Basic '
+	. MIME::Base64::encode_base64( Mojo::Util::url_escape('encapp') . ':' . Mojo::Util::url_escape($enc_secret), '' );
+$t->post_ok(
+	'/token',
+	{ Authorization => $enc_basic },
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $enc_code,
+		redirect_uri => 'https://encapp.example.com/cb',
+	}
+	)
+	->status_is(200)
+	->json_has( '/access_token', 'URL-encoded Basic credentials with reserved characters authenticate' );
+
+_install_stubs( $t->app );
+
+# ── Refresh grant edge cases ─────────────────────────────────────────────────
+
+# Missing refresh_token parameter.
+$t->post_ok( '/token', { Authorization => $sec_basic }, form => { grant_type => 'refresh_token' } )
+	->status_is(400)
+	->json_is( '/error' => 'invalid_request', 'refresh grant without a token is invalid_request' );
+
+# A different refresh-enabled client cannot redeem another client's token.
+my $client_rt2 = FakeEntry->new(
+	_dn                          => 'oidcClientId=rt2app,ou=oidc,dc=example,dc=com',
+	oidcClientId                 => 'rt2app',
+	oidcIdTokenSignedResponseAlg => 'RS256',
+	oidcJwks                     => $testapp_jwks_json,
+	oidcRedirectURI              => ['https://rt2app.example.com/cb'],
+	oidcScope                    => ['openid'],
+	oidcGrantType                => [ 'authorization_code', 'refresh_token' ],
+	oidcResponseType             => ['code'],
+	oidcTokenEndpointAuthMethod  => 'none',
+);
+
+_install_stubs(
+	$t->app,
+	getOIDCClientEntry => sub {
+		my ( $self, $args ) = @_;
+		return $client_confidential if ( $args->{clientId} // '' ) eq 'secretapp';
+		return $client_rt2          if ( $args->{clientId} // '' ) eq 'rt2app';
+		return undef;
+	},
+);
+
+my $xrt_grant = $get_secretapp_grant->('xrt1');
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type    => 'refresh_token',
+		client_id     => 'rt2app',
+		refresh_token => $xrt_grant->{refresh_token},
+	}
+	)
+	->status_is(400)
+	->json_is( '/error' => 'invalid_grant', q{a refresh token cannot be redeemed by a different client} );
+
+# Expired refresh token: shrink the configured lifetime under an existing
+# token, as the access-token expiry test does.
+my $xrt_grant2 = $get_secretapp_grant->('xrt2');
+$t->app->helper(
+	pt => sub {
+		my $fake_pt = bless {
+			ini => {
+				'' => {
+					ssoIssuer               => 'http://localhost',
+					ssoTokenLifetime        => 3600,
+					ssoRefreshTokenLifetime => -1,
+					ssoCodeLifetime         => 600,
+					passkeyRpId             => '',
+					passkeyUserVerification => 'preferred',
+				},
+			},
+			},
+			'FakePT';
+		return $fake_pt;
+	}
+);
+$t->post_ok(
+	'/token',
+	{ Authorization => $sec_basic },
+	form => {
+		grant_type    => 'refresh_token',
+		refresh_token => $xrt_grant2->{refresh_token},
+	}
+	)
+	->status_is(400)
+	->json_is( '/error' => 'invalid_grant', 'expired refresh token is refused' )
+	->json_like( '/error_description' => qr/expired/i, 'expiry is reported as such' );
+
+_install_stubs( $t->app );
+
+# ── Revocation by a public client ────────────────────────────────────────────
+# A public client (auth method none) may revoke its own tokens; possession of
+# the token is the credential.
+
+$t->reset_session;
+$t->get_ok(
+	'/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=prv1'
+)->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $prv_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $prv_code,
+		client_id    => 'testapp',
+		redirect_uri => 'https://testapp.example.com/callback',
+	}
+)->status_is(200);
+my $prv_access = $t->tx->res->json->{access_token};
+
+$t->post_ok( '/revoke', form => { client_id => 'testapp', token => $prv_access } )
+	->status_is( 200, 'public client may revoke its own token' );
+$t->get_ok( '/userinfo', { Authorization => "Bearer $prv_access" } )
+	->status_is( 401, 'token revoked by its public client is dead' );
+
+# ── Pending authorization requests are capped at 5 ───────────────────────────
+
+$t->reset_session;
+_install_stubs( $t->app );
+
+my @cap_rids;
+for my $i ( 1 .. 7 ) {
+	$t->get_ok("$authz_base&state=cap$i")->status_is(302);
+	push @cap_rids, Mojo::URL->new( $t->tx->res->headers->location )->query->param('rid');
+}
+
+$t->post_ok( "/sso/login?rid=$cap_rids[6]", form => { user => 'alice', pass => 'correct' } )->status_is(302);
+
+$t->get_ok("/sso/consent?rid=$cap_rids[0]")
+	->status_is(200)
+	->content_like( qr/No Authorization Request/, 'oldest pending request beyond the cap was dropped' );
+$t->get_ok("/sso/consent?rid=$cap_rids[2]")
+	->status_is(200)
+	->content_like( qr/Test Application/, 'a request within the cap of five is still pending' );
+
+# ── max_age with a nonzero value ─────────────────────────────────────────────
+# The session from the cap test is authenticated; make its auth_time older
+# than a tight max_age.
+
+sleep 2;
+$t->get_ok("$authz_base&state=man1&max_age=1")
+	->status_is(302)
+	->header_like( Location => qr{/sso/login}, 'session older than max_age is sent back through login' );
+$t->get_ok("$authz_base&state=man2&max_age=9999")
+	->status_is(302)
+	->header_like( Location => qr{/sso/consent}, 'session within max_age proceeds' );
+
+# ── RP-initiated logout with an HS256-signed hint ────────────────────────────
+
+$t->reset_session;
+_install_stubs(
+	$t->app,
+	getOIDCClientEntry => sub {
+		my ( $self, $args ) = @_;
+		return $client_hs256 if ( $args->{clientId} // '' ) eq 'hs256app';
+		return undef;
+	},
+);
+
+$t->get_ok(
+	'/authorize?client_id=hs256app&redirect_uri=https://hs256app.example.com/callback&response_type=code&scope=openid&state=hlo1'
+)->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $hlo_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+$t->post_ok(
+	'/token',
+	{ Authorization => 'Basic ' . MIME::Base64::encode_base64( "hs256app:$hs256_secret", '' ) },
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $hlo_code,
+		redirect_uri => 'https://hs256app.example.com/callback',
+	}
+)->status_is(200);
+my $hlo_id_token = $t->tx->res->json->{id_token};
+
+$t->get_ok(
+	"/sso/logout?id_token_hint=$hlo_id_token&post_logout_redirect_uri=https://hs256app.example.com/loggedout&state=hlo9"
+)->status_is(302)->header_is(
+	Location => 'https://hs256app.example.com/loggedout?state=hlo9',
+	'HS256-signed hint verifies and redirects to the registered post-logout URI'
+);
+
+# A hint from a foreign issuer is not verified, even with a valid signature.
+my $evil_header  = _b64url_encode('{"alg":"HS256","typ":"JWT"}');
+my $evil_payload = _b64url_encode(
+	Mojo::JSON::encode_json( { iss => 'https://evil.example.com', aud => 'hs256app', sub => 'alice' } ) );
+my $evil_sig  = _b64url_encode( Digest::SHA::hmac_sha256( "$evil_header.$evil_payload", $hs256_secret ) );
+my $evil_hint = "$evil_header.$evil_payload.$evil_sig";
+$t->get_ok("/sso/logout?id_token_hint=$evil_hint&post_logout_redirect_uri=https://hs256app.example.com/loggedout")
+	->status_is(200)
+	->content_like( qr/Sign Out/, 'hint with a foreign issuer requires confirmation' );
+
+_install_stubs( $t->app );
+
+# ── UserInfo: access_token as a body parameter ───────────────────────────────
+
+$t->reset_session;
+$t->get_ok(
+	'/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=uif1'
+)->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $uif_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $uif_code,
+		client_id    => 'testapp',
+		redirect_uri => 'https://testapp.example.com/callback',
+	}
+)->status_is(200);
+my $uif_token = $t->tx->res->json->{access_token};
+
+$t->post_ok( '/userinfo', form => { access_token => $uif_token } )
+	->status_is(200)
+	->json_is( '/sub' => 'alice', 'access_token accepted as a form parameter (RFC 6750 2.2)' );
+
+# ── JWKS aggregation across clients ──────────────────────────────────────────
+# All clients' public keys are served, including every key of a rotated set;
+# a client with unparseable key material is skipped, not fatal.
+
+my $client_badjwks = FakeEntry->new(
+	_dn          => 'oidcClientId=badjwks,ou=oidc,dc=example,dc=com',
+	oidcClientId => 'badjwks',
+	oidcJwks     => 'this is not json {',
+);
+
+_install_stubs( $t->app, getOIDCClients => sub { return [ $client_rs256, $client_rot, $client_badjwks ] }, );
+
+$t->get_ok('/jwks')->status_is(200);
+my $agg_keys = $t->tx->res->json->{keys};
+is( scalar @$agg_keys, 3, 'JWKS aggregates all keys of all clients; malformed sets are skipped' );
+my %agg_kids = map { ( $_->{kid} // '' ) => $_ } @$agg_keys;
+ok( $agg_kids{'test-rs256-kid'},              'single-key client key served' );
+ok( $agg_kids{'rot-new'},                     'rotated set: new key served' );
+ok( $agg_kids{'rot-old'},                     'rotated set: retained old key served' );
+ok( !( grep { defined $_->{d} } @$agg_keys ), 'no private material in the aggregated JWKS' );
+
+_install_stubs( $t->app );
+
+# ── Discovery: response modes ────────────────────────────────────────────────
+
+$t->get_ok('/.well-known/openid-configuration')
+	->status_is(200)
+	->json_is( '/response_modes_supported/0' => 'query', 'discovery advertises the query response mode' );
+
+# ── Authorization: client with no registered redirect URIs ───────────────────
+
+my $client_nouri = FakeEntry->new(
+	_dn          => 'oidcClientId=nouri,ou=oidc,dc=example,dc=com',
+	oidcClientId => 'nouri',
+	oidcScope    => ['openid'],
+	# deliberately no oidcRedirectURI
+);
+_install_stubs(
+	$t->app,
+	getOIDCClientEntry => sub {
+		my ( $self, $args ) = @_;
+		return $client_nouri if ( $args->{clientId} // '' ) eq 'nouri';
+		return undef;
+	},
+);
+$t->get_ok('/authorize?client_id=nouri&redirect_uri=https://nouri.example.com/cb&response_type=code&scope=openid')
+	->status_is(200)
+	->content_like( qr/Client Configuration Error/, 'client without registered redirect URIs gets an error page' );
+
+_install_stubs( $t->app );
 
 # ── Conformance-grade JWT validation with Crypt::JWT ────────────────────────
 # The checks above prove our signatures are byte-correct. This section instead

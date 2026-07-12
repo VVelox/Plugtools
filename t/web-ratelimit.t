@@ -156,4 +156,145 @@ SKIP: {
 		->status_is( 503, 'guarded endpoint fails closed when the limiter store is unavailable' );
 } ## end SKIP:
 
+# ── Integration: the SSO token endpoint is throttled ──────────────────────────
+# Repeated failures (bogus codes, bad client credentials) are counted per
+# (client_id, ip); once over the limit the endpoint answers 429 before the
+# grant store is even consulted.
+
+SKIP: {
+	eval { require App::Nisaba::WebSSO; require App::Nisaba::WebSSO::Storage; 1 }
+		or skip( "WebSSO unavailable: $@", 30 );
+
+	# Minimal Net::LDAP::Entry stand-in for a registered OIDC client.
+	{
+
+		package FakeSSOEntry;
+		sub new { my ( $c, %a ) = @_; return bless { attrs => \%a }, $c }
+
+		sub get_value {
+			my ( $self, $attr ) = @_;
+			my $v = $self->{attrs}{$attr};
+			return () unless defined $v;
+			return wantarray ? ( ref $v ? @{$v} : ($v) ) : ( ref $v ? $v->[0] : $v );
+		}
+	}
+
+	# A confidential client whose successful exchanges can reset the counter.
+	my $good_entry = FakeSSOEntry->new(
+		oidcClientId                 => 'goodclient',
+		oidcClientSecret             => 'good-secret',
+		oidcTokenEndpointAuthMethod  => 'client_secret_post',
+		oidcIdTokenSignedResponseAlg => 'HS256',
+	);
+
+	my $build_sso = sub {
+		my (%ini) = @_;
+		my $t     = Test::Mojo->new('App::Nisaba::WebSSO');
+		my $fake  = bless { ini => { '' => {%ini} } }, 'FakePTSSO';
+		Mojo::Util::monkey_patch(
+			'FakePTSSO',
+			error                  => sub { 0 },
+			errorString            => sub { '' },
+			errorblank             => sub { },
+			passkeySchemaAvailable => sub { 0 },
+			getOIDCClientEntry     => sub {
+				my ( $s, $a ) = @_;
+				return $good_entry if ( $a->{clientId} // '' ) eq 'goodclient';
+				return undef;
+			},
+		);
+		$t->app->helper( pt => sub { $fake } );
+
+		my $storage = App::Nisaba::WebSSO::Storage->new( { backend => 'SQLite', path => ':memory:' } );
+		no warnings 'redefine';
+		$t->app->helper( sso_storage => sub { $storage } );
+		return ( $t, $storage );
+	}; ## end $build_sso = sub
+
+	my ($t) = $build_sso->(
+		rateLimit           => 1,
+		rateLimitPath       => ':memory:',
+		rateLimitTokenMax   => 3,
+		rateLimitTokenIpMax => 9999,
+	);
+
+	my %req = ( grant_type => 'authorization_code', code => 'bogus', client_id => 'bruteclient' );
+
+	# Three failed attempts are answered normally (unknown client)...
+	for my $n ( 1 .. 3 ) {
+		$t->post_ok( '/token', form => {%req} )
+			->status_is(401)
+			->json_is( '/error' => 'invalid_client', "token failure $n answered normally" );
+	}
+
+	# ...the fourth is throttled before touching the grant store.
+	$t->post_ok( '/token', form => {%req} )
+		->status_is(429)
+		->json_is( '/error' => 'too_many_requests', 'token endpoint throttles after repeated failures' )
+		->header_exists( 'Retry-After', '429 carries a Retry-After header' );
+
+	# A different client_id from the same IP has its own bucket.
+	$t->post_ok( '/token', form => { %req, client_id => 'otherclient' } )
+		->status_isnt( 429, 'a different client_id is not caught by the per-(client,ip) lock' );
+
+	# ── Reset on success: a valid exchange clears the client's counter ────────
+
+	my ( $t2, $storage2 ) = $build_sso->(
+		rateLimit           => 1,
+		rateLimitPath       => ':memory:',
+		rateLimitTokenMax   => 3,
+		rateLimitTokenIpMax => 9999,
+	);
+
+	my %bad_auth = (
+		grant_type    => 'authorization_code',
+		code          => 'bogus',
+		client_id     => 'goodclient',
+		client_secret => 'wrong',
+	);
+
+	# Two failures (wrong secret)...
+	for my $n ( 1 .. 2 ) {
+		$t2->post_ok( '/token', form => {%bad_auth} )->status_is( 401, "reset: failure $n answered normally" );
+	}
+
+	# ...then a valid exchange (correct secret redeeming a seeded code)...
+	$storage2->put(
+		'code',
+		'goodcode',
+		{ client_id => 'goodclient', user => 'alice', scope => 'openid', issued_at => time(), auth_time => time() },
+		600,
+	);
+	$t2->post_ok(
+		'/token',
+		form => {
+			grant_type    => 'authorization_code',
+			code          => 'goodcode',
+			client_id     => 'goodclient',
+			client_secret => 'good-secret',
+		}
+	)->status_is( 200, 'reset: valid exchange succeeds' );
+
+	# ...after which two more failures are answered normally. Without the
+	# reset these would be failures three and four: the second of them would
+	# already be blocked.
+	for my $n ( 3 .. 4 ) {
+		$t2->post_ok( '/token', form => {%bad_auth} )
+			->status_is( 401, "reset: post-success failure $n is not throttled" );
+	}
+
+	# The counter still works after a reset: one more failure reaches the
+	# limit and the next request is blocked.
+	$t2->post_ok( '/token', form => {%bad_auth} )->status_is( 401, 'reset: third post-success failure' );
+	$t2->post_ok( '/token', form => {%bad_auth} )
+		->status_is( 429, 'reset: limit re-engages after enough new failures' );
+
+	# ── Fail-closed: an unusable limiter store denies /token with 503 ─────────
+
+	my $bad_sso_dir = File::Temp->newdir;
+	my ($tc) = $build_sso->( rateLimit => 1, rateLimitPath => $bad_sso_dir->dirname );
+	$tc->post_ok( '/token', form => { grant_type => 'authorization_code', code => 'x', client_id => 'y' } )
+		->status_is( 503, 'token endpoint fails closed when the limiter store is unavailable' );
+} ## end SKIP:
+
 done_testing();
