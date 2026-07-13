@@ -18,7 +18,9 @@ my %WriteMakefileArgs = (
 	EXE_FILES   => [
 		'src_bin/plgadd', 'src_bin/plgclean', 'src_bin/plgmod',  'src_bin/plgrm',
 		'src_bin/pluadd', 'src_bin/plumod',   'src_bin/plupass', 'src_bin/plurm',
+		'src_bin/plngmod',
 		'src_bin/mojo_nisaba',
+		'src_bin/mojo_nisaba_selfservice',
 		'src_bin/mojo_nisaba_sso',
 	],
 	CONFIGURE_REQUIRES => {
