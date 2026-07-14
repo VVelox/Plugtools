@@ -16,11 +16,11 @@ NISABA_LISTEN=http://127.0.0.1:8080 hypnotoad /usr/local/bin/mojo_nisaba
 
 Under Hypnotoad the listen URL and worker tuning come from the
 environment or the config (`NISABA_LISTEN`, the `hypnotoad*` keys — see
-[configuration.md](configuration.md)), not command-line flags. It
+[configuration](configuration.md)), not command-line flags. It
 refuses to start without a session secret — `websecret` in the config
 or `NISABA_SECRET` in the environment. rc scripts and systemd units for
 boot (which run Hypnotoad for you) are covered in
-[install.md](install.md); the shipped ones listen on port 8080.
+[install](install.md); the shipped ones listen on port 8080.
 
 ## Who may enter
 
@@ -29,9 +29,9 @@ in — membership by `memberUid` or by primary GID. Login is password
 first; if the account has TOTP active a code is demanded next, and
 accounts with passkeys may sign in with those instead. All three paths
 are rate limited per user and per IP (see
-[configuration.md](configuration.md)), and every state-changing request
+[configuration](configuration.md)), and every state-changing request
 passes the two-layer CSRF checks described in
-[security.md](security.md).
+[security](security.md).
 
 ## Users
 

@@ -83,7 +83,7 @@ The `bind` DN in the config needs write access under all of them, plus
 the ability to use the password-modify extended operation.
 
 If TOTP, passkeys, SSH keys, or OIDC are wanted, load the matching
-schemas from `schemas/` first — see [schemas.md](schemas.md).
+schemas from `schemas/` first — see [schemas](schemas.md).
 
 The admin web UI only admits members of the `adminGroup` group (default
 `LDAPadmin`), so create it and put yourself in it...
@@ -97,7 +97,7 @@ plgmod -g LDAPadmin -a add -u yourname
 
 Write `~/.config/nisabarc` (or point `NISABA_CONFIG` somewhere shared
 like `/usr/local/etc/nisabarc`) per
-[configuration.md](configuration.md). For the web apps also generate a
+[configuration](configuration.md). For the web apps also generate a
 session secret — they refuse to start without one...
 
 ```shell
@@ -164,7 +164,7 @@ systemctl enable --now mojo_nisaba mojo_nisaba_selfservice mojo_nisaba_sso
 `systemctl reload mojo_nisaba` hot-restarts without dropping
 connections. `ExecStart`/`ExecReload` reference `/usr/local/bin/hypnotoad`;
 adjust if your Perl installed it elsewhere. Worker counts and the other
-Hypnotoad knobs are in [configuration.md](configuration.md) and
+Hypnotoad knobs are in [configuration](configuration.md) and
 [rc/README.md](../rc/README.md).
 
 ## In front of it all
@@ -176,4 +176,4 @@ proxy speaks plain HTTP to the app *and* the app is reached over plain
 HTTP by browsers, set `cookieSecure=0`; otherwise leave it alone. Behind
 a proxy also set `passkeyRpId` and (for the SSO) `ssoIssuer` explicitly,
 and turn on reverse-proxy header handling (`NISABA_HYPNOTOAD_PROXY=1`) —
-see [security.md](security.md) for why.
+see [security](security.md) for why.

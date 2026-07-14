@@ -164,7 +164,7 @@ fails closed.
 
 ## SSO — the sukkal
 
-See [Sukkal.md](Sukkal.md) for what these govern.
+See [Sukkal](Sukkal.md) for what these govern.
 
 | key                          | default                        | what                                             |
 |------------------------------|--------------------------------|---------------------------------------------------|
@@ -187,8 +187,8 @@ matching action fires: `pluginAddUser`, `pluginAddGroup`,
 `pluginGroupRemoveUser`, `pluginGroupGIDchange`, `pluginUserSetPass`,
 `pluginUserGECOSchange`, `pluginUserShellChange`,
 `pluginUserUIDchange`, `pluginUserGIDchange`. See
-`perldoc App::Nisaba` for the plugin interface and
-`App::Nisaba::Plugins::Dump` for a worked example.
+[App::Nisaba](https://metacpan.org/pod/App::Nisaba) for the plugin interface and
+[App::Nisaba::Plugins::Dump](https://metacpan.org/pod/App::Nisaba::Plugins::Dump) for a worked example.
 
 ## Environment variables
 

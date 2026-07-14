@@ -93,7 +93,7 @@ rotated from the admin UI, up to two old public keys stay published at
 Lifetimes are config: `ssoCodeLifetime` (600), `ssoTokenLifetime`
 (3600), `ssoIdTokenLifetime` (falls back to the access token lifetime),
 `ssoRefreshTokenLifetime` (30 days). See
-[configuration.md](configuration.md).
+[configuration](configuration.md).
 
 ## Running it
 
@@ -106,7 +106,7 @@ NISABA_LISTEN=http://127.0.0.1:8082 hypnotoad /usr/local/bin/mojo_nisaba_sso
 ```
 
 Same rules as the other apps: `websecret`/`NISABA_SECRET` required,
-boot scripts (which run Hypnotoad) in [install.md](install.md) (shipped
+boot scripts (which run Hypnotoad) in [install](install.md) (shipped
 port 8082). Two things matter more here than elsewhere...
 
 - **set `ssoIssuer`** to the public HTTPS base URL
@@ -202,4 +202,4 @@ the token endpoint; Origin/CSRF checks on the human-facing pages while
 the server-to-server endpoints correctly stand open; rate limits on
 every place a secret can be guessed; and the grant store at mode 0600
 because it holds the hashes of live bearer tokens. The wider trust
-model lives in [security.md](security.md).
+model lives in [security](security.md).

@@ -13,7 +13,7 @@ NISABA_LISTEN=http://127.0.0.1:8081 hypnotoad /usr/local/bin/mojo_nisaba_selfser
 
 Like the other web apps it refuses to start without `websecret` (or
 `NISABA_SECRET`), and the shipped boot scripts (which run Hypnotoad)
-listen on port 8081 — see [install.md](install.md).
+listen on port 8081 — see [install](install.md).
 
 ## Logging in
 
@@ -28,7 +28,7 @@ account only finds the DN; it never judges the password itself. Then...
 
 Every path is rate limited — per user and per IP for passwords and
 TOTP, per IP for passkeys — with the limits and lockouts from
-[configuration.md](configuration.md). Blocked attempts get HTTP 429
+[configuration](configuration.md). Blocked attempts get HTTP 429
 with a `Retry-After`.
 
 ## Forgot password

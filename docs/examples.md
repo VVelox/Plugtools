@@ -59,7 +59,7 @@ NISABA_LISTEN=http://127.0.0.1:8081 hypnotoad /usr/local/bin/mojo_nisaba_selfser
 
 `hypnotoad` (Mojolicious' preforking server) backgrounds itself; re-run
 the same line after an upgrade for a zero-downtime restart. Then put a
-TLS-terminating proxy in front (see [install.md](install.md) for doing
+TLS-terminating proxy in front (see [install](install.md) for doing
 this properly at boot). For a quick plain-HTTP look during development,
 set `cookieSecure=0` and run `mojo_nisaba daemon -l http://127.0.0.1:8080`
 in the foreground instead.
@@ -121,7 +121,7 @@ ssoIssuer=https://sso.example.com
 TLS at `sso.example.com`, register a client in the admin UI (redirect
 URI `https://app.example.com/redirect_uri`, scopes
 `openid profile email`), and configure Apache mod_auth_openidc per the
-walkthrough in [Sukkal.md](Sukkal.md#walkthrough-apache-mod_auth_openidc).
+walkthrough in [Sukkal](Sukkal.md#walkthrough-apache-mod_auth_openidc).
 
 Verify from the outside...
 
@@ -158,4 +158,4 @@ pluginDeleteUser=Your::Plugin::That::Archives::Mail
 Every matching action now calls the module's `plugin` method with the
 action's options and arguments — `App::Nisaba::Plugins::Dump` just
 prints what it gets and is the template to copy. See
-`perldoc App::Nisaba` for the interface.
+[App::Nisaba](https://metacpan.org/pod/App::Nisaba) for the interface.

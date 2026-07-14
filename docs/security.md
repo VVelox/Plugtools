@@ -57,7 +57,7 @@ self-service reset tokens — same blast radius.
 
 The SSO provider's own long list — mandatory S256 PKCE, exact redirect
 URIs, single-use codes, rotated refresh tokens, hashed grants, no
-`alg=none` — lives in [Sukkal.md](Sukkal.md#what-it-refuses).
+`alg=none` — lives in [Sukkal](Sukkal.md#what-it-refuses).
 
 ## Reset mail
 

@@ -82,5 +82,5 @@ None of the Nisaba schemas depend on each other; load whichever
 features you want. All of them assume the core and inetOrgPerson
 schemas the directory server ships with. After loading, no
 configuration is needed on the Nisaba side beyond the feature switches
-in [configuration.md](configuration.md) — the module probes the
+in [configuration](configuration.md) — the module probes the
 directory for what is available.
