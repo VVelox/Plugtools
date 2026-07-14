@@ -72,8 +72,9 @@ plaintext SMTP unless `smtptls` says otherwise — say otherwise.
 
 - **client IPs** — the rate limiter keys on the connection's remote
   address. If everything arrives from the proxy's IP, per-IP backstops
-  throttle the proxy, i.e. everyone. Make sure the app sees real client
-  addresses.
+  throttle the proxy, i.e. everyone. Set `NISABA_HYPNOTOAD_PROXY=1` (or
+  `hypnotoadProxy=1`) so the app trusts `X-Forwarded-For` and sees real
+  client addresses.
 - **`passkeyRpId`** — WebAuthn credentials are scoped to the RP ID,
   derived from the `Host` header unless pinned. Pin it.
 - **`ssoIssuer`** — the SSO derives nothing correctly from `Host`

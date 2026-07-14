@@ -11,28 +11,50 @@ Type=simple
 User=nisaba
 Group=nisaba
 
-# Built-in defaults; override them in the optional environment file below.
-Environment=LISTEN=http://*:8081
+# Served by Hypnotoad (Mojolicious' production preforking server). Hypnotoad
+# reads its listen URL and all tuning from these NISABA_* variables (see the app
+# and rc/README.md); "-f" keeps the manager in the foreground so systemd
+# supervises it directly.
+Environment=NISABA_LISTEN=http://*:8081
 # To terminate TLS in the app itself (instead of a reverse proxy), use an https
-# listen URL with cert/key query parameters (requires IO::Socket::SSL). The
-# cert and key must live on a readable system path (not under a home directory,
-# which ProtectHome= hides) and be readable by the service user. systemd treats
-# ${LISTEN} as a single argument, so the "&" needs no escaping here:
-# Environment=LISTEN=https://*:8443?cert=/usr/local/etc/nisaba/tls/server.crt&key=/usr/local/etc/nisaba/tls/server.key
+# listen URL with cert/key query parameters (requires IO::Socket::SSL). The cert
+# and key must live on a readable system path (not under a home directory, which
+# ProtectHome= hides) and be readable by the service user. systemd treats the
+# whole value as one argument, so the "&" needs no escaping here:
+# Environment=NISABA_LISTEN=https://*:8443?cert=/usr/local/etc/nisaba/tls/server.crt&key=/usr/local/etc/nisaba/tls/server.key
 Environment=NISABA_CONFIG=/usr/local/etc/nisabarc
+# Hypnotoad's pid file must be writable; keep it in the RuntimeDirectory below.
+Environment=NISABA_HYPNOTOAD_PID_FILE=/run/mojo_nisaba_selfservice/hypnotoad.pid
+
+# Hypnotoad tuning (uncomment to override Hypnotoad's own defaults):
+# Environment=NISABA_HYPNOTOAD_WORKERS=4
+# Environment=NISABA_HYPNOTOAD_CLIENTS=1000
+# Environment=NISABA_HYPNOTOAD_ACCEPTS=0
+# Environment=NISABA_HYPNOTOAD_SPARE=2
+# Environment=NISABA_HYPNOTOAD_GRACEFUL_TIMEOUT=120
+# Environment=NISABA_HYPNOTOAD_HEARTBEAT_TIMEOUT=50
+# Environment=NISABA_HYPNOTOAD_INACTIVITY_TIMEOUT=15
 # When running behind a trusted, TLS-terminating reverse proxy, uncomment so
 # Mojolicious honors X-Forwarded-* and generates correct absolute URLs. Do NOT
 # enable if the app is reachable by clients directly.
-# Environment=MOJO_REVERSE_PROXY=1
+# Environment=NISABA_HYPNOTOAD_PROXY=1
 
-# Optional overrides: LISTEN, NISABA_CONFIG, NISABA_SECRET, MOJO_REVERSE_PROXY.
+# Optional overrides for any of the variables above.
 # Password-reset email (SMTP) is configured via the nisabarc file, not here.
 EnvironmentFile=-/usr/local/etc/nisaba/mojo_nisaba_selfservice.env
 
-ExecStart=/usr/local/bin/mojo_nisaba_selfservice prefork -l ${LISTEN}
+# Adjust the hypnotoad path if your Perl is not installed under /usr/local.
+ExecStart=/usr/local/bin/hypnotoad -f /usr/local/bin/mojo_nisaba_selfservice
+# "systemctl reload" performs a zero-downtime hot restart (e.g. after an upgrade):
+# re-running hypnotoad upgrades the running manager in place via the pid file.
+ExecReload=/usr/local/bin/hypnotoad /usr/local/bin/mojo_nisaba_selfservice
 
 Restart=on-failure
 RestartSec=5
+
+# /run/mojo_nisaba_selfservice holds Hypnotoad's pid file (owned by the service user).
+RuntimeDirectory=mojo_nisaba_selfservice
+RuntimeDirectoryMode=0750
 
 # --- Hardening ------------------------------------------------------------
 # The only local state is the brute-force rate-limiter SQLite database under

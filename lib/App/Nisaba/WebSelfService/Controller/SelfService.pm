@@ -737,6 +737,7 @@ sub _verify_reset_token {
 
 	my ( $user, $expiry, $sig ) = split /\0/, $raw, 3;
 	return undef unless defined($user) && defined($expiry) && defined($sig);
+	return undef unless $expiry =~ /\A[0-9]+\z/;                               # a valid token's expiry is an integer timestamp
 	return undef if time() > $expiry;
 
 	my $secret   = $c->app->secrets->[0];

@@ -7,13 +7,13 @@ and sees only their own entry: password, SSH keys, TOTP, passkeys.
 # development
 mojo_nisaba_selfservice daemon -l http://127.0.0.1:8081
 
-# production
-mojo_nisaba_selfservice prefork -l http://127.0.0.1:8081
+# production — Hypnotoad (hot restarts, tunable; see configuration.md)
+NISABA_LISTEN=http://127.0.0.1:8081 hypnotoad /usr/local/bin/mojo_nisaba_selfservice
 ```
 
 Like the other web apps it refuses to start without `websecret` (or
-`NISABA_SECRET`), and the shipped boot scripts listen on port 8081 —
-see [install.md](install.md).
+`NISABA_SECRET`), and the shipped boot scripts (which run Hypnotoad)
+listen on port 8081 — see [install.md](install.md).
 
 ## Logging in
 

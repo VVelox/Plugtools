@@ -80,7 +80,7 @@ Codes, access tokens, and refresh tokens are held server-side in a
 shared store — SQLite by default at `/var/db/nisaba/websso.sqlite`,
 mode 0600 under a 0700 directory — hashed with SHA-256, never in the
 clear and never in the browser session. The shared store is what lets
-prefork workers agree, makes codes and refresh tokens atomically
+the worker processes agree, makes codes and refresh tokens atomically
 single-use, and keeps grants alive across restarts. Expired grants are
 swept opportunistically every `ssoStorageCleanupInterval` seconds.
 
@@ -101,13 +101,13 @@ Lifetimes are config: `ssoCodeLifetime` (600), `ssoTokenLifetime`
 # development
 mojo_nisaba_sso daemon -l http://127.0.0.1:8082
 
-# production
-mojo_nisaba_sso prefork -l http://127.0.0.1:8082
+# production — Hypnotoad (hot restarts, tunable; see configuration.md)
+NISABA_LISTEN=http://127.0.0.1:8082 hypnotoad /usr/local/bin/mojo_nisaba_sso
 ```
 
 Same rules as the other apps: `websecret`/`NISABA_SECRET` required,
-boot scripts in [install.md](install.md) (shipped port 8082). Two
-things matter more here than elsewhere...
+boot scripts (which run Hypnotoad) in [install.md](install.md) (shipped
+port 8082). Two things matter more here than elsewhere...
 
 - **set `ssoIssuer`** to the public HTTPS base URL
   (`https://sso.example.com`, no path, no trailing slash). Everything

@@ -4,21 +4,34 @@
 # REQUIRE: LOGIN NETWORKING
 # KEYWORD: shutdown
 #
-# App::Nisaba OpenID Connect SSO provider.
+# App::Nisaba OpenID Connect SSO provider, served by Hypnotoad (Mojolicious'
+# production preforking server, with zero-downtime hot restarts).
 #
 # Add the following to /etc/rc.conf (or /etc/rc.conf.d/mojo_nisaba_sso) to
 # enable and configure this service:
 #
 #   mojo_nisaba_sso_enable="YES"
 #   #mojo_nisaba_sso_user="www"                       # service user
-#   #mojo_nisaba_sso_listen="http://*:8082"           # Mojolicious listen URL
+#   #mojo_nisaba_sso_listen="http://*:8082"           # listen URL (NISABA_LISTEN)
 #   # ...or serve HTTPS directly (requires IO::Socket::SSL; cert+key readable
 #   # by the service user). Quote the whole value because of the "&":
 #   #mojo_nisaba_sso_listen="https://*:8443?cert=/usr/local/etc/nisaba/tls/server.crt&key=/usr/local/etc/nisaba/tls/server.key"
 #   #mojo_nisaba_sso_config="/usr/local/etc/nisabarc" # NISABA_CONFIG
 #   #mojo_nisaba_sso_secret=""                         # NISABA_SECRET (or set websecret in nisabarc)
-#   #mojo_nisaba_sso_command="prefork"                # Mojolicious server command
+#   #mojo_nisaba_sso_hypnotoad="/usr/local/bin/hypnotoad"
 #
+# Hypnotoad tuning (leave empty to use Hypnotoad's own defaults):
+#   #mojo_nisaba_sso_workers="4"             # worker processes
+#   #mojo_nisaba_sso_clients="1000"          # max concurrent connections per worker
+#   #mojo_nisaba_sso_accepts="0"             # connections a worker accepts before stopping (0 = unlimited)
+#   #mojo_nisaba_sso_spare="2"               # spare workers kept warm during a hot restart
+#   #mojo_nisaba_sso_graceful_timeout="120"  # seconds to let a worker finish before killing it
+#   #mojo_nisaba_sso_heartbeat_timeout="50"  # seconds before an unresponsive worker is restarted
+#   #mojo_nisaba_sso_inactivity_timeout="15" # keep-alive connection idle timeout, seconds
+#   #mojo_nisaba_sso_proxy="1"               # trust reverse-proxy X-Forwarded-* headers
+#
+# "service mojo_nisaba_sso reload" performs a zero-downtime hot restart (e.g.
+# after an upgrade), keeping the listening sockets open across the swap.
 
 . /etc/rc.subr
 
@@ -34,29 +47,61 @@ load_rc_config $name
 : ${mojo_nisaba_sso_listen:="http://*:8082"}
 : ${mojo_nisaba_sso_config:="/usr/local/etc/nisabarc"}
 : ${mojo_nisaba_sso_secret:=""}
-: ${mojo_nisaba_sso_command:="prefork"}
+: ${mojo_nisaba_sso_hypnotoad:="/usr/local/bin/hypnotoad"}
+: ${mojo_nisaba_sso_workers:=""}
+: ${mojo_nisaba_sso_clients:=""}
+: ${mojo_nisaba_sso_accepts:=""}
+: ${mojo_nisaba_sso_spare:=""}
+: ${mojo_nisaba_sso_graceful_timeout:=""}
+: ${mojo_nisaba_sso_heartbeat_timeout:=""}
+: ${mojo_nisaba_sso_inactivity_timeout:=""}
+: ${mojo_nisaba_sso_proxy:=""}
 
 # Writable state directory for the SQLite grant store (ssoStoragePath).
 mojo_nisaba_sso_dbdir="/var/db/nisaba"
+rundir="/var/run/${name}"
 
-# daemon(8) supervises and restarts the foreground Mojolicious server and
-# records its pid; rc.subr runs it as ${mojo_nisaba_sso_user}.
 program="/usr/local/bin/${name}"
-pidfile="/var/run/${name}/${name}.pid"
+pidfile="${rundir}/${name}.pid"
+# Hypnotoad's own pid file (used for hot-restart coordination); must be writable
+# by the service user, so it lives under the run directory rather than next to
+# the application script (Hypnotoad's default).
+hypnotoad_pidfile="${rundir}/hypnotoad.pid"
+
+# daemon(8) supervises and restarts Hypnotoad. Hypnotoad reads its listen URL
+# and all tuning from the environment (exported in the precmd below), so no
+# per-URL argument quoting is needed here; "-f" keeps the Hypnotoad manager in
+# the foreground so daemon(8) can supervise it.
 command="/usr/sbin/daemon"
 procname="/usr/sbin/daemon"
-# The listen URL is double-quoted so an HTTPS value such as
-# https://*:8443?cert=...&key=... (note the "&") survives rc.subr's eval as a
-# single argument instead of being split at the ampersand.
-command_args="-S -t ${name} -R 5 -P ${pidfile} ${program} ${mojo_nisaba_sso_command} -l \"${mojo_nisaba_sso_listen}\""
+command_args="-S -t ${name} -R 5 -P ${pidfile} ${mojo_nisaba_sso_hypnotoad} -f ${program}"
 
 start_precmd="${name}_precmd"
+extra_commands="reload"
+reload_cmd="${name}_reload"
+
+mojo_nisaba_sso_setenv()
+{
+	[ -n "${mojo_nisaba_sso_config}" ] && export NISABA_CONFIG="${mojo_nisaba_sso_config}"
+	[ -n "${mojo_nisaba_sso_secret}" ] && export NISABA_SECRET="${mojo_nisaba_sso_secret}"
+	export NISABA_LISTEN="${mojo_nisaba_sso_listen}"
+	export NISABA_HYPNOTOAD_PID_FILE="${hypnotoad_pidfile}"
+	[ -n "${mojo_nisaba_sso_workers}" ]            && export NISABA_HYPNOTOAD_WORKERS="${mojo_nisaba_sso_workers}"
+	[ -n "${mojo_nisaba_sso_clients}" ]            && export NISABA_HYPNOTOAD_CLIENTS="${mojo_nisaba_sso_clients}"
+	[ -n "${mojo_nisaba_sso_accepts}" ]            && export NISABA_HYPNOTOAD_ACCEPTS="${mojo_nisaba_sso_accepts}"
+	[ -n "${mojo_nisaba_sso_spare}" ]              && export NISABA_HYPNOTOAD_SPARE="${mojo_nisaba_sso_spare}"
+	[ -n "${mojo_nisaba_sso_graceful_timeout}" ]   && export NISABA_HYPNOTOAD_GRACEFUL_TIMEOUT="${mojo_nisaba_sso_graceful_timeout}"
+	[ -n "${mojo_nisaba_sso_heartbeat_timeout}" ]  && export NISABA_HYPNOTOAD_HEARTBEAT_TIMEOUT="${mojo_nisaba_sso_heartbeat_timeout}"
+	[ -n "${mojo_nisaba_sso_inactivity_timeout}" ] && export NISABA_HYPNOTOAD_INACTIVITY_TIMEOUT="${mojo_nisaba_sso_inactivity_timeout}"
+	[ -n "${mojo_nisaba_sso_proxy}" ]              && export NISABA_HYPNOTOAD_PROXY="${mojo_nisaba_sso_proxy}"
+	return 0
+}
 
 mojo_nisaba_sso_precmd()
 {
-	# Run directory for the pidfile, writable by the service user.
+	# Run directory for the pid files, writable by the service user.
 	install -d -o "${mojo_nisaba_sso_user}" -g "${mojo_nisaba_sso_group}" -m 0755 \
-		"/var/run/${name}"
+		"${rundir}"
 
 	# Writable state directory for the SQLite grant store.
 	install -d -o "${mojo_nisaba_sso_user}" -g "${mojo_nisaba_sso_group}" -m 0700 \
@@ -64,9 +109,17 @@ mojo_nisaba_sso_precmd()
 
 	# Pass configuration to the application via the environment (preserved
 	# through rc.subr's "su -m").
-	[ -n "${mojo_nisaba_sso_config}" ] && export NISABA_CONFIG="${mojo_nisaba_sso_config}"
-	[ -n "${mojo_nisaba_sso_secret}" ] && export NISABA_SECRET="${mojo_nisaba_sso_secret}"
+	mojo_nisaba_sso_setenv
 	return 0
+}
+
+# Zero-downtime hot restart: re-running Hypnotoad against the same application
+# upgrades the running manager in place (it locates it via the pid file). "su -m"
+# preserves the environment exported above.
+mojo_nisaba_sso_reload()
+{
+	mojo_nisaba_sso_setenv
+	su -m "${mojo_nisaba_sso_user}" -c "${mojo_nisaba_sso_hypnotoad} ${program}"
 }
 
 run_rc_command "$1"

@@ -159,6 +159,77 @@ sub install_rate_limiter {
 	return 1;
 } ## end sub install_rate_limiter
 
+# Populate the Mojolicious "hypnotoad" config section from nisabarc keys and/or
+# NISABA_HYPNOTOAD_* environment variables, so the production Hypnotoad server
+# (see rc/) can be tuned without a separate Mojolicious config file. Called from
+# each web app's startup; a no-op (hypnotoad uses its own defaults) when nothing
+# is set. Must run during startup, before hypnotoad reads config('hypnotoad').
+#
+# Config key / env var / hypnotoad setting (all optional):
+#   hypnotoadListen           NISABA_LISTEN                        listen (space-separated URLs)
+#   hypnotoadWorkers          NISABA_HYPNOTOAD_WORKERS             workers
+#   hypnotoadClients          NISABA_HYPNOTOAD_CLIENTS             clients
+#   hypnotoadAccepts          NISABA_HYPNOTOAD_ACCEPTS             accepts
+#   hypnotoadSpare            NISABA_HYPNOTOAD_SPARE               spare
+#   hypnotoadBacklog          NISABA_HYPNOTOAD_BACKLOG             backlog
+#   hypnotoadRequests         NISABA_HYPNOTOAD_REQUESTS            requests
+#   hypnotoadGracefulTimeout  NISABA_HYPNOTOAD_GRACEFUL_TIMEOUT    graceful_timeout
+#   hypnotoadHeartbeatInterval NISABA_HYPNOTOAD_HEARTBEAT_INTERVAL heartbeat_interval
+#   hypnotoadHeartbeatTimeout NISABA_HYPNOTOAD_HEARTBEAT_TIMEOUT   heartbeat_timeout
+#   hypnotoadInactivityTimeout NISABA_HYPNOTOAD_INACTIVITY_TIMEOUT inactivity_timeout
+#   hypnotoadKeepAliveTimeout NISABA_HYPNOTOAD_KEEP_ALIVE_TIMEOUT  keep_alive_timeout
+#   hypnotoadUpgradeTimeout   NISABA_HYPNOTOAD_UPGRADE_TIMEOUT     upgrade_timeout
+#   hypnotoadPidFile          NISABA_HYPNOTOAD_PID_FILE            pid_file
+#   hypnotoadProxy            NISABA_HYPNOTOAD_PROXY               proxy (reverse-proxy header handling)
+sub install_hypnotoad_config {
+	my ($app) = @_;
+	my $ini = ( eval { $app->pt->{ini}->{''} } ) || {};
+
+	my %h = %{ $app->config('hypnotoad') || {} };
+
+	# nisabarc key, env var, hypnotoad setting — coerced to a number.
+	my @numeric = (
+		[ 'hypnotoadWorkers',           'NISABA_HYPNOTOAD_WORKERS',            'workers' ],
+		[ 'hypnotoadClients',           'NISABA_HYPNOTOAD_CLIENTS',            'clients' ],
+		[ 'hypnotoadAccepts',           'NISABA_HYPNOTOAD_ACCEPTS',            'accepts' ],
+		[ 'hypnotoadSpare',             'NISABA_HYPNOTOAD_SPARE',              'spare' ],
+		[ 'hypnotoadBacklog',           'NISABA_HYPNOTOAD_BACKLOG',            'backlog' ],
+		[ 'hypnotoadRequests',          'NISABA_HYPNOTOAD_REQUESTS',           'requests' ],
+		[ 'hypnotoadGracefulTimeout',   'NISABA_HYPNOTOAD_GRACEFUL_TIMEOUT',   'graceful_timeout' ],
+		[ 'hypnotoadHeartbeatInterval', 'NISABA_HYPNOTOAD_HEARTBEAT_INTERVAL', 'heartbeat_interval' ],
+		[ 'hypnotoadHeartbeatTimeout',  'NISABA_HYPNOTOAD_HEARTBEAT_TIMEOUT',  'heartbeat_timeout' ],
+		[ 'hypnotoadInactivityTimeout', 'NISABA_HYPNOTOAD_INACTIVITY_TIMEOUT', 'inactivity_timeout' ],
+		[ 'hypnotoadKeepAliveTimeout',  'NISABA_HYPNOTOAD_KEEP_ALIVE_TIMEOUT', 'keep_alive_timeout' ],
+		[ 'hypnotoadUpgradeTimeout',    'NISABA_HYPNOTOAD_UPGRADE_TIMEOUT',    'upgrade_timeout' ],
+	);
+	for my $m (@numeric) {
+		my ( $ckey, $env, $hkey ) = @{$m};
+		my $v = $ini->{$ckey} // $ENV{$env};
+		next unless defined $v && $v ne '';
+		$h{$hkey} = $v + 0;
+	}
+
+	# One or more whitespace-separated listen URLs. A single TLS URL such as
+	# https://*:8443?cert=...&key=... contains no whitespace, so it survives.
+	my $listen = $ini->{hypnotoadListen} // $ENV{NISABA_LISTEN};
+	if ( defined $listen && $listen ne '' ) {
+		$h{listen} = [ grep { length } split ' ', $listen ];
+	}
+
+	# Hypnotoad's default pid_file sits next to the application script, which is
+	# not writable under a hardened service; honour an explicit path.
+	my $pid = $ini->{hypnotoadPidFile} // $ENV{NISABA_HYPNOTOAD_PID_FILE};
+	$h{pid_file} = $pid if defined $pid && $pid ne '';
+
+	# Trust reverse-proxy headers (X-Forwarded-*). MOJO_REVERSE_PROXY is honoured
+	# as a fallback for parity with the rest of the stack.
+	my $proxy = $ini->{hypnotoadProxy} // $ENV{NISABA_HYPNOTOAD_PROXY} // $ENV{MOJO_REVERSE_PROXY};
+	$h{proxy} = 1 if defined $proxy && $proxy ne '' && $proxy ne '0';
+
+	$app->config( hypnotoad => \%h ) if %h;
+	return 1;
+} ## end sub install_hypnotoad_config
+
 sub _policies_from_config {
 	my ($ini) = @_;
 	my %pol;

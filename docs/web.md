@@ -7,17 +7,20 @@ Mojolicious app, so all the usual server commands work...
 # development
 mojo_nisaba daemon -l http://127.0.0.1:8080
 
-# production
-mojo_nisaba prefork -l http://127.0.0.1:8080
+# development, with an explicit config
+mojo_nisaba daemon --pt-config /usr/local/etc/nisabarc -l http://127.0.0.1:8080
 
-# with an explicit config
-mojo_nisaba prefork --pt-config /usr/local/etc/nisabarc -l http://127.0.0.1:8080
+# production — Hypnotoad, Mojolicious' preforking server (hot restarts, tunable)
+NISABA_LISTEN=http://127.0.0.1:8080 hypnotoad /usr/local/bin/mojo_nisaba
 ```
 
-It refuses to start without a session secret — `websecret` in the
-config or `NISABA_SECRET` in the environment. rc scripts and systemd
-units for boot are covered in [install.md](install.md); the shipped
-ones listen on port 8080.
+Under Hypnotoad the listen URL and worker tuning come from the
+environment or the config (`NISABA_LISTEN`, the `hypnotoad*` keys — see
+[configuration.md](configuration.md)), not command-line flags. It
+refuses to start without a session secret — `websecret` in the config
+or `NISABA_SECRET` in the environment. rc scripts and systemd units for
+boot (which run Hypnotoad for you) are covered in
+[install.md](install.md); the shipped ones listen on port 8080.
 
 ## Who may enter
 

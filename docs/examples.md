@@ -53,14 +53,16 @@ chmod 600 /usr/local/etc/nisabarc
 
 mkdir -p /var/db/nisaba && chmod 700 /var/db/nisaba
 
-mojo_nisaba             prefork -l http://127.0.0.1:8080 &
-mojo_nisaba_selfservice prefork -l http://127.0.0.1:8081 &
+NISABA_LISTEN=http://127.0.0.1:8080 hypnotoad /usr/local/bin/mojo_nisaba
+NISABA_LISTEN=http://127.0.0.1:8081 hypnotoad /usr/local/bin/mojo_nisaba_selfservice
 ```
 
-...then put a TLS-terminating proxy in front (see
-[install.md](install.md) for doing this properly at boot). For a quick
-plain-HTTP look during development, `cookieSecure=0` and `daemon`
-instead of `prefork`.
+`hypnotoad` (Mojolicious' preforking server) backgrounds itself; re-run
+the same line after an upgrade for a zero-downtime restart. Then put a
+TLS-terminating proxy in front (see [install.md](install.md) for doing
+this properly at boot). For a quick plain-HTTP look during development,
+set `cookieSecure=0` and run `mojo_nisaba daemon -l http://127.0.0.1:8080`
+in the foreground instead.
 
 ## Users who carry SSH keys
 

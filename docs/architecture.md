@@ -98,8 +98,8 @@ They differ in who they serve...
   Connect provider doing authorization code flow with PKCE, refresh
   token rotation, revocation, introspection, and RP-initiated logout.
   Grants live hashed in a shared store (SQLite by default,
-  `/var/db/nisaba/websso.sqlite`) so prefork workers agree and restarts
-  do not log the world out. See [Sukkal.md](Sukkal.md).
+  `/var/db/nisaba/websso.sqlite`) so the worker processes agree and
+  restarts do not log the world out. See [Sukkal.md](Sukkal.md).
 
 The admin UI writes the tablets, the self-service portal lets each name
 tend its own line, and the sukkal reads them aloud at the gate — none

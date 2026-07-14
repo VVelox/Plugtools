@@ -103,6 +103,33 @@ Leaving `smtpserver` empty disables the whole forgot/reset flow.
 | `cookieSecure` | `1`     | mark the session cookie Secure (HTTPS only)                      |
 | `adminGroup`   | `LDAPadmin` | group whose members may use the admin UI                     |
 
+## Serving with Hypnotoad
+
+In production each app is served by [Hypnotoad](https://docs.mojolicious.org/Mojo/Server/Hypnotoad),
+Mojolicious' preforking server (the shipped [boot scripts](install.md) use it,
+with zero-downtime hot restarts). Its settings are read from these keys — leave
+any unset to use Hypnotoad's own default. Each also has a
+`NISABA_HYPNOTOAD_<NAME>` environment equivalent (and `NISABA_LISTEN` for the
+listen URL), which the boot scripts use; see [rc/README.md](../rc/README.md).
+
+| key                          | Hypnotoad setting    | what                                                       |
+|------------------------------|----------------------|-------------------------------------------------------------|
+| `hypnotoadListen`            | `listen`             | listen URL(s), space-separated (or set `NISABA_LISTEN`)     |
+| `hypnotoadWorkers`           | `workers`            | worker processes                                            |
+| `hypnotoadClients`           | `clients`            | max concurrent connections per worker                      |
+| `hypnotoadAccepts`           | `accepts`            | connections a worker accepts before stopping (`0` = ∞)     |
+| `hypnotoadSpare`             | `spare`              | spare workers kept warm during a hot restart               |
+| `hypnotoadBacklog`           | `backlog`            | listen(2) backlog size                                     |
+| `hypnotoadRequests`          | `requests`           | max keep-alive requests per connection                     |
+| `hypnotoadGracefulTimeout`   | `graceful_timeout`   | seconds a worker may finish before it is killed            |
+| `hypnotoadHeartbeatInterval` | `heartbeat_interval` | seconds between worker heartbeats                          |
+| `hypnotoadHeartbeatTimeout`  | `heartbeat_timeout`  | seconds before an unresponsive worker is restarted         |
+| `hypnotoadInactivityTimeout` | `inactivity_timeout` | keep-alive connection idle timeout, seconds                |
+| `hypnotoadKeepAliveTimeout`  | `keep_alive_timeout` | keep-alive request idle timeout, seconds                   |
+| `hypnotoadUpgradeTimeout`    | `upgrade_timeout`    | seconds to wait for a hot restart to finish                |
+| `hypnotoadProxy`             | `proxy`              | trust reverse-proxy `X-Forwarded-*` headers                |
+| `hypnotoadPidFile`           | `pid_file`           | pid-file path (the boot scripts set a writable one)        |
+
 ## Rate limiting
 
 All web apps share one SQLite-backed limiter.
@@ -175,6 +202,8 @@ config...
 | `NISABA_COOKIE_SECURE`  | override `cookieSecure`                    |
 | `NISABA_RATELIMIT`      | override `rateLimit`                       |
 | `NISABA_RATELIMIT_PATH` | override `rateLimitPath`                   |
+| `NISABA_LISTEN`         | Hypnotoad listen URL(s) (`hypnotoadListen`) |
+| `NISABA_HYPNOTOAD_*`    | override any Hypnotoad setting, e.g. `NISABA_HYPNOTOAD_WORKERS` (see [Serving with Hypnotoad](#serving-with-hypnotoad)) |
 | `NISABA_REQUIRE_PKCE`   | override `ssoRequirePkce`                  |
 
 ## A complete example

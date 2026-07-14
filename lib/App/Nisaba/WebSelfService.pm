@@ -112,6 +112,9 @@ sub startup ($self) {
 	# Brute-force rate limiting for the auth endpoints.
 	App::Nisaba::WebUtil::install_rate_limiter($self);
 
+	# Production Hypnotoad tuning from nisabarc / NISABA_HYPNOTOAD_* (see rc/).
+	App::Nisaba::WebUtil::install_hypnotoad_config($self);
+
 	# Routes
 	my $r = $self->routes;
 

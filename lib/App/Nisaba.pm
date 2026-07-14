@@ -277,9 +277,20 @@ sub _getLDAPUserEntry {
 		base   => $self->{ini}->{''}->{userbase},
 		filter => '(uid=' . escape_filter_value($user) . ')',
 	);
-	return undef if $mesg->{errorMessage} ne '';
+
+	# A real search failure (server error, missing base, or a filter the
+	# directory rejects) must not be silently returned as undef and then
+	# misreported by callers as "user does not exist". Check the LDAP result
+	# code, not the diagnostic message — a failure such as noSuchObject (32)
+	# carries a non-zero code but often an empty message — so getUserEntry can
+	# tell a genuine error apart from a clean miss (a 0-result search is code 0).
+	if ( $mesg->code ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Searching for the user "' . $user . '" failed: ' . $mesg->error;
+		return undef;
+	}
 	return $mesg->pop_entry;
-}
+} ## end sub _getLDAPUserEntry
 
 # Wrappers around POSIX NSS lookups that honour the NSScheck config setting.
 # When NSScheck is false these are no-ops that return all-undef, preventing
@@ -580,6 +591,10 @@ sub addUser {
 		$self->warn;
 		return undef;
 	}
+
+	# The collision check is advisory; clear any search error it recorded so it
+	# does not leak into the add below.
+	$self->errorblank;
 
 	#make sure we have gecos
 	if ( !defined( $args{gecos} ) ) {
@@ -1132,8 +1147,13 @@ sub getUserEntry {
 
 	my $entry = $self->_getLDAPUserEntry( $ldap, $args{user} );
 	if ( !defined($entry) ) {
-		$self->{error}       = 17;
-		$self->{errorString} = 'The user "' . $args{user} . '" does not exists';
+		# _getLDAPUserEntry sets an error (32) on a genuine search failure; only
+		# fall back to "does not exist" (17) when the miss was clean, so a real
+		# LDAP/filter error is not masked as a plain not-found.
+		if ( !$self->{error} ) {
+			$self->{error}       = 17;
+			$self->{errorString} = 'The user "' . $args{user} . '" does not exists';
+		}
 		$self->warn;
 		return undef;
 	}
@@ -1658,6 +1678,10 @@ sub groupClean {
 
 				$int++;
 			} ## end while ( defined( $members[$int] ) )
+
+			# The per-member existence checks are cleanup lookups; clear any
+			# search error they recorded so it does not leak past this loop.
+			$self->errorblank;
 
 			#if it changed, update it
 			if ($changed) {

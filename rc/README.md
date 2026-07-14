@@ -14,11 +14,48 @@ rc/
 └── freebsd/   # FreeBSD rc.d scripts
 ```
 
-All three run the Mojolicious `prefork` server in the foreground and log to the
-platform's journal/syslog. Configuration is taken from the `nisabarc` file
-pointed to by `NISABA_CONFIG` (LDAP connection, `websecret`, `oidcbase`, the
-`sso*` keys, etc.); the listen address and a couple of environment variables are
-set per-service as shown below.
+All three are served by **Hypnotoad**, Mojolicious' production preforking web
+server (it ships with Mojolicious; on most systems it is `/usr/local/bin/hypnotoad`
+or `/usr/bin/hypnotoad`). Hypnotoad is supervised in the foreground and logs to
+the platform's journal/syslog, and supports **zero-downtime hot restarts** — on
+systemd `systemctl reload <service>`, on FreeBSD `service <name> reload` —
+which reload the application (e.g. after an upgrade) without dropping
+connections. Configuration is taken from the `nisabarc` file pointed to by
+`NISABA_CONFIG` (LDAP connection, `websecret`, `oidcbase`, the `sso*` keys,
+etc.); the listen address and Hypnotoad tuning are set per-service as shown
+below.
+
+### Hypnotoad tuning
+
+Each service exposes Hypnotoad's settings. Leave a knob unset to use Hypnotoad's
+own default. They can be set two ways, and may be mixed:
+
+- **In `nisabarc`** with a `hypnotoad<Name>` key (applies to whichever services
+  read that file), or
+- **In the environment** with a `NISABA_HYPNOTOAD_<NAME>` variable (set per
+  service in the systemd unit / rc.conf — see below).
+
+| nisabarc key | env var | Hypnotoad setting | What it does |
+|---|---|---|---|
+| `hypnotoadWorkers` | `NISABA_HYPNOTOAD_WORKERS` | `workers` | number of worker processes |
+| `hypnotoadClients` | `NISABA_HYPNOTOAD_CLIENTS` | `clients` | max concurrent connections per worker |
+| `hypnotoadAccepts` | `NISABA_HYPNOTOAD_ACCEPTS` | `accepts` | connections a worker accepts before stopping (0 = unlimited) |
+| `hypnotoadSpare` | `NISABA_HYPNOTOAD_SPARE` | `spare` | spare workers kept warm during a hot restart |
+| `hypnotoadBacklog` | `NISABA_HYPNOTOAD_BACKLOG` | `backlog` | listen(2) backlog size |
+| `hypnotoadRequests` | `NISABA_HYPNOTOAD_REQUESTS` | `requests` | max keep-alive requests per connection |
+| `hypnotoadGracefulTimeout` | `NISABA_HYPNOTOAD_GRACEFUL_TIMEOUT` | `graceful_timeout` | seconds to let a worker finish before it is killed |
+| `hypnotoadHeartbeatInterval` | `NISABA_HYPNOTOAD_HEARTBEAT_INTERVAL` | `heartbeat_interval` | seconds between worker heartbeats |
+| `hypnotoadHeartbeatTimeout` | `NISABA_HYPNOTOAD_HEARTBEAT_TIMEOUT` | `heartbeat_timeout` | seconds before an unresponsive worker is restarted |
+| `hypnotoadInactivityTimeout` | `NISABA_HYPNOTOAD_INACTIVITY_TIMEOUT` | `inactivity_timeout` | keep-alive connection idle timeout, seconds |
+| `hypnotoadKeepAliveTimeout` | `NISABA_HYPNOTOAD_KEEP_ALIVE_TIMEOUT` | `keep_alive_timeout` | keep-alive request idle timeout, seconds |
+| `hypnotoadUpgradeTimeout` | `NISABA_HYPNOTOAD_UPGRADE_TIMEOUT` | `upgrade_timeout` | seconds to wait for a hot restart to finish |
+| `hypnotoadProxy` | `NISABA_HYPNOTOAD_PROXY` | `proxy` | trust reverse-proxy `X-Forwarded-*` headers |
+| `hypnotoadListen` | `NISABA_LISTEN` | `listen` | listen URL(s); space-separated for more than one |
+| `hypnotoadPidFile` | `NISABA_HYPNOTOAD_PID_FILE` | `pid_file` | pid-file path (the units/rc scripts set a writable one) |
+
+The bundled unit files and rc scripts expose the common knobs directly (workers,
+clients, accepts, spare, graceful/heartbeat/inactivity timeouts, proxy); the rest
+can be set in `nisabarc`.
 
 **A session secret is required.** Each service signs its session cookies — which
 carry every authentication decision — with the secret. Set `websecret` in
@@ -30,7 +67,7 @@ remain valid.
 
 **Session cookies are marked `Secure` by default**, so browsers only send them
 over HTTPS — serve these behind TLS (directly or via a TLS-terminating reverse
-proxy with `MOJO_REVERSE_PROXY=1`). For plain-HTTP development or testing, set
+proxy with `NISABA_HYPNOTOAD_PROXY=1`). For plain-HTTP development or testing, set
 `cookieSecure=0` in `nisabarc` (or `NISABA_COOKIE_SECURE=0` in the environment)
 to drop the flag. Cookies are always `SameSite=Lax`.
 
@@ -50,7 +87,7 @@ service user must be able to write `/var/db/nisaba` (the units and rc scripts
 arrange this). Disable it with `rateLimit=0` (or `NISABA_RATELIMIT=0`); tune any
 scope with `rateLimit<Scope><Max|Window|Lockout>` keys (scopes: `Login`,
 `LoginIp`, `Totp`, `TotpIp`, `Passkey`, `Reset`, `Forgot`, `ForgotIp`). Behind a
-reverse proxy, set `MOJO_REVERSE_PROXY=1` so the client IP is taken from
+reverse proxy, set `NISABA_HYPNOTOAD_PROXY=1` so the client IP is taken from
 `X-Forwarded-For` rather than the proxy.
 
 `mojo_nisaba_sso` **requires PKCE (S256) from public clients** — those registered
@@ -105,10 +142,12 @@ The examples assume the executables are installed in `/usr/local/bin`. If
    ```sh
    install -d /usr/local/etc/nisaba
    cat > /usr/local/etc/nisaba/mojo_nisaba_sso.env <<'EOF'
-   LISTEN=http://*:8082
+   NISABA_LISTEN=http://*:8082
    NISABA_CONFIG=/usr/local/etc/nisabarc
-   # NISABA_SECRET=...            # REQUIRED unless websecret is set in nisabarc
-   # MOJO_REVERSE_PROXY=1         # only behind a trusted reverse proxy
+   # NISABA_SECRET=...                 # REQUIRED unless websecret is set in nisabarc
+   # NISABA_HYPNOTOAD_WORKERS=4        # Hypnotoad tuning (see the table above)
+   # NISABA_HYPNOTOAD_CLIENTS=1000
+   # NISABA_HYPNOTOAD_PROXY=1          # only behind a trusted reverse proxy
    EOF
    ```
 
@@ -121,21 +160,35 @@ The examples assume the executables are installed in `/usr/local/bin`. If
    journalctl -u mojo_nisaba_sso -f
    ```
 
+5. After an upgrade, hot-restart without dropping connections:
+
+   ```sh
+   systemctl reload mojo_nisaba_sso.service
+   ```
+
+   (`ExecReload=` re-runs `hypnotoad`, which upgrades the running manager in
+   place via its pid file under `/run/mojo_nisaba_sso`.)
+
 ### Notes
 
+- **Hypnotoad path.** `ExecStart=`/`ExecReload=` reference
+  `/usr/local/bin/hypnotoad`. If your Perl installed it elsewhere (e.g.
+  `/usr/bin/hypnotoad`), adjust both lines.
 - **Reverse proxy / TLS.** These units listen on plain HTTP on a high port,
   intended to sit behind a TLS-terminating reverse proxy (see the Apache
-  example in `mojo_nisaba_sso`'s POD). When proxied, set `MOJO_REVERSE_PROXY=1`
+  example in `mojo_nisaba_sso`'s POD). When proxied, set `NISABA_HYPNOTOAD_PROXY=1`
   so absolute URLs (the OIDC issuer, redirect URIs) are generated correctly —
-  and set `ssoIssuer` in `nisabarc` to the public URL. Do **not** set
-  `MOJO_REVERSE_PROXY` if the app is reachable by clients directly.
-- **Binding a privileged port directly** (e.g. `:443`): set `LISTEN`
+  and set `ssoIssuer` in `nisabarc` to the public URL. Do **not** set it if the
+  app is reachable by clients directly.
+- **Binding a privileged port directly** (e.g. `:443`): set `NISABA_LISTEN`
   accordingly and uncomment the `AmbientCapabilities`/`CapabilityBoundingSet`
   lines in the unit.
 - **Hardening.** The units are sandboxed (`ProtectSystem=strict`,
-  `MemoryDenyWriteExecute`, a `@system-service` syscall filter, etc.). If an XS
-  module misbehaves under the sandbox, relax the relevant directive (most often
-  `MemoryDenyWriteExecute=` or `SystemCallFilter=`).
+  `MemoryDenyWriteExecute`, a `@system-service` syscall filter, etc.). Hypnotoad
+  writes its pid file to the unit's `RuntimeDirectory` (`/run/<service>`). If an
+  XS module or the hot-restart re-exec misbehaves under the sandbox, relax the
+  relevant directive (most often `MemoryDenyWriteExecute=` or
+  `SystemCallFilter=`).
 
 ---
 
@@ -158,6 +211,9 @@ The examples assume the executables are installed in `/usr/local/bin`. If
    sysrc mojo_nisaba_sso_config="/usr/local/etc/nisabarc"
    # sysrc mojo_nisaba_sso_listen="http://*:8082"
    # sysrc mojo_nisaba_sso_user="www"
+   # sysrc mojo_nisaba_sso_workers="4"     # Hypnotoad tuning (see the table above)
+   # sysrc mojo_nisaba_sso_clients="1000"
+   # sysrc mojo_nisaba_sso_proxy="1"       # only behind a trusted reverse proxy
    ```
 
 3. Start:
@@ -167,16 +223,24 @@ The examples assume the executables are installed in `/usr/local/bin`. If
    service mojo_nisaba_sso status
    ```
 
+   After an upgrade, hot-restart without dropping connections:
+
+   ```sh
+   service mojo_nisaba_sso reload
+   ```
+
 ### Notes
 
 - Each service runs as `mojo_<name>_user` (default `www`); a dedicated,
-  unprivileged user is recommended. `daemon(8)` supervises the process,
-  restarts it on exit (5 s delay), and routes its output to syslog.
+  unprivileged user is recommended. `daemon(8)` supervises Hypnotoad (run with
+  `-f`), restarts it on exit (5 s delay), and routes its output to syslog.
+- **Hypnotoad path.** The scripts default to `/usr/local/bin/hypnotoad`; override
+  with `mojo_<name>_hypnotoad` if it lives elsewhere. Hypnotoad's pid file is
+  kept under `/var/run/<service>` so it is writable by the service user.
 - The `mojo_nisaba_sso` script creates `/var/db/nisaba` (owned by the service
   user) for the SQLite grant store on start.
-- The reverse-proxy / `MOJO_REVERSE_PROXY` guidance above applies here too; set
-  it via the environment if needed (e.g. in an `rc.conf.d` wrapper) or run
-  behind a proxy and set `ssoIssuer`.
+- The reverse-proxy guidance above applies here too; set
+  `mojo_<name>_proxy="1"` (or run behind a proxy and set `ssoIssuer`).
 
 ---
 
@@ -208,16 +272,17 @@ https://*:8443?cert=/usr/local/etc/nisaba/tls/server.crt&key=/usr/local/etc/nisa
 
 Set it like any other listen URL:
 
-- **systemd** — set `LISTEN` in the unit or the environment file. systemd passes
-  `${LISTEN}` as a single argument, so the `&` needs no escaping:
+- **systemd** — set `NISABA_LISTEN` in the unit or the environment file. systemd
+  treats the whole value as one argument, so the `&` needs no escaping:
 
   ```
-  LISTEN=https://*:8443?cert=/usr/local/etc/nisaba/tls/server.crt&key=/usr/local/etc/nisaba/tls/server.key
+  NISABA_LISTEN=https://*:8443?cert=/usr/local/etc/nisaba/tls/server.crt&key=/usr/local/etc/nisaba/tls/server.key
   ```
 
 - **FreeBSD** — set `mojo_<name>_listen` in `rc.conf`, keeping the value inside
   the double quotes so the shell does not treat the `&` as an operator (the
-  rc.d scripts also quote it internally when passing it to the server):
+  rc.d scripts export it verbatim to the app as `NISABA_LISTEN`, and a single
+  URL contains no whitespace so it stays intact):
 
   ```sh
   sysrc mojo_nisaba_sso_listen="https://*:8443?cert=/usr/local/etc/nisaba/tls/server.crt&key=/usr/local/etc/nisaba/tls/server.key"
