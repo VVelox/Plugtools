@@ -2,44 +2,15 @@
 use strict;
 use warnings;
 
-# Stub File::ShareDir::dist_dir so the web app can start without the dist
-# being installed. Must happen before the web module is loaded.
-use File::Basename ();
-use File::Spec;
-
-BEGIN {
-	my $share
-		= File::Spec->rel2abs( File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' ) );
-	require File::ShareDir;
-	no warnings 'redefine';
-	*File::ShareDir::dist_dir = sub { $share };
-
-	$ENV{NISABA_SECRET}        = 'test-secret-nisaba' unless defined $ENV{NISABA_SECRET};
-	$ENV{NISABA_COOKIE_SECURE} = '0'                  unless defined $ENV{NISABA_COOKIE_SECURE};
-
-	# NOTE: intentionally do NOT set NISABA_REQUIRE_PKCE — this suite tests the
-	# secure default (enforcement ON).
-} ## end BEGIN
+use FindBin ();
+use lib "$FindBin::Bin/lib";
+use NisabaWebTest;
 use Test::More;
 use Mojo::Util ();
 use Test::Mojo;
 
 eval { require App::Nisaba::WebSSO };
 plan skip_all => "App::Nisaba::WebSSO failed to load: $@" if $@;
-
-# ── Fake client registry ──────────────────────────────────────────────────────
-{
-
-	package FakeEntry;
-	sub new { my ( $c, %a ) = @_; return bless { attrs => \%a }, $c }
-
-	sub get_value {
-		my ( $self, $attr ) = @_;
-		my $v = $self->{attrs}{$attr};
-		return () unless defined $v;
-		return wantarray ? ( ref $v ? @{$v} : ($v) ) : ( ref $v ? $v->[0] : $v );
-	}
-}
 
 my $pubapp = FakeEntry->new(
 	oidcClientId                => 'pubapp',

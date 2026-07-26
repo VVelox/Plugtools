@@ -28,6 +28,7 @@ lib/App/Nisaba/WebSSO/Storage.pm
 lib/App/Nisaba/WebSSO/Storage/backends/SQLite.pm
 lib/App/Nisaba/WebUtil.pm
 lib/App/Nisaba/WebUtil/RateLimiter.pm
+lib/App/Nisaba/WebUtil/SQLite.pm
 Makefile.PL
 MANIFEST
 rc/freebsd/mojo_nisaba
@@ -100,6 +101,7 @@ t/lib/NisabaLDAPTest.pm
 t/lib/NisabaSlapdTest.pm
 t/lib/NisabaTestPlugin.pm
 t/lib/NisabaWebSSOMock.pm
+t/lib/NisabaWebTest.pm
 t/pod-coverage.t
 t/pod.t
 t/slapd-ldap-injection.t

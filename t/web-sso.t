@@ -2,32 +2,9 @@
 use strict;
 use warnings;
 
-# Stub File::ShareDir::dist_dir so the web app can start without the dist
-# being installed. Must happen before App::Nisaba::WebSSO is loaded.
-use File::Basename ();
-use File::Spec;
-
-BEGIN {
-	my $share
-		= File::Spec->rel2abs( File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' ) );
-	require File::ShareDir;
-	no warnings 'redefine';
-	*File::ShareDir::dist_dir = sub { $share };
-
-	# The web apps now refuse to start without an explicit session secret.
-	$ENV{NISABA_SECRET} = 'test-secret-nisaba' unless defined $ENV{NISABA_SECRET};
-
-	# Serve over plain HTTP in tests so the session cookie round-trips.
-	$ENV{NISABA_COOKIE_SECURE} = '0' unless defined $ENV{NISABA_COOKIE_SECURE};
-
-	# This suite exercises broad OIDC behaviour with a public client and no PKCE;
-	# the mandatory-PKCE policy is covered on its own in t/web-sso-pkce.t.
-	$ENV{NISABA_REQUIRE_PKCE} = '0' unless defined $ENV{NISABA_REQUIRE_PKCE};
-
-	# Rate limiting has its own suite (t/web-ratelimit.t); disable here so the
-	# many repeated logins aren't throttled.
-	$ENV{NISABA_RATELIMIT} = '0' unless defined $ENV{NISABA_RATELIMIT};
-} ## end BEGIN
+use FindBin ();
+use lib "$FindBin::Bin/lib";
+use NisabaWebTest qw(no_pkce no_rate_limit);
 
 use Test::More;
 use Mojo::Util ();
@@ -56,27 +33,6 @@ eval {
 } or do {
 	plan skip_all => "App::Nisaba::WebSSO::Storage unavailable (DBD::SQLite?): $@";
 };
-
-# ── Fake Net::LDAP::Entry ─────────────────────────────────────────────────────
-
-{
-
-	package FakeEntry;
-
-	sub new {
-		my ( $class, %attrs ) = @_;
-		return bless { attrs => \%attrs, _dn => delete $attrs{_dn} // '' }, $class;
-	}
-	sub dn         { return $_[0]->{_dn} }
-	sub attributes { return keys %{ $_[0]->{attrs} } }
-
-	sub get_value {
-		my ( $self, $attr ) = @_;
-		my $v = $self->{attrs}{$attr};
-		return () unless defined $v;
-		return wantarray ? ( ref $v ? @{$v} : ($v) ) : ( ref $v ? $v->[0] : $v );
-	}
-}
 
 # RSA signing key for the public test client. A public client has no shared
 # secret, so it signs ID tokens with RS256 using a stored key pair — the shape a

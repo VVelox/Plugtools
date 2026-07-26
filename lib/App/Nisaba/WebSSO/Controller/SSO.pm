@@ -14,6 +14,75 @@ use App::Nisaba::WebCSRF ();
 # Helpers
 # --------------------------------------------------------------------------- #
 
+# Per-worker-process cache of each client's parsed JWKS and imported RSA key
+# objects, so token issuance does not pay a JSON parse plus an RSA key import
+# on top of every signature. An entry is validated against the raw oidcJwks
+# string from the client's freshly fetched LDAP entry on every use, so key
+# rotation or re-registration takes effect on the very next request; LDAP
+# stays the source of truth.
+my %jwks_material_cache;
+
+# Returns the cached key material for a client entry, rebuilding it when the
+# raw JWKS string has changed:
+#
+#   raw         - the oidcJwks string this material was built from
+#   signing_key - imported Crypt::PK::RSA for the first key with private
+#                 material, or undef when there is no usable one (matching
+#                 _build_id_token's refusal to sign, with no fallback to a
+#                 later private key)
+#   signing_kid - that key's kid ('' when unset)
+#   verify_keys - ordered list of { kid, key } for every importable key
+#   public_keys - the public components served by the /jwks endpoint
+#
+# Returns undef when the entry has no oidcJwks value.
+sub _client_jwks_material {
+	my ( $self, $client_entry ) = @_;
+
+	my $jwks_json = $client_entry->get_value('oidcJwks');
+	return undef unless defined $jwks_json && $jwks_json ne '';
+
+	my $client_id = $client_entry->get_value('oidcClientId') // '';
+	my $cached    = $jwks_material_cache{$client_id};
+	return $cached if $cached && $cached->{raw} eq $jwks_json;
+
+	my %material = (
+		raw         => $jwks_json,
+		signing_key => undef,
+		signing_kid => '',
+		verify_keys => [],
+		public_keys => [],
+	);
+
+	my $jwks = eval { decode_json($jwks_json) };
+	my @keys = ( $jwks && ref $jwks->{keys} eq 'ARRAY' ) ? grep { ref $_ eq 'HASH' } @{ $jwks->{keys} } : ();
+
+	for my $jwk (@keys) {
+		# Only expose public components
+		my %public = map { $_ => $jwk->{$_} } grep { defined $jwk->{$_} } qw(kty n e kid use alg key_ops);
+		$public{use} //= 'sig';
+		push @{ $material{public_keys} }, \%public;
+
+		my $rsa = Crypt::PK::RSA->new;
+		next unless eval { $rsa->import_key($jwk); 1 };
+		push @{ $material{verify_keys} }, { kid => ( $jwk->{kid} // '' ), key => $rsa };
+	} ## end for my $jwk (@keys)
+
+	# Sign with the first key that still has private material. Key rotation
+	# keeps older keys in the set as public-only entries (for verification
+	# overlap), so this is the newest key.
+	my ($signing_jwk) = grep { defined $_->{d} } @keys;
+	if ($signing_jwk) {
+		my $rsa = Crypt::PK::RSA->new;
+		if ( eval { $rsa->import_key($signing_jwk); 1 } ) {
+			$material{signing_key} = $rsa;
+			$material{signing_kid} = $signing_jwk->{kid} // '';
+		}
+	}
+
+	$jwks_material_cache{$client_id} = \%material;
+	return \%material;
+} ## end sub _client_jwks_material
+
 # --------------------------------------------------------------------------- #
 # OIDC Discovery
 # --------------------------------------------------------------------------- #
@@ -66,21 +135,9 @@ sub jwks {
 	$clients //= [];
 
 	for my $entry (@$clients) {
-		my $jwks_json = $entry->get_value('oidcJwks');
-		next unless $jwks_json;
-		eval {
-			my $jwks = decode_json($jwks_json);
-			if ( $jwks->{keys} && ref $jwks->{keys} eq 'ARRAY' ) {
-				for my $key ( @{ $jwks->{keys} } ) {
-					# Only expose public components
-					my %pub = map { $_ => $key->{$_} }
-						grep { defined $key->{$_} } qw(kty n e kid use alg key_ops);
-					$pub{use} //= 'sig';
-					push @all_keys, \%pub;
-				}
-			}
-		};
-	} ## end for my $entry (@$clients)
+		my $material = $self->_client_jwks_material($entry);
+		push @all_keys, @{ $material->{public_keys} } if $material;
+	}
 
 	$self->render( json => { keys => \@all_keys } );
 } ## end sub jwks
@@ -1293,25 +1350,22 @@ sub _verify_id_token_hint {
 	my $verified      = 0;
 
 	if ( $alg eq 'RS256' ) {
-		my $jwks_json = $client_entry->get_value('oidcJwks');
-		my $jwks      = $jwks_json ? eval { decode_json($jwks_json) } : undef;
-		if ( $jwks && ref $jwks->{keys} eq 'ARRAY' ) {
+		my $material = $self->_client_jwks_material($client_entry);
+		if ($material) {
 			# Select the verification key by the token's kid so hints signed
 			# with a rotated-out-but-retained key still verify; with no kid (or
 			# no match) fall back to trying every key in the set.
-			my @keys       = grep { ref $_ eq 'HASH' } @{ $jwks->{keys} };
-			my $kid        = $header      ? $header->{kid}                             : undef;
-			my @candidates = defined $kid ? grep { ( $_->{kid} // '' ) eq $kid } @keys : ();
+			my @keys       = @{ $material->{verify_keys} };
+			my $kid        = $header      ? $header->{kid}                   : undef;
+			my @candidates = defined $kid ? grep { $_->{kid} eq $kid } @keys : ();
 			@candidates = @keys unless @candidates;
-			for my $key (@candidates) {
-				my $rsa = Crypt::PK::RSA->new;
-				next unless eval { $rsa->import_key($key); 1 };
-				if ( eval { $rsa->verify_message( $sig, $signing_input, 'SHA256', 'v1.5' ) } ) {
+			for my $candidate (@candidates) {
+				if ( eval { $candidate->{key}->verify_message( $sig, $signing_input, 'SHA256', 'v1.5' ) } ) {
 					$verified = 1;
 					last;
 				}
 			}
-		} ## end if ( $jwks && ref $jwks->{keys} eq 'ARRAY')
+		} ## end if ($material)
 	} elsif ( $alg eq 'HS256' ) {
 		my $secret = $client_entry->get_value('oidcClientSecret') // '';
 		if ( $secret ne '' ) {
@@ -1404,30 +1458,19 @@ sub _build_id_token {
 	# id_token_signed_response_alg, the default is RS256.
 	my $alg = $client_entry->get_value('oidcIdTokenSignedResponseAlg');
 	$alg = 'RS256' if !defined $alg || $alg eq '';
-	my $jwks_json = $client_entry->get_value('oidcJwks');
 
 	if ( $alg eq 'RS256' ) {
-		# Sign with the newest private key in the client's JWKS. Key rotation
-		# keeps older keys in the set as public-only entries (for verification
-		# overlap), so pick the first key that still has private material.
-		my $jwks = $jwks_json ? eval { decode_json($jwks_json) } : undef;
-		if ( $jwks && ref $jwks->{keys} eq 'ARRAY' ) {
-			my ($jwk) = grep { ref $_ eq 'HASH' && defined $_->{d} } @{ $jwks->{keys} };
-			if ($jwk) {
-				my $kid = $jwk->{kid} // '';
-				my $header
-					= b64url_encode( Mojo::JSON::encode_json( { alg => 'RS256', typ => 'JWT', kid => $kid } ) );
-				my $signing_input = "$header.$body";
-
-				my $rsa = Crypt::PK::RSA->new;
-				eval { $rsa->import_key($jwk) };
-				if ( !$@ ) {
-					my $sig     = $rsa->sign_message( $signing_input, 'SHA256', 'v1.5' );
-					my $sig_b64 = b64url_encode($sig);
-					return "$signing_input.$sig_b64";
-				}
-			} ## end if ($jwk)
-		} ## end if ( $jwks && ref $jwks->{keys} eq 'ARRAY')
+		# Sign with the newest private key in the client's JWKS (the cached,
+		# already-imported key object; see _client_jwks_material).
+		my $material = $self->_client_jwks_material($client_entry);
+		if ( $material && $material->{signing_key} ) {
+			my $header = b64url_encode(
+				Mojo::JSON::encode_json( { alg => 'RS256', typ => 'JWT', kid => $material->{signing_kid} } ) );
+			my $signing_input = "$header.$body";
+			my $sig           = $material->{signing_key}->sign_message( $signing_input, 'SHA256', 'v1.5' );
+			my $sig_b64       = b64url_encode($sig);
+			return "$signing_input.$sig_b64";
+		}
 
 		# Client requires RS256 but no usable key: do NOT downgrade to none.
 		return undef;

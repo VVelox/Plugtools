@@ -16,26 +16,12 @@ use warnings;
 # distillation of the xt/sso-fuzz harness: the one thing in-process Test::Mojo
 # cannot see is an actual worker *process* death, which this catches.
 
-use File::Basename ();
-use File::Spec;
-
-BEGIN {
-	my $share
-		= File::Spec->rel2abs( File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' ) );
-	require File::ShareDir;
-	no warnings 'redefine';
-	*File::ShareDir::dist_dir = sub { $share };
-
-	$ENV{NISABA_SECRET}        = 'test-secret-nisaba' unless defined $ENV{NISABA_SECRET};
-	$ENV{NISABA_COOKIE_SECURE} = '0'                  unless defined $ENV{NISABA_COOKIE_SECURE};
-	$ENV{NISABA_REQUIRE_PKCE}  = '0'                  unless defined $ENV{NISABA_REQUIRE_PKCE};
-	$ENV{NISABA_RATELIMIT}     = '0'                  unless defined $ENV{NISABA_RATELIMIT};
-} ## end BEGIN
+use FindBin ();
+use lib "$FindBin::Bin/lib";
+use NisabaWebTest qw(no_pkce no_rate_limit);
 
 use Test::More;
 use Mojo::URL ();
-use FindBin   ();
-use lib "$FindBin::Bin/lib";
 
 eval { require App::Nisaba::WebSSO; 1 } or plan skip_all => "App::Nisaba::WebSSO failed to load: $@";
 eval {

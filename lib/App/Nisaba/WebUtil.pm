@@ -532,43 +532,47 @@ sub install_rate_limiter {
 
 	# Lazily built and memoized, so tests (which override the pt helper after
 	# startup) and the real app both read config from pt at first use.
-	my %S      = ( built => 0, enabled => 0, rl => undef );
-	my $ensure = sub {
+	my %limiter_state = ( built => 0, enabled => 0, rl => undef );
+	my $ensure        = sub {
 		my ($c) = @_;
-		return \%S if $S{built};
-		$S{built} = 1;
-		my $ini = ( eval { $c->pt->{ini}->{''} } ) || {};
-		my $en  = $ini->{rateLimit} // $ENV{NISABA_RATELIMIT} // 1;
-		$S{enabled} = ( $en && $en ne '0' ) ? 1 : 0;
-		if ( $S{enabled} ) {
+		return \%limiter_state if $limiter_state{built};
+		$limiter_state{built} = 1;
+		my $ini     = ( eval { $c->pt->{ini}->{''} } ) || {};
+		my $enabled = $ini->{rateLimit} // $ENV{NISABA_RATELIMIT} // 1;
+		$limiter_state{enabled} = ( $enabled && $enabled ne '0' ) ? 1 : 0;
+		if ( $limiter_state{enabled} ) {
 			my $path = $ini->{rateLimitPath} // $ENV{NISABA_RATELIMIT_PATH}
 				// $App::Nisaba::WebUtil::RateLimiter::DEFAULT_PATH;
-			$S{rl} = eval {
+			$limiter_state{rl} = eval {
 				App::Nisaba::WebUtil::RateLimiter->new(
 					{ path => $path, policies => { _policies_from_config($ini) } } );
 			};
-			$c->app->log->error( 'Rate limiter DB unavailable, failing closed: ' . ( $@ || '' ) ) if !$S{rl};
-		}
-		return \%S;
+			$c->app->log->error( 'Rate limiter DB unavailable, failing closed: ' . ( $@ || '' ) )
+				if !$limiter_state{rl};
+		} ## end if ( $limiter_state{enabled} )
+		return \%limiter_state;
 	}; ## end $ensure = sub
 
 	$app->helper( rate_limiter => sub { my $c = shift; $ensure->($c)->{rl} } );
 
-	$app->helper( rate_check => sub { my ( $c, $scope, %p ) = @_; _rl_evaluate( $c, $ensure->($c), $scope, \%p, 0 ) } );
-	$app->helper( rate_hit   => sub { my ( $c, $scope, %p ) = @_; _rl_evaluate( $c, $ensure->($c), $scope, \%p, 1 ) } );
+	$app->helper(
+		rate_check => sub { my ( $c, $scope, %parts ) = @_; _rl_evaluate( $c, $ensure->($c), $scope, \%parts, 0 ) }
+	);
+	$app->helper(
+		rate_hit => sub { my ( $c, $scope, %parts ) = @_; _rl_evaluate( $c, $ensure->($c), $scope, \%parts, 1 ) } );
 	$app->helper( rate_fail =>
-			sub { my ( $c, $scope, %p ) = @_; _rl_mutate( $c, $ensure->($c), $scope, \%p, 'fail' ); return } );
+			sub { my ( $c, $scope, %parts ) = @_; _rl_mutate( $c, $ensure->($c), $scope, \%parts, 'fail' ); return } );
 	$app->helper( rate_reset =>
-			sub { my ( $c, $scope, %p ) = @_; _rl_mutate( $c, $ensure->($c), $scope, \%p, 'reset' ); return } );
+			sub { my ( $c, $scope, %parts ) = @_; _rl_mutate( $c, $ensure->($c), $scope, \%parts, 'reset' ); return } );
 
 	$app->helper(
 		rate_guard => sub {
 			my ( $c, $scope, %opts ) = @_;
 			my $render = delete $opts{render} || {};
 			my $hit    = delete $opts{hit} ? 1                             : 0;
-			my $res    = $hit              ? $c->rate_hit( $scope, %opts ) : $c->rate_check( $scope, %opts );
-			return 1 if $res->{allowed};
-			_rl_render_block( $c, $res, $render );
+			my $result = $hit              ? $c->rate_hit( $scope, %opts ) : $c->rate_check( $scope, %opts );
+			return 1 if $result->{allowed};
+			_rl_render_block( $c, $result, $render );
 			return 0;
 		}
 	);
@@ -602,7 +606,7 @@ sub install_hypnotoad_config {
 	my ($app) = @_;
 	my $ini = ( eval { $app->pt->{ini}->{''} } ) || {};
 
-	my %h = %{ $app->config('hypnotoad') || {} };
+	my %hypnotoad_config = %{ $app->config('hypnotoad') || {} };
 
 	# nisabarc key, env var, hypnotoad setting — coerced to a number.
 	my @numeric = (
@@ -619,122 +623,126 @@ sub install_hypnotoad_config {
 		[ 'hypnotoadKeepAliveTimeout',  'NISABA_HYPNOTOAD_KEEP_ALIVE_TIMEOUT', 'keep_alive_timeout' ],
 		[ 'hypnotoadUpgradeTimeout',    'NISABA_HYPNOTOAD_UPGRADE_TIMEOUT',    'upgrade_timeout' ],
 	);
-	for my $m (@numeric) {
-		my ( $ckey, $env, $hkey ) = @{$m};
-		my $v = $ini->{$ckey} // $ENV{$env};
-		next unless defined $v && $v ne '';
-		$h{$hkey} = $v + 0;
+	for my $mapping (@numeric) {
+		my ( $config_key, $env_var, $hypnotoad_key ) = @{$mapping};
+		my $value = $ini->{$config_key} // $ENV{$env_var};
+		next unless defined $value && $value ne '';
+		$hypnotoad_config{$hypnotoad_key} = $value + 0;
 	}
 
 	# One or more whitespace-separated listen URLs. A single TLS URL such as
 	# https://*:8443?cert=...&key=... contains no whitespace, so it survives.
 	my $listen = $ini->{hypnotoadListen} // $ENV{NISABA_LISTEN};
 	if ( defined $listen && $listen ne '' ) {
-		$h{listen} = [ grep { length } split ' ', $listen ];
+		$hypnotoad_config{listen} = [ grep { length } split ' ', $listen ];
 	}
 
 	# Hypnotoad's default pid_file sits next to the application script, which is
 	# not writable under a hardened service; honour an explicit path.
-	my $pid = $ini->{hypnotoadPidFile} // $ENV{NISABA_HYPNOTOAD_PID_FILE};
-	$h{pid_file} = $pid if defined $pid && $pid ne '';
+	my $pid_file = $ini->{hypnotoadPidFile} // $ENV{NISABA_HYPNOTOAD_PID_FILE};
+	$hypnotoad_config{pid_file} = $pid_file if defined $pid_file && $pid_file ne '';
 
 	# Trust reverse-proxy headers (X-Forwarded-*). MOJO_REVERSE_PROXY is honoured
 	# as a fallback for parity with the rest of the stack.
 	my $proxy = $ini->{hypnotoadProxy} // $ENV{NISABA_HYPNOTOAD_PROXY} // $ENV{MOJO_REVERSE_PROXY};
-	$h{proxy} = 1 if defined $proxy && $proxy ne '' && $proxy ne '0';
+	$hypnotoad_config{proxy} = 1 if defined $proxy && $proxy ne '' && $proxy ne '0';
 
-	$app->config( hypnotoad => \%h ) if %h;
+	$app->config( hypnotoad => \%hypnotoad_config ) if %hypnotoad_config;
 	return 1;
 } ## end sub install_hypnotoad_config
 
 sub _policies_from_config {
 	my ($ini) = @_;
-	my %pol;
+	my %policies;
 	for my $scope ( keys %DEFAULT_POLICIES ) {
 		my $camel = join '', map { ucfirst } split /_/, $scope;
-		my %p;
+		my %policy;
 		for my $param (qw(max window lockout)) {
-			my $key = 'rateLimit' . $camel . ucfirst($param);
-			my $v   = $ini->{$key};
-			$p{$param} = ( defined $v && $v ne '' ) ? ( $v + 0 ) : $DEFAULT_POLICIES{$scope}{$param};
+			my $key   = 'rateLimit' . $camel . ucfirst($param);
+			my $value = $ini->{$key};
+			$policy{$param} = ( defined $value && $value ne '' ) ? ( $value + 0 ) : $DEFAULT_POLICIES{$scope}{$param};
 		}
-		$pol{$scope} = \%p;
+		$policies{$scope} = \%policy;
 	} ## end for my $scope ( keys %DEFAULT_POLICIES )
-	return %pol;
+	return %policies;
 } ## end sub _policies_from_config
 
 sub _rl_subscopes { return @{ $SCOPE_KEYS{ $_[0] } || [] } }
 
 sub _rl_build_id {
-	my ( $sub, $parts, $ip ) = @_;
-	my @vals;
-	for my $p ( @{ $sub->{parts} } ) {
-		push @vals, $ip                        if $p eq 'ip';
-		push @vals, lc( $parts->{user} // '' ) if $p eq 'user';
+	my ( $sub_limit, $parts, $ip ) = @_;
+	my @id_values;
+	for my $key_part ( @{ $sub_limit->{parts} } ) {
+		push @id_values, $ip                        if $key_part eq 'ip';
+		push @id_values, lc( $parts->{user} // '' ) if $key_part eq 'user';
 	}
-	return join( "\0", @vals );
+	return join( "\0", @id_values );
 }
 
 # Returns { allowed => 1|0, retry_after => secs, unavailable => 1? }.
 sub _rl_evaluate {
-	my ( $c, $st, $scope, $parts, $record ) = @_;
-	return { allowed => 1 }                                      unless $st->{enabled};
-	return { allowed => 0, unavailable => 1, retry_after => 30 } unless $st->{rl};
+	my ( $c, $limiter_state, $scope, $parts, $record ) = @_;
+	return { allowed => 1 }                                      unless $limiter_state->{enabled};
+	return { allowed => 0, unavailable => 1, retry_after => 30 } unless $limiter_state->{rl};
 
 	my $ip    = $c->tx->remote_address // '';
 	my $worst = { allowed => 1, retry_after => 0 };
-	for my $sub ( _rl_subscopes($scope) ) {
-		my $id = _rl_build_id( $sub, $parts, $ip );
-		my $r  = eval { $record ? $st->{rl}->hit( $sub->{scope}, $id ) : $st->{rl}->check( $sub->{scope}, $id ) };
+	for my $sub_limit ( _rl_subscopes($scope) ) {
+		my $id     = _rl_build_id( $sub_limit, $parts, $ip );
+		my $result = eval {
+				  $record
+				? $limiter_state->{rl}->hit( $sub_limit->{scope}, $id )
+				: $limiter_state->{rl}->check( $sub_limit->{scope}, $id );
+		};
 		return { allowed => 0, unavailable => 1, retry_after => 30 } if $@;
-		if ( !$r->{allowed} && ( $r->{retry_after} // 0 ) > $worst->{retry_after} ) {
-			$worst = { allowed => 0, retry_after => $r->{retry_after} };
+		if ( !$result->{allowed} && ( $result->{retry_after} // 0 ) > $worst->{retry_after} ) {
+			$worst = { allowed => 0, retry_after => $result->{retry_after} };
 		}
-	}
+	} ## end for my $sub_limit ( _rl_subscopes($scope) )
 	return $worst;
 } ## end sub _rl_evaluate
 
 sub _rl_mutate {
-	my ( $c, $st, $scope, $parts, $op ) = @_;
-	return unless $st->{enabled} && $st->{rl};
+	my ( $c, $limiter_state, $scope, $parts, $op ) = @_;
+	return unless $limiter_state->{enabled} && $limiter_state->{rl};
 	my $ip = $c->tx->remote_address // '';
-	for my $sub ( _rl_subscopes($scope) ) {
-		next if $op eq 'reset' && $sub->{backstop};
-		my $id = _rl_build_id( $sub, $parts, $ip );
-		eval { $st->{rl}->$op( $sub->{scope}, $id ) };
+	for my $sub_limit ( _rl_subscopes($scope) ) {
+		next if $op eq 'reset' && $sub_limit->{backstop};
+		my $id = _rl_build_id( $sub_limit, $parts, $ip );
+		eval { $limiter_state->{rl}->$op( $sub_limit->{scope}, $id ) };
 	}
 	return;
 } ## end sub _rl_mutate
 
 sub _rl_render_block {
-	my ( $c, $res, $render ) = @_;
-	my $secs   = $res->{retry_after} || 30;
-	my $status = $res->{unavailable} ? 503 : 429;
-	$c->res->headers->header( 'Retry-After' => $secs );
+	my ( $c, $result, $render ) = @_;
+	my $retry_after_seconds = $result->{retry_after} || 30;
+	my $status              = $result->{unavailable} ? 503 : 429;
+	$c->res->headers->header( 'Retry-After' => $retry_after_seconds );
 
 	if ( $render->{json} ) {
 		return $c->render(
 			json => {
-				error       => ( $res->{unavailable} ? 'service_unavailable' : 'too_many_requests' ),
-				retry_after => ( $secs + 0 ),
+				error       => ( $result->{unavailable} ? 'service_unavailable' : 'too_many_requests' ),
+				retry_after => ( $retry_after_seconds + 0 ),
 			},
 			status => $status,
 		);
 	}
 
-	my $msg
-		= $res->{unavailable}
+	my $message
+		= $result->{unavailable}
 		? 'The service is temporarily unavailable. Please try again shortly.'
-		: 'Too many attempts. Please try again in ' . _rl_fmt_secs($secs) . '.';
-	$c->stash( rate_error => $msg );
+		: 'Too many attempts. Please try again in ' . _rl_fmt_secs($retry_after_seconds) . '.';
+	$c->stash( rate_error => $message );
 	return $c->render( %$render, status => $status );
 } ## end sub _rl_render_block
 
 sub _rl_fmt_secs {
-	my ($s) = @_;
-	return "$s seconds" if $s < 90;
-	my $m = int( ( $s + 59 ) / 60 );
-	return "$m minute" . ( $m == 1 ? '' : 's' );
+	my ($seconds) = @_;
+	return "$seconds seconds" if $seconds < 90;
+	my $minutes = int( ( $seconds + 59 ) / 60 );
+	return "$minutes minute" . ( $minutes == 1 ? '' : 's' );
 }
 
 =head1 AUTHOR

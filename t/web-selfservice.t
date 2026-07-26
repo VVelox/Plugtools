@@ -2,24 +2,9 @@
 use strict;
 use warnings;
 
-# Stub File::ShareDir::dist_dir so the web app can start without the dist
-# being installed. Must happen before the web module is loaded.
-use File::Basename ();
-use File::Spec;
-
-BEGIN {
-	my $share
-		= File::Spec->rel2abs( File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' ) );
-	require File::ShareDir;
-	no warnings 'redefine';
-	*File::ShareDir::dist_dir = sub { $share };
-
-	$ENV{NISABA_SECRET}        = 'test-secret-nisaba' unless defined $ENV{NISABA_SECRET};
-	$ENV{NISABA_COOKIE_SECURE} = '0'                  unless defined $ENV{NISABA_COOKIE_SECURE};
-
-	# Rate limiting is covered in t/web-ratelimit.t; disable here.
-	$ENV{NISABA_RATELIMIT} = '0' unless defined $ENV{NISABA_RATELIMIT};
-} ## end BEGIN
+use FindBin ();
+use lib "$FindBin::Bin/lib";
+use NisabaWebTest qw(no_rate_limit);
 use Test::More;
 use Mojo::Util ();
 use Test::Mojo;
@@ -28,19 +13,6 @@ eval { require App::Nisaba::WebSelfService };
 plan skip_all => "App::Nisaba::WebSelfService failed to load: $@" if $@;
 
 # ── Minimal fake LDAP entry ───────────────────────────────────────────────────
-{
-
-	package FakeEntry;
-	sub new { my ( $c, %a ) = @_; return bless { attrs => \%a }, $c }
-
-	sub get_value {
-		my ( $self, $attr ) = @_;
-		my $v = $self->{attrs}{$attr};
-		return () unless defined $v;
-		return wantarray ? ( ref $v ? @{$v} : ($v) ) : ( ref $v ? $v->[0] : $v );
-	}
-}
-
 # ── Stateful stubs ────────────────────────────────────────────────────────────
 
 my $current_pw = '{SSHA}ORIGINAL';    # changes when the password is (re)set

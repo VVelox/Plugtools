@@ -2,10 +2,8 @@ package App::Nisaba::WebSSO::Storage::backends::SQLite;
 
 use strict;
 use warnings;
-use Carp           ();
-use DBI            ();
-use File::Basename ();
-use File::Path     ();
+use Carp                         ();
+use App::Nisaba::WebUtil::SQLite ();
 
 =head1 NAME
 
@@ -58,36 +56,11 @@ sub new {
 
 	my $self = bless { path => $path }, $class;
 
-	if ( $path ne ':memory:' ) {
-		my $dir = File::Basename::dirname($path);
-		if ( !-d $dir ) {
-			File::Path::make_path( $dir, { mode => oct('0700') } )
-				or Carp::croak("Failed to create storage directory '$dir': $!");
-		}
-	}
-
-	my $dbh = DBI->connect(
-		'dbi:SQLite:dbname=' . $path,
-		'', '',
-		{
-			RaiseError                       => 1,
-			PrintError                       => 0,
-			AutoCommit                       => 1,
-			sqlite_unicode                   => 1,
-			sqlite_use_immediate_transaction => 1,
-		}
-	) or Carp::croak( "Failed to open SQLite storage at '$path': " . $DBI::errstr );
-
-	$dbh->sqlite_busy_timeout(5000);
-	$dbh->do('PRAGMA journal_mode=WAL');
-	$dbh->do('PRAGMA synchronous=NORMAL');
-
-	$self->{dbh} = $dbh;
+	$self->{dbh} = App::Nisaba::WebUtil::SQLite::open_database(
+		path        => $path,
+		description => 'SQLite storage',
+	);
 	$self->_init_schema;
-
-	if ( $path ne ':memory:' && -e $path ) {
-		chmod 0600, $path;
-	}
 
 	return $self;
 } ## end sub new

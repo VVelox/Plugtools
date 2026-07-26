@@ -2,20 +2,10 @@
 use strict;
 use warnings;
 
-use File::Basename ();
-use File::Spec;
+use FindBin ();
+use lib "$FindBin::Bin/lib";
+use NisabaWebTest;
 use File::Temp ();
-
-BEGIN {
-	my $share
-		= File::Spec->rel2abs( File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' ) );
-	require File::ShareDir;
-	no warnings 'redefine';
-	*File::ShareDir::dist_dir = sub { $share };
-
-	$ENV{NISABA_SECRET}        = 'test-secret-nisaba' unless defined $ENV{NISABA_SECRET};
-	$ENV{NISABA_COOKIE_SECURE} = '0'                  unless defined $ENV{NISABA_COOKIE_SECURE};
-} ## end BEGIN
 use Test::More;
 use Mojo::Util ();
 use Test::Mojo;

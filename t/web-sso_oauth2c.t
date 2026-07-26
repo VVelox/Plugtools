@@ -22,29 +22,10 @@ use warnings;
 # GO=/path/to/go), it will first try
 # `go install github.com/cloudentity/oauth2c@latest` (network + compile).
 
-# Stub File::ShareDir::dist_dir so the web app can start without the dist
-# being installed. Must happen before App::Nisaba::WebSSO is loaded.
-use File::Basename ();
+use FindBin ();
+use lib "$FindBin::Bin/lib";
+use NisabaWebTest qw(no_rate_limit);
 use File::Spec;
-
-BEGIN {
-	my $share
-		= File::Spec->rel2abs( File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' ) );
-	require File::ShareDir;
-	no warnings 'redefine';
-	*File::ShareDir::dist_dir = sub { $share };
-
-	# The web apps now refuse to start without an explicit session secret.
-	# Inherited by the WebSSO daemon this test spawns as a subprocess.
-	$ENV{NISABA_SECRET} = 'test-secret-nisaba' unless defined $ENV{NISABA_SECRET};
-
-	# Serve over plain HTTP so the session cookie round-trips (inherited by the
-	# WebSSO daemon this test spawns as a subprocess).
-	$ENV{NISABA_COOKIE_SECURE} = '0' unless defined $ENV{NISABA_COOKIE_SECURE};
-
-	# Rate limiting is covered in t/web-ratelimit.t; disable for this flow.
-	$ENV{NISABA_RATELIMIT} = '0' unless defined $ENV{NISABA_RATELIMIT};
-} ## end BEGIN
 
 use Test::More;
 use Mojo::Util ();
@@ -219,25 +200,6 @@ require Mojo::JSON;
 require Crypt::PK::RSA;
 
 # ── Test fixtures (same shape as t/web-sso.t) ───────────────────────────────
-
-{
-
-	package FakeEntry;
-
-	sub new {
-		my ( $class, %attrs ) = @_;
-		return bless { attrs => \%attrs, _dn => delete $attrs{_dn} // '' }, $class;
-	}
-	sub dn         { return $_[0]->{_dn} }
-	sub attributes { return keys %{ $_[0]->{attrs} } }
-
-	sub get_value {
-		my ( $self, $attr ) = @_;
-		my $v = $self->{attrs}{$attr};
-		return () unless defined $v;
-		return wantarray ? ( ref $v ? @{$v} : ($v) ) : ( ref $v ? $v->[0] : $v );
-	}
-}
 
 my $sso_port      = free_port();
 my $cb_port       = free_port();

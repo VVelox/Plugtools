@@ -10,21 +10,9 @@ use warnings;
 # not depend on a real directory. (Worker-crash / hang / wire-level fuzzing lives
 # in the out-of-process harness under xt/sso-fuzz.)
 
-use File::Basename ();
-use File::Spec;
-
-BEGIN {
-	my $share
-		= File::Spec->rel2abs( File::Spec->catdir( File::Basename::dirname(__FILE__), File::Spec->updir, 'share' ) );
-	require File::ShareDir;
-	no warnings 'redefine';
-	*File::ShareDir::dist_dir = sub { $share };
-
-	$ENV{NISABA_SECRET}        = 'test-secret-nisaba' unless defined $ENV{NISABA_SECRET};
-	$ENV{NISABA_COOKIE_SECURE} = '0'                  unless defined $ENV{NISABA_COOKIE_SECURE};
-	$ENV{NISABA_REQUIRE_PKCE}  = '0'                  unless defined $ENV{NISABA_REQUIRE_PKCE};
-	$ENV{NISABA_RATELIMIT}     = '0'                  unless defined $ENV{NISABA_RATELIMIT};
-} ## end BEGIN
+use FindBin ();
+use lib "$FindBin::Bin/lib";
+use NisabaWebTest qw(no_pkce no_rate_limit);
 
 use Test::More;
 use Mojo::Util   ();
@@ -43,26 +31,6 @@ eval {
 eval { require Test::Mojo; 1 } or plan skip_all => "Test::Mojo unavailable: $@";
 
 # ── Minimal fake LDAP entry + confidential client + user ─────────────────────
-{
-
-	package FakeEntry;
-
-	sub new {
-		my ( $class, %attrs ) = @_;
-		my $dn = delete $attrs{_dn} // '';
-		return bless { attrs => \%attrs, _dn => $dn }, $class;
-	}
-	sub dn         { return $_[0]->{_dn} }
-	sub attributes { return keys %{ $_[0]->{attrs} } }
-
-	sub get_value {
-		my ( $self, $attr ) = @_;
-		my $v = $self->{attrs}{$attr};
-		return () unless defined $v;
-		return wantarray ? ( ref $v ? @{$v} : ($v) ) : ( ref $v ? $v->[0] : $v );
-	}
-}
-
 my $client = FakeEntry->new(
 	_dn                          => 'oidcClientId=secretapp,ou=oidc,dc=example,dc=com',
 	oidcClientId                 => 'secretapp',
