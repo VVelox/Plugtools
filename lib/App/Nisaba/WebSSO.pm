@@ -28,8 +28,9 @@ our $VERSION = '0.0.1';
 
 A Mojolicious web application that implements an OpenID Connect Provider
 (OP) backed by LDAP via App::Nisaba: the Authorization Code flow with
-PKCE, refresh tokens (rotated on every use), token revocation (RFC 7009)
-and introspection (RFC 7662), C<prompt>/C<max_age> handling including
+PKCE, refresh tokens (rotated on every use), token revocation (RFC 7009;
+revoking a refresh token also invalidates the access tokens from the same
+grant) and introspection (RFC 7662), C<prompt>/C<max_age> handling including
 C<prompt=none> silent authentication, per-user remembered consent,
 RP-initiated logout, and per-client ID-token signing with key rotation.
 
@@ -64,7 +65,8 @@ C<ssoTokenLifetime>.
 =item * ssoRefreshTokenLifetime - refresh token validity in seconds (default
 2592000, 30 days). Refresh tokens are only issued to clients whose
 registration includes the C<refresh_token> grant type, and are rotated on
-every use.
+every use. The lifetime is absolute, measured from the original
+authorization: rotation does not extend it.
 
 =item * ssoConsentLifetime - how long a remembered ("remember this decision")
 consent lasts, in seconds. Default 0: remembered consents do not expire.
@@ -152,10 +154,14 @@ sub startup {
 	# id_token_hint authenticates the request, and anything else must carry the
 	# session's CSRF token or is answered with the confirmation page instead of
 	# a logout).
+	# /authorize is also exempt: OIDC Core requires the authorization endpoint
+	# to accept POST, and relying parties submit it cross-site by design. The
+	# handler itself is safe cross-site — it only ever redirects into the
+	# login/consent flow, which carries its own protections.
 	my $pt = App::Nisaba::WebUtil::install_common_startup(
 		$self,
 		app_description   => 'App::Nisaba::WebSSO (OIDC provider)',
-		csrf_exempt_paths => [ '/token', '/userinfo', '/revoke', '/introspect', '/sso/logout' ],
+		csrf_exempt_paths => [ '/authorize', '/token', '/userinfo', '/revoke', '/introspect', '/sso/logout' ],
 	);
 
 	# Flag issuer misconfiguration loudly: relying parties validate iss
@@ -206,8 +212,10 @@ sub startup {
 	# JWKS endpoint (public keys for token verification)
 	$r->get('/jwks')->to('s_s_o#jwks')->name('sso_jwks');
 
-	# Authorization endpoint
+	# Authorization endpoint. OIDC Core 3.1.2.1: the authorization endpoint
+	# MUST support both GET and POST.
 	$r->get('/authorize')->to('s_s_o#authorize')->name('sso_authorize');
+	$r->post('/authorize')->to('s_s_o#authorize')->name('sso_authorize_post');
 
 	# Login form and submission (shown during authorize when user is not authenticated)
 	$r->get('/sso/login')->to('s_s_o#login_form')->name('sso_login');

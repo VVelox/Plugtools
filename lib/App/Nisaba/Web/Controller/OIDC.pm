@@ -39,6 +39,12 @@ sub _generate_kid {
 	return random_string_from( join( '', 'a' .. 'z', '0' .. '9' ), 16 );
 }
 
+# Absolute-URI check shared by create and the add-URI update actions.
+sub _valid_absolute_uri {
+	my ($uri) = @_;
+	return defined $uri && $uri =~ m{^[A-Za-z][A-Za-z0-9+.-]*:} && $uri !~ /\s/;
+}
+
 # Generate a new RSA private key as a JWK hashref with kid/use/alg metadata.
 sub _generate_jwk {
 	my $rsa = Crypt::PK::RSA->new;
@@ -109,7 +115,7 @@ sub create {
 		return $self->redirect_to('oidc_add');
 	}
 	for my $uri (@redirectURIs) {
-		if ( $uri !~ m{^[A-Za-z][A-Za-z0-9+.-]*:} || $uri =~ /\s/ ) {
+		unless ( _valid_absolute_uri($uri) ) {
 			$self->flash( error => "Invalid redirect URI '$uri' — must be an absolute URI." );
 			return $self->redirect_to('oidc_add');
 		}
@@ -382,10 +388,17 @@ sub update {
 			}
 		);
 	} elsif ( $action eq 'redirectURI_add' ) {
+		# Same validation as create: a relative or whitespace-containing URI
+		# would never match an exact-comparison redirect check anyway.
+		my $uri = $self->param('value') // '';
+		unless ( _valid_absolute_uri($uri) ) {
+			$self->flash( error => "Invalid redirect URI '$uri' — must be an absolute URI." );
+			return $self->redirect_to( 'oidc_show', clientId => $clientId );
+		}
 		$error = $self->pt_call(
 			sub {
 				$self->pt->oidcClientAddMultiValue(
-					{ clientId => $clientId, attribute => 'oidcRedirectURI', value => $self->param('value') } );
+					{ clientId => $clientId, attribute => 'oidcRedirectURI', value => $uri } );
 			}
 		);
 	} elsif ( $action eq 'redirectURI_remove' ) {
@@ -452,13 +465,18 @@ sub update {
 			}
 		);
 	} elsif ( $action eq 'postLogoutRedirectURI_add' ) {
+		my $uri = $self->param('value') // '';
+		unless ( _valid_absolute_uri($uri) ) {
+			$self->flash( error => "Invalid post-logout redirect URI '$uri' — must be an absolute URI." );
+			return $self->redirect_to( 'oidc_show', clientId => $clientId );
+		}
 		$error = $self->pt_call(
 			sub {
 				$self->pt->oidcClientAddMultiValue(
 					{
 						clientId  => $clientId,
 						attribute => 'oidcPostLogoutRedirectURI',
-						value     => $self->param('value')
+						value     => $uri
 					}
 				);
 			}

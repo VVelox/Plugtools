@@ -57,14 +57,16 @@ sub _client_jwks_material {
 	my @keys = ( $jwks && ref $jwks->{keys} eq 'ARRAY' ) ? grep { ref $_ eq 'HASH' } @{ $jwks->{keys} } : ();
 
 	for my $jwk (@keys) {
-		# Only expose public components
-		my %public = map { $_ => $jwk->{$_} } grep { defined $jwk->{$_} } qw(kty n e kid use alg key_ops);
-		$public{use} //= 'sig';
-		push @{ $material{public_keys} }, \%public;
-
 		my $rsa = Crypt::PK::RSA->new;
 		next unless eval { $rsa->import_key($jwk); 1 };
 		push @{ $material{verify_keys} }, { kid => ( $jwk->{kid} // '' ), key => $rsa };
+
+		# Only expose public components, and only for keys that actually
+		# import: publishing a fragmentary (non-RSA / malformed) entry in the
+		# JWKS would just break relying parties' key-set parsing.
+		my %public = map { $_ => $jwk->{$_} } grep { defined $jwk->{$_} } qw(kty n e kid use alg key_ops);
+		$public{use} //= 'sig';
+		push @{ $material{public_keys} }, \%public;
 	} ## end for my $jwk (@keys)
 
 	# Sign with the first key that still has private material. Key rotation
@@ -129,9 +131,19 @@ sub discovery {
 sub jwks {
 	my $self = shift;
 
+	# A lookup failure must be a 500, not an empty key set: relying parties
+	# refetch the JWKS periodically, and a 200 with no keys during a transient
+	# LDAP failure would have them cache 'no keys' and reject valid ID tokens
+	# until their next refresh.
 	my @all_keys;
 	my $clients;
-	eval { $clients = $self->pt->getOIDCClients };
+	my $err = $self->pt_call( sub { $clients = $self->pt->getOIDCClients } );
+	if ($err) {
+		return $self->render(
+			json   => { error => 'server_error', error_description => 'Unable to resolve signing keys.' },
+			status => 500,
+		);
+	}
 	$clients //= [];
 
 	for my $entry (@$clients) {
@@ -202,6 +214,19 @@ sub authorize {
 			'Only response_type=code is supported.' );
 	}
 
+	# Bound the client-supplied opaque values. The pending request is stored
+	# in the signed session cookie, which browsers cap at ~4 KB — an oversized
+	# state or nonce would overflow the cookie and silently drop the whole
+	# session, killing the user's login rather than just this request.
+	if ( length($state) > 1024 ) {
+		return $self->_authz_error( $redirect_uri, $state, 'invalid_request',
+			'state is too long (maximum 1024 characters).' );
+	}
+	if ( length($nonce) > 512 ) {
+		return $self->_authz_error( $redirect_uri, $state, 'invalid_request',
+			'nonce is too long (maximum 512 characters).' );
+	}
+
 	# Scope must include openid
 	my @scopes = split /\s+/, $scope;
 	unless ( grep { $_ eq 'openid' } @scopes ) {
@@ -219,6 +244,14 @@ sub authorize {
 	if (@denied_scopes) {
 		return $self->_authz_error( $redirect_uri, $state, 'invalid_scope',
 			'Scope not registered for this client: ' . join( ' ', @denied_scopes ) . '.' );
+	}
+
+	# Carry the scope forward de-duplicated: a scope value's meaning is a set,
+	# and a repetitive-but-allowed scope string ('openid openid ...') must not
+	# bloat the session cookie or the stored grants.
+	{
+		my %seen_scopes;
+		$scope = join ' ', grep { !$seen_scopes{$_}++ } @scopes;
 	}
 
 	# response_mode (OAuth 2.0 Multiple Response Types): only the default
@@ -271,6 +304,13 @@ sub authorize {
 		&& $code_challenge_method ne 'plain' )
 	{
 		return $self->_authz_error( $redirect_uri, $state, 'invalid_request', 'Unsupported code_challenge_method.' );
+	}
+
+	# RFC 7636 Sections 4.1/4.2: a code_challenge is 43-128 characters from
+	# the unreserved set. Enforcing the ABNF also bounds what the pending
+	# request stores in the session cookie.
+	if ( $code_challenge ne '' && $code_challenge !~ /\A[A-Za-z0-9\-._~]{43,128}\z/ ) {
+		return $self->_authz_error( $redirect_uri, $state, 'invalid_request', 'Malformed code_challenge.' );
 	}
 
 	# OAuth 2.1 / RFC 7636: a public client cannot authenticate at the token
@@ -348,11 +388,23 @@ sub authorize {
 	$pending = {} unless ref $pending eq 'HASH';
 	$pending->{$rid} = \%authz;
 
-	# Cap the number of in-flight requests so the session cookie stays small;
-	# beyond the cap the oldest are dropped.
+	# Cap the in-flight requests so the session cookie stays under the ~4 KB
+	# browser limit: keep the newest requests, at most 5 of them, and only as
+	# many as fit a cumulative byte budget. The newest request (this one) is
+	# always kept, even when it alone exceeds the budget — the per-parameter
+	# length caps above bound how large it can be.
 	my @rids = sort { ( $pending->{$b}{seq} // 0 ) <=> ( $pending->{$a}{seq} // 0 ) }
 		grep { ref $pending->{$_} eq 'HASH' } keys %$pending;
-	delete @{$pending}{ @rids[ 5 .. $#rids ] } if @rids > 5;
+	my $cumulative_bytes = 0;
+	my %keep;
+	for my $pending_rid (@rids) {
+		my $entry_bytes = 0;
+		$entry_bytes      += length( $_ // '' ) for values %{ $pending->{$pending_rid} };
+		$cumulative_bytes += $entry_bytes;
+		last if %keep && ( keys(%keep) >= 5 || $cumulative_bytes > 2048 );
+		$keep{$pending_rid} = 1;
+	}
+	delete @{$pending}{ grep { !$keep{$_} } keys %$pending };
 	$self->session( sso_authz => $pending );
 
 	# If the user is already authenticated (and the authentication is fresh
@@ -599,11 +651,12 @@ sub logout {
 	my $state = $self->param('state')                    // '';
 	my $cid   = $self->param('client_id')                // '';
 
-	# A request authenticated by a verifiable id_token_hint can be logged out
-	# without prompting. Otherwise we must confirm with the user to prevent a
-	# malicious third party from forcing a logout via a crafted link.
+	# A request authenticated by a verifiable id_token_hint that belongs to
+	# the current session can be logged out without prompting. Otherwise we
+	# must confirm with the user to prevent a malicious third party from
+	# forcing a logout via a crafted link.
 	my $info = $self->_verify_id_token_hint($hint);
-	if ( $info && $info->{verified} ) {
+	if ( $self->_logout_hint_authorizes( $info, $cid ) ) {
 		return $self->_perform_logout( $post, $state, $info, $cid );
 	}
 
@@ -629,11 +682,11 @@ sub logout_post {
 	# /sso/logout is exempt from the app-wide CSRF middleware so relying
 	# parties may POST to the end-session endpoint cross-site (OIDC
 	# RP-Initiated Logout 1.0). That is only safe when the request
-	# authenticates itself with a verifiable id_token_hint; anything else must
-	# be our own confirmation form, which carries the session's CSRF token.
-	# A cross-site POST without either gets the confirmation page, not a
-	# logout.
-	unless ( $info && $info->{verified} ) {
+	# authenticates itself with a verifiable id_token_hint belonging to the
+	# current session; anything else must be our own confirmation form, which
+	# carries the session's CSRF token. A cross-site POST without either gets
+	# the confirmation page, not a logout.
+	unless ( $self->_logout_hint_authorizes( $info, $cid ) ) {
 		unless ( App::Nisaba::WebCSRF::token_valid($self) ) {
 			return $self->render(
 				template                 => 'sso/logout_confirm',
@@ -643,7 +696,7 @@ sub logout_post {
 				client_id                => $cid,
 			);
 		}
-	} ## end unless ( $info && $info->{verified} )
+	} ## end unless ( $self->_logout_hint_authorizes( $info...))
 
 	return $self->_perform_logout( $post, $state, $info, $cid );
 } ## end sub logout_post
@@ -717,6 +770,16 @@ sub _authenticate_client {
 		if ( defined $hdr_secret ) {
 			$hdr_secret =~ s/\+/ /g;
 			$hdr_secret = url_unescape($hdr_secret);
+		}
+		# RFC 6749 Section 2.3: a client MUST NOT use more than one
+		# authentication mechanism per request, and a client_id duplicated in
+		# the body must agree with the Authorization header's.
+		if ( $body_secret ne '' || ( $client_id ne '' && defined $hdr_id && $hdr_id ne $client_id ) ) {
+			$self->render(
+				json   => { error => 'invalid_request', error_description => 'Conflicting client authentication.' },
+				status => 400,
+			);
+			return ();
 		}
 		$client_id    = $hdr_id // $client_id;
 		$basic_secret = $hdr_secret;
@@ -882,19 +945,27 @@ sub _token_authorization_code {
 		);
 	}
 
-	my $access_token = $self->_issue_access_token( $code_data->{user}, $code_data->{scope}, $client_id );
+	# A grant_id ties every token minted from this authorization grant
+	# together, so revoking the refresh token can also invalidate the access
+	# tokens issued alongside it (RFC 7009 Section 2.1). Only minted when a
+	# refresh token will exist — without one there is nothing to cascade from.
+	my %grant_types = map { $_ => 1 } $client_entry->get_value('oidcGrantType');
+	my $grant_id    = $grant_types{refresh_token} ? random_b64url(16) : undef;
+
+	my $access_token = $self->_issue_access_token( $code_data->{user}, $code_data->{scope}, $client_id, $grant_id );
 
 	# Issue a refresh token only when the client's registration allows the
 	# refresh_token grant.
-	my %grant_types = map { $_ => 1 } $client_entry->get_value('oidcGrantType');
 	my $refresh_token;
 	if ( $grant_types{refresh_token} ) {
 		$refresh_token = $self->_issue_refresh_token(
 			{
-				user      => $code_data->{user},
-				scope     => $code_data->{scope},
-				client_id => $client_id,
-				auth_time => $code_data->{auth_time},
+				user            => $code_data->{user},
+				scope           => $code_data->{scope},
+				client_id       => $client_id,
+				auth_time       => $code_data->{auth_time},
+				grant_id        => $grant_id,
+				grant_issued_at => time(),
 			}
 		);
 	} ## end if ( $grant_types{refresh_token} )
@@ -949,8 +1020,13 @@ sub _token_refresh {
 		);
 	}
 
-	my $rt_lifetime = $self->pt->{ini}->{''}->{ssoRefreshTokenLifetime} // 2592000;
-	if ( ( time() - $rt_data->{issued_at} ) > $rt_lifetime ) {
+	# The refresh-token lifetime is absolute, measured from the original
+	# authorization grant: rotation hands out successor tokens, but must not
+	# extend the chain's life indefinitely. (grant_issued_at falls back to the
+	# token's own issued_at for records that predate the chain timestamp.)
+	my $rt_lifetime   = $self->pt->{ini}->{''}->{ssoRefreshTokenLifetime} // 2592000;
+	my $chain_started = $rt_data->{grant_issued_at}                       // $rt_data->{issued_at};
+	if ( ( time() - $chain_started ) > $rt_lifetime ) {
 		return $self->render(
 			json   => { error => 'invalid_grant', error_description => 'Refresh token expired.' },
 			status => 400,
@@ -993,16 +1069,19 @@ sub _token_refresh {
 		);
 	}
 
-	my $access_token = $self->_issue_access_token( $rt_data->{user}, $scope, $client_id );
+	my $access_token = $self->_issue_access_token( $rt_data->{user}, $scope, $client_id, $rt_data->{grant_id} );
 
 	# Rotate: the old token is already retired; hand out a successor carrying
-	# the original (un-narrowed) grant.
+	# the original (un-narrowed) grant, its grant_id, and the chain's original
+	# issue time so the absolute lifetime keeps counting.
 	my $new_refresh_token = $self->_issue_refresh_token(
 		{
-			user      => $rt_data->{user},
-			scope     => $rt_data->{scope},
-			client_id => $client_id,
-			auth_time => $rt_data->{auth_time},
+			user            => $rt_data->{user},
+			scope           => $rt_data->{scope},
+			client_id       => $client_id,
+			auth_time       => $rt_data->{auth_time},
+			grant_id        => $rt_data->{grant_id},
+			grant_issued_at => $chain_started,
 		}
 	);
 
@@ -1024,9 +1103,11 @@ sub _token_refresh {
 } ## end sub _token_refresh
 
 # Mint and store an access token. TTL is a GC backstop; UserInfo and
-# introspection enforce the protocol expiry from issued_at.
+# introspection enforce the protocol expiry from issued_at. The optional
+# grant_id links the token to its refresh-token chain for revocation
+# cascading.
 sub _issue_access_token {
-	my ( $self, $user, $scope, $client_id ) = @_;
+	my ( $self, $user, $scope, $client_id, $grant_id ) = @_;
 	my $access_token   = random_b64url(32);
 	my $token_lifetime = $self->pt->{ini}->{''}->{ssoTokenLifetime} // 3600;
 	$self->sso_storage->put(
@@ -1037,6 +1118,7 @@ sub _issue_access_token {
 			scope     => $scope,
 			client_id => $client_id,
 			issued_at => time(),
+			( defined $grant_id ? ( grant_id => $grant_id ) : () ),
 		},
 		$token_lifetime,
 	);
@@ -1072,9 +1154,21 @@ sub revoke {
 		for my $kind (qw(token refresh)) {
 			my $data = $self->sso_storage->get( $kind, $token );
 			next unless $data;
-			$self->sso_storage->delete( $kind, $token ) if ( $data->{client_id} // '' ) eq $client_id;
-		}
-	}
+			next unless ( $data->{client_id} // '' ) eq $client_id;
+			$self->sso_storage->delete( $kind, $token );
+
+			# RFC 7009 Section 2.1: revoking a refresh token SHOULD also
+			# invalidate the access tokens based on the same grant. Tokens are
+			# stored hashed and unlinked, so the cascade is a tombstone on the
+			# grant_id that UserInfo and introspection check; it only needs to
+			# outlive the longest possible remaining access-token life.
+			if ( $kind eq 'refresh' && defined $data->{grant_id} ) {
+				my $token_lifetime = $self->pt->{ini}->{''}->{ssoTokenLifetime} // 3600;
+				$self->sso_storage->put( 'revoked_grant', $data->{grant_id}, { revoked_at => time() },
+					$token_lifetime );
+			}
+		} ## end for my $kind (qw(token refresh))
+	} ## end if ( $token ne '' )
 
 	$self->res->headers->cache_control('no-store');
 	return $self->render( json => {}, status => 200 );
@@ -1128,6 +1222,12 @@ sub introspect {
 		return $self->render( json => { active => Mojo::JSON->false } );
 	}
 
+	# A token whose grant was revoked (refresh-token revocation cascades per
+	# RFC 7009 Section 2.1) is no longer active either.
+	if ( defined $data->{grant_id} && $self->sso_storage->get( 'revoked_grant', $data->{grant_id} ) ) {
+		return $self->render( json => { active => Mojo::JSON->false } );
+	}
+
 	return $self->render(
 		json => {
 			active     => Mojo::JSON->true,
@@ -1173,6 +1273,14 @@ sub userinfo {
 	# Check token expiry
 	my $token_lifetime = $self->pt->{ini}->{''}->{ssoTokenLifetime} // 3600;
 	if ( ( time() - $token_data->{issued_at} ) > $token_lifetime ) {
+		$self->sso_storage->delete( 'token', $token );
+		$self->res->headers->www_authenticate('Bearer error="invalid_token"');
+		return $self->render( json => { error => 'invalid_token' }, status => 401 );
+	}
+
+	# An access token from a revoked grant (refresh-token revocation cascades
+	# per RFC 7009 Section 2.1) is no longer valid.
+	if ( defined $token_data->{grant_id} && $self->sso_storage->get( 'revoked_grant', $token_data->{grant_id} ) ) {
 		$self->sso_storage->delete( 'token', $token );
 		$self->res->headers->www_authenticate('Bearer error="invalid_token"');
 		return $self->render( json => { error => 'invalid_token' }, status => 401 );
@@ -1381,6 +1489,27 @@ sub _verify_id_token_hint {
 		payload      => $payload,
 	};
 } ## end sub _verify_id_token_hint
+
+# Does a parsed id_token_hint authorize a logout without user confirmation?
+# Cryptographic verification alone is not enough (OIDC RP-Initiated Logout
+# 1.0): a client_id parameter, when present, MUST match the token's audience,
+# and the token must identify the End-User of the current session — any other
+# user's ID token (e.g. an attacker's own, embedded in a crafted link) gets
+# the confirmation page instead of silently forcing the victim's logout.
+sub _logout_hint_authorizes {
+	my ( $self, $info, $client_id_param ) = @_;
+	return 0 unless $info && $info->{verified};
+	return 0
+		if defined $client_id_param
+		&& $client_id_param ne ''
+		&& $client_id_param ne $info->{client_id};
+	my $session_user = $self->session('sso_user');
+	return 0
+		if defined $session_user
+		&& $session_user ne ''
+		&& ( $info->{payload}{sub} // '' ) ne $session_user;
+	return 1;
+} ## end sub _logout_hint_authorizes
 
 # Clear the SSO session and, when a post_logout_redirect_uri is supplied and is
 # registered for the resolved client, redirect there (with state). Otherwise

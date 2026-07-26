@@ -285,6 +285,62 @@ $t->get_ok(
 	'/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid+profile+email&state=xyz&nonce=n1'
 )->status_is(302)->header_like( Location => qr{/sso/login}, 'valid authorize redirects to login' );
 
+# ── Authorization: POST is supported (OIDC Core 3.1.2.1) ─────────────────────
+
+$t->post_ok(
+	'/authorize',
+	form => {
+		client_id     => 'testapp',
+		redirect_uri  => 'https://testapp.example.com/callback',
+		response_type => 'code',
+		scope         => 'openid',
+		state         => 'post1',
+	}
+)->status_is(302)->header_like( Location => qr{/sso/login}, 'POST authorize works like GET' );
+
+# ── Authorization: oversized opaque parameters are rejected ──────────────────
+# The pending request lives in the ~4 KB session cookie; unbounded state or
+# nonce would overflow it and drop the whole session.
+
+my $huge = 'x' x 1025;
+$t->get_ok( '/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback'
+		. "&response_type=code&scope=openid&state=$huge" )
+	->status_is(302)
+	->header_like( Location => qr/error=invalid_request/, 'an oversized state is rejected' );
+
+my $huge_nonce = 'x' x 513;
+$t->get_ok( '/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback'
+		. "&response_type=code&scope=openid&state=s&nonce=$huge_nonce" )
+	->status_is(302)
+	->header_like( Location => qr/error=invalid_request/, 'an oversized nonce is rejected' );
+
+# ── Authorization: malformed code_challenge (RFC 7636 ABNF) ──────────────────
+
+$t->get_ok( '/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback'
+		. '&response_type=code&scope=openid&state=cc1&code_challenge=tooshort&code_challenge_method=S256' )
+	->status_is(302)
+	->header_like( Location => qr/error=invalid_request/, 'a code_challenge shorter than 43 chars is rejected' );
+
+# ── Authorization: scope is carried de-duplicated ────────────────────────────
+# A scope's meaning is a set; repeats must not bloat the session cookie or the
+# stored grants.
+
+$t->reset_session;
+$t->get_ok( '/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback'
+		. '&response_type=code&scope=openid+openid+profile+openid&state=dd1' )->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $dd_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $dd_code,
+		client_id    => 'testapp',
+		redirect_uri => 'https://testapp.example.com/callback',
+	}
+)->status_is(200)->json_is( '/scope' => 'openid profile', 'duplicate scope values are collapsed' );
+
 # ── Login form: no authz session → error ─────────────────────────────────────
 
 # Clear session first
@@ -611,7 +667,8 @@ $t->post_ok(
 $t->reset_session;
 _install_stubs( $t->app );
 
-my $plain_verifier = 'my-plain-verifier-string';
+# RFC 7636: a code_challenge (and so a plain verifier) must be 43-128 chars.
+my $plain_verifier = 'my-plain-verifier-string-that-is-long-enough-to-satisfy-rfc7636';
 
 $t->get_ok(
 	"/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=pkce4&code_challenge=$plain_verifier&code_challenge_method=plain"
@@ -1787,6 +1844,58 @@ $t->get_ok("/sso/logout?id_token_hint=$forged&post_logout_redirect_uri=https://t
 	->status_is(200)
 	->content_like( qr/Sign Out/i, 'unsigned id_token_hint requires confirmation' );
 
+# A validly signed hint for a DIFFERENT user must not silently log the current
+# user out: an attacker can always obtain an ID token for their own account
+# and embed it in a crafted link. The victim gets the confirmation page and
+# keeps their session.
+$t->reset_session;
+_install_stubs( $t->app );
+
+# Sign hints locally with testapp's key (the same key material the provider
+# verifies against).
+my $sign_hint = sub {
+	my ($user) = @_;
+	my $hint_header = _b64url_encode('{"alg":"RS256","typ":"JWT","kid":"testapp-kid"}');
+	my $hint_payload
+		= _b64url_encode(
+			Mojo::JSON::encode_json( { iss => 'http://localhost', aud => 'testapp', sub => $user, iat => time() } ) );
+	my $hint_sig = _b64url_encode( $testapp_rsa->sign_message( "$hint_header.$hint_payload", 'SHA256', 'v1.5' ) );
+	return "$hint_header.$hint_payload.$hint_sig";
+};
+
+# Establish alice's SSO session.
+$t->get_ok(
+	'/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=fl1'
+)->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+
+# Mallory's own (validly signed) token does not force alice out.
+my $mallory_hint = $sign_hint->('mallory');
+$t->get_ok("/sso/logout?id_token_hint=$mallory_hint")
+	->status_is(200)
+	->content_like( qr/Sign Out/i, q{another user's verified hint gets the confirmation page, not a logout} );
+$t->get_ok(
+	'/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=fl2'
+	)
+	->status_is(302)
+	->header_like( Location => qr{^https://testapp\.example\.com/callback}, q{alice's session survived the attempt} );
+
+# A client_id parameter conflicting with the hint's audience also demands
+# confirmation (RP-Initiated Logout 1.0: they MUST correspond).
+my $alice_hint = $sign_hint->('alice');
+$t->get_ok("/sso/logout?id_token_hint=$alice_hint&client_id=secretapp")
+	->status_is(200)
+	->content_like( qr/Sign Out/i, 'client_id conflicting with the hint audience requires confirmation' );
+
+# The session user's own verified hint still logs out silently.
+$t->get_ok("/sso/logout?id_token_hint=$alice_hint")
+	->status_is(200)
+	->content_like( qr/signed out/i, q{the session user's own verified hint logs out without confirmation} );
+$t->get_ok(
+	'/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback&response_type=code&scope=openid&state=fl3'
+)->status_is(302)->header_like( Location => qr{/sso/login}, 'the matching hint really ended the session' );
+
 # ── Token endpoint: client resolution fails closed ──────────────────────────
 # The secret check depends on the client entry, so the token endpoint must
 # refuse to proceed when the client cannot be resolved — a lookup error is a
@@ -2722,6 +2831,80 @@ $t->post_ok( '/revoke', { Authorization => $rev_bad_basic }, form => { token => 
 	->status_is(401)
 	->json_is( '/error' => 'invalid_client', 'revocation requires valid client credentials' );
 
+# ── Revocation cascade (RFC 7009 Section 2.1) ────────────────────────────────
+# Revoking a refresh token also invalidates the access tokens minted from the
+# same grant — every generation of them, at UserInfo and introspection alike.
+
+my $grant_cas = $get_secretapp_grant->('cas1');
+$t->post_ok(
+	'/token',
+	{ Authorization => $sec_basic },
+	form => {
+		grant_type    => 'refresh_token',
+		refresh_token => $grant_cas->{refresh_token},
+	}
+)->status_is(200);
+my $grant_cas2 = $t->tx->res->json;
+
+$t->post_ok( '/revoke', { Authorization => $sec_basic }, form => { token => $grant_cas2->{refresh_token} } )
+	->status_is( 200, 'cascade: refresh token revoked' );
+$t->get_ok( '/userinfo', { Authorization => "Bearer $grant_cas2->{access_token}" } )
+	->status_is( 401, 'cascade: access token from the revoked grant dies at UserInfo' );
+$t->get_ok( '/userinfo', { Authorization => "Bearer $grant_cas->{access_token}" } )
+	->status_is( 401, 'cascade: an earlier access token from the same grant dies too' );
+$t->post_ok( '/introspect', { Authorization => $sec_basic }, form => { token => $grant_cas2->{access_token} } )
+	->status_is(200)
+	->json_is( '/active' => Mojo::JSON->false, 'cascade: access token from the revoked grant introspects inactive' );
+
+# ── Refresh-token lifetime is absolute (no sliding via rotation) ─────────────
+# A rotated successor carries the chain's original issue time; once the chain
+# is older than ssoRefreshTokenLifetime, refreshing fails even though the
+# presented token itself is younger.
+
+my $grant_abs = $get_secretapp_grant->('abs1');
+{
+	my $aged = $TEST_STORAGE->get( 'refresh', $grant_abs->{refresh_token} );
+	ok( defined $aged->{grant_issued_at}, 'refresh token records the chain start time' );
+	$aged->{grant_issued_at} = time() - 2592001;    # past the 30-day default
+	$TEST_STORAGE->put( 'refresh', $grant_abs->{refresh_token}, $aged, 3600 );
+}
+$t->post_ok(
+	'/token',
+	{ Authorization => $sec_basic },
+	form => {
+		grant_type    => 'refresh_token',
+		refresh_token => $grant_abs->{refresh_token},
+	}
+	)
+	->status_is(400)
+	->json_is( '/error' => 'invalid_grant', 'a refresh chain older than the absolute lifetime is refused' );
+
+# ── Client authentication: one method only (RFC 6749 Section 2.3) ────────────
+
+$t->post_ok(
+	'/token',
+	{ Authorization => $sec_basic },
+	form => {
+		grant_type    => 'authorization_code',
+		code          => 'whatever',
+		client_secret => 's3cret',
+	}
+	)
+	->status_is(400)
+	->json_is( '/error' => 'invalid_request', 'Basic header plus body secret is rejected as conflicting' );
+
+$t->post_ok(
+	'/token',
+	{ Authorization => $sec_basic },
+	form => {
+		grant_type => 'authorization_code',
+		code       => 'whatever',
+		client_id  => 'testapp',
+	}
+	)
+	->status_is(400)
+	->json_is( '/error' => 'invalid_request', 'body client_id conflicting with the Basic header is rejected' );
+
 # ── Token introspection (RFC 7662) ───────────────────────────────────────────
 
 my $grant3 = $get_secretapp_grant->('intro1');
@@ -3249,7 +3432,14 @@ ok( $agg_kids{'rot-new'},                     'rotated set: new key served' );
 ok( $agg_kids{'rot-old'},                     'rotated set: retained old key served' );
 ok( !( grep { defined $_->{d} } @$agg_keys ), 'no private material in the aggregated JWKS' );
 
-_install_stubs( $t->app );
+# A client lookup failure is a 500, never a 200 with an empty key set — a
+# relying party would cache 'no keys' and reject valid ID tokens.
+_install_stubs( $t->app, getOIDCClients => sub { die "LDAP unavailable\n" } );
+$t->get_ok('/jwks')
+	->status_is(500)
+	->json_is( '/error' => 'server_error', 'JWKS lookup failure answers 500, not an empty key set' );
+
+_install_stubs( $t->app, getOIDCClients => sub { return [] } );
 
 # ── Discovery: response modes ────────────────────────────────────────────────
 

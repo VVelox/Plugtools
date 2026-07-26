@@ -52,6 +52,9 @@ sub _build_app {
 my $PUB  = 'https://pub.example.com/cb';
 my $CONF = 'https://conf.example.com/cb';
 
+# A syntactically valid code_challenge (RFC 7636: 43-128 unreserved chars).
+my $CHALLENGE = 'a' x 43;
+
 sub _authorize {
 	my ( $client, $redirect, %extra ) = @_;
 	my $q = "client_id=$client&redirect_uri=$redirect&response_type=code&scope=openid";
@@ -70,17 +73,18 @@ $t->get_ok( _authorize( 'pubapp', $PUB, state => 'p1' ) )
 	->header_like( Location => qr{error=invalid_request}, 'public client without PKCE is rejected' );
 
 # Public client, S256 PKCE → allowed, proceeds to login.
-$t->get_ok( _authorize( 'pubapp', $PUB, state => 'p2', code_challenge => 'abc123', code_challenge_method => 'S256' ) )
+$t->get_ok( _authorize( 'pubapp', $PUB, state => 'p2', code_challenge => $CHALLENGE, code_challenge_method => 'S256' ) )
 	->status_is(302)
 	->header_like( Location => qr{/sso/login}, 'public client with S256 PKCE proceeds to login' );
 
 # Public client, plain PKCE → rejected (S256 required).
-$t->get_ok( _authorize( 'pubapp', $PUB, state => 'p3', code_challenge => 'abc123', code_challenge_method => 'plain' ) )
+$t->get_ok(
+	_authorize( 'pubapp', $PUB, state => 'p3', code_challenge => $CHALLENGE, code_challenge_method => 'plain' ) )
 	->status_is(302)
 	->header_like( Location => qr{error=invalid_request}, 'public client with plain PKCE is rejected' );
 
 # Public client, code_challenge but no method (defaults to plain) → rejected.
-$t->get_ok( _authorize( 'pubapp', $PUB, state => 'p4', code_challenge => 'abc123' ) )
+$t->get_ok( _authorize( 'pubapp', $PUB, state => 'p4', code_challenge => $CHALLENGE ) )
 	->status_is(302)
 	->header_like( Location => qr{error=invalid_request}, 'public client defaulting to plain is rejected' );
 

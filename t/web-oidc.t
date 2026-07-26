@@ -247,6 +247,26 @@ $t->post_ok( '/oidc/testclient',
 	form => { action => 'postLogoutRedirectURI_add', value => 'https://app.example.com/bye' } )->status_is(302);
 is( $multi_added[0]{attribute}, 'oidcPostLogoutRedirectURI', 'postLogoutRedirectURI_add targets the right attribute' );
 
+# ── update: added URIs get the same validation as create ─────────────────────
+# A relative or whitespace-containing URI would never survive the SSO
+# provider's exact-match redirect checks; refuse to store one.
+
+@multi_added = ();
+$t->post_ok( '/oidc/testclient', form => { action => 'redirectURI_add', value => '/relative/callback' } )
+	->status_is(302)
+	->header_like( Location => qr{/oidc/testclient}, 'a relative redirect URI is rejected' );
+is( scalar(@multi_added), 0, 'no value written for a relative redirect URI' );
+
+@multi_added = ();
+$t->post_ok( '/oidc/testclient',
+	form => { action => 'redirectURI_add', value => 'https://new.example.com/cb with space' } )->status_is(302);
+is( scalar(@multi_added), 0, 'no value written for a redirect URI containing whitespace' );
+
+@multi_added = ();
+$t->post_ok( '/oidc/testclient', form => { action => 'postLogoutRedirectURI_add', value => 'not-a-uri' } )
+	->status_is(302);
+is( scalar(@multi_added), 0, 'no value written for a relative post-logout redirect URI' );
+
 # ── delete ────────────────────────────────────────────────────────────────────
 
 @deleted = ();
