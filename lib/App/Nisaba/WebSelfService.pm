@@ -2,11 +2,7 @@ package App::Nisaba::WebSelfService;
 
 use Mojo::Base 'Mojolicious', -signatures;
 use experimental 'signatures';    # redundant at runtime; here so perlcritic recognises signatures
-use App::Nisaba;
-use App::Nisaba::WebSecret;
-use App::Nisaba::WebCSRF;
 use App::Nisaba::WebUtil ();
-use File::ShareDir 'dist_dir';
 
 =head1 NAME
 
@@ -41,49 +37,11 @@ routes.
 =cut
 
 sub startup ($self) {
-	my $share = dist_dir('App-Nisaba');
-
-	$self->renderer->paths( ["$share/templates"] );
-	$self->static->paths( ["$share/public"] );
-
-	# Instantiate App::Nisaba
-	my $config_file = $ENV{NISABA_CONFIG};
-	my $pt          = App::Nisaba->new( defined($config_file) ? { config => $config_file } : () );
-
-	# Session secret — from config or NISABA_SECRET. Refuses to start rather
-	# than sign sessions with a predictable default (see App::Nisaba::WebSecret).
-	$self->secrets(
-		[
-			App::Nisaba::WebSecret::resolve(
-				configured => $pt->{ini}->{''}->{websecret},
-				env        => $ENV{NISABA_SECRET},
-				app        => 'App::Nisaba::WebSelfService (self-service portal)',
-			)
-		]
-	);
-
-	# Harden the session cookie: SameSite=Lax (explicit) and Secure (HTTPS-only).
-	# Secure is on by default; disable it for plain-HTTP development or testing
-	# with cookieSecure=0 in the config or NISABA_COOKIE_SECURE=0 in the env.
-	$self->sessions->samesite('Lax');
-	my $cookie_secure = $pt->{ini}->{''}->{cookieSecure} // $ENV{NISABA_COOKIE_SECURE} // 1;
-	$self->sessions->secure( $cookie_secure ? 1 : 0 );
-
-	# Helper to access the App::Nisaba instance
-	$self->helper( pt => sub { $pt } );
-
-	# Helper to call a pt method and return an error string (empty = success)
-	$self->helper(
-		pt_call => sub {
-			my ( $c, $code ) = @_;
-			eval { $code->() };
-			return $@ if $@;
-			if ( $c->pt->error ) {
-				return $c->pt->errorString || ( 'Error code ' . $c->pt->error );
-			}
-			return '';
-		}
-	);
+	# Templates, App::Nisaba instance, session secret and cookie hardening,
+	# pt/pt_call helpers, CSRF, rate limiting, and Hypnotoad tuning — shared
+	# with the other Nisaba web apps.
+	App::Nisaba::WebUtil::install_common_startup( $self,
+		app_description => 'App::Nisaba::WebSelfService (self-service portal)' );
 
 	# Helper: password reset requires SMTP configured. The reset token is HMAC'd
 	# with the session secret; that secret is now guaranteed to be an explicitly
@@ -95,25 +53,6 @@ sub startup ($self) {
 			return $c->pt->smtpAvailable;
 		}
 	);
-
-	# Helper: passkey login is available when the passkey schema is loaded
-	$self->helper(
-		passkey_login_available => sub {
-			my ($c) = @_;
-			return eval { $c->pt->passkeySchemaAvailable } ? 1 : 0;
-		}
-	);
-
-	# CSRF: reject state-changing requests whose origin isn't our own, and
-	# require the per-session synchronizer token on every such request.
-	App::Nisaba::WebCSRF::install_origin_check($self);
-	App::Nisaba::WebCSRF::install_token_check($self);
-
-	# Brute-force rate limiting for the auth endpoints.
-	App::Nisaba::WebUtil::install_rate_limiter($self);
-
-	# Production Hypnotoad tuning from nisabarc / NISABA_HYPNOTOAD_* (see rc/).
-	App::Nisaba::WebUtil::install_hypnotoad_config($self);
 
 	# Routes
 	my $r = $self->routes;

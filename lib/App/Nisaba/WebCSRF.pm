@@ -114,18 +114,7 @@ sub install_token_check {
 			return $next->() unless _is_write_method( $c->req->method );
 			return $next->() if $exempt{ $c->req->url->path->to_string };
 
-			my $expected = $c->session('csrf_token');
-
-			# Header first (the JSON fetch() endpoints have no form field),
-			# then the form parameter emitted by <%= csrf_field %>.
-			my $got = $c->req->headers->header('X-CSRF-Token');
-			$got = $c->param('csrf_token') unless defined $got && $got ne '';
-
-			unless ( defined $expected
-				&& $expected ne ''
-				&& defined $got
-				&& secure_compare( $got, $expected ) )
-			{
+			unless ( token_valid($c) ) {
 				$c->render( text => 'Forbidden: CSRF token missing or invalid', status => 403 );
 				return;    # do not call $next: halts the dispatch chain
 			}
@@ -136,6 +125,31 @@ sub install_token_check {
 
 	return 1;
 } ## end sub install_token_check
+
+=head2 token_valid
+
+    App::Nisaba::WebCSRF::token_valid($c)  or  <refuse the request>;
+
+True when the request carries the session's CSRF token and it matches. The
+token is read from the C<X-CSRF-Token> header first (the JSON C<fetch()>
+endpoints have no form field), then the C<csrf_token> form parameter emitted
+by C<< <%= csrf_field %> >>, and compared in constant time against the token
+in the signed session. This is the same check L</install_token_check> applies
+app-wide; it is exposed for handlers on CSRF-exempt paths (the SSO
+end-session endpoint) that need to apply it selectively.
+
+=cut
+
+sub token_valid {
+	my ($c) = @_;
+
+	my $expected = $c->session('csrf_token');
+
+	my $got = $c->req->headers->header('X-CSRF-Token');
+	$got = $c->param('csrf_token') unless defined $got && $got ne '';
+
+	return ( defined $expected && $expected ne '' && defined $got && secure_compare( $got, $expected ) ) ? 1 : 0;
+} ## end sub token_valid
 
 # True for HTTP methods that can change server state.
 sub _is_write_method {

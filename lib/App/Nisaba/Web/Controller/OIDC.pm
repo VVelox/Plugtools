@@ -6,16 +6,6 @@ use Crypt::PRNG  qw(random_string_from);
 use MIME::Base64 qw(encode_base64url);
 use Mojo::JSON   qw(encode_json);
 
-sub _pt_call {
-	my ( $self, $code ) = @_;
-	eval { $code->() };
-	return $@ if $@;
-	if ( $self->pt->error ) {
-		return $self->pt->errorString || ( 'Error code ' . $self->pt->error );
-	}
-	return '';
-}
-
 sub index {
 	my $self = shift;
 
@@ -173,7 +163,7 @@ sub create {
 		delete $params{$key} unless ref $params{$key} eq 'ARRAY' && @{ $params{$key} };
 	}
 
-	my $error = $self->_pt_call( sub { $self->pt->addOIDCClient( \%params ) } );
+	my $error = $self->pt_call( sub { $self->pt->addOIDCClient( \%params ) } );
 	if ($error) {
 		$self->flash( error => "Failed to add OIDC client: $error" );
 		return $self->redirect_to('oidc_add');
@@ -181,7 +171,7 @@ sub create {
 
 	# Generate and store RSA key pair for token signing
 	my $priv_jwks  = _generate_jwks();
-	my $jwks_error = $self->_pt_call(
+	my $jwks_error = $self->pt_call(
 		sub {
 			$self->pt->oidcClientUpdate(
 				{
@@ -340,7 +330,7 @@ sub update {
 
 	if ( $action eq 'regenerateSecret' ) {
 		my $new_secret = _generate_secret();
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->oidcClientUpdate(
 					{
@@ -364,7 +354,7 @@ sub update {
 		my $entry;
 		eval { $entry = $self->pt->getOIDCClientEntry( { clientId => $clientId } ) };
 		my $new_jwks = _rotate_jwks( $entry ? $entry->get_value('oidcJwks') : undef );
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->oidcClientUpdate(
 					{
@@ -380,7 +370,7 @@ sub update {
 			return $self->redirect_to( 'oidc_show', clientId => $clientId );
 		}
 	} elsif ( exists $single_attrs{$action} ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->oidcClientUpdate(
 					{
@@ -392,77 +382,77 @@ sub update {
 			}
 		);
 	} elsif ( $action eq 'redirectURI_add' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->oidcClientAddMultiValue(
 					{ clientId => $clientId, attribute => 'oidcRedirectURI', value => $self->param('value') } );
 			}
 		);
 	} elsif ( $action eq 'redirectURI_remove' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->oidcClientRemoveMultiValue(
 					{ clientId => $clientId, attribute => 'oidcRedirectURI', value => $self->param('value') } );
 			}
 		);
 	} elsif ( $action eq 'scope_add' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->oidcClientAddMultiValue(
 					{ clientId => $clientId, attribute => 'oidcScope', value => $self->param('value') } );
 			}
 		);
 	} elsif ( $action eq 'scope_remove' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->oidcClientRemoveMultiValue(
 					{ clientId => $clientId, attribute => 'oidcScope', value => $self->param('value') } );
 			}
 		);
 	} elsif ( $action eq 'grantType_add' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->oidcClientAddMultiValue(
 					{ clientId => $clientId, attribute => 'oidcGrantType', value => $self->param('value') } );
 			}
 		);
 	} elsif ( $action eq 'grantType_remove' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->oidcClientRemoveMultiValue(
 					{ clientId => $clientId, attribute => 'oidcGrantType', value => $self->param('value') } );
 			}
 		);
 	} elsif ( $action eq 'responseType_add' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->oidcClientAddMultiValue(
 					{ clientId => $clientId, attribute => 'oidcResponseType', value => $self->param('value') } );
 			}
 		);
 	} elsif ( $action eq 'responseType_remove' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->oidcClientRemoveMultiValue(
 					{ clientId => $clientId, attribute => 'oidcResponseType', value => $self->param('value') } );
 			}
 		);
 	} elsif ( $action eq 'contact_add' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->oidcClientAddMultiValue(
 					{ clientId => $clientId, attribute => 'oidcContact', value => $self->param('value') } );
 			}
 		);
 	} elsif ( $action eq 'contact_remove' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->oidcClientRemoveMultiValue(
 					{ clientId => $clientId, attribute => 'oidcContact', value => $self->param('value') } );
 			}
 		);
 	} elsif ( $action eq 'postLogoutRedirectURI_add' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->oidcClientAddMultiValue(
 					{
@@ -474,7 +464,7 @@ sub update {
 			}
 		);
 	} elsif ( $action eq 'postLogoutRedirectURI_remove' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->oidcClientRemoveMultiValue(
 					{
@@ -503,7 +493,7 @@ sub delete {
 	my $self     = shift;
 	my $clientId = $self->param('clientId');
 
-	my $error = $self->_pt_call( sub { $self->pt->deleteOIDCClient($clientId) } );
+	my $error = $self->pt_call( sub { $self->pt->deleteOIDCClient($clientId) } );
 	if ($error) {
 		$self->flash( error => "Failed to delete OIDC client '$clientId': $error" );
 		return $self->redirect_to( 'oidc_show', clientId => $clientId );

@@ -61,6 +61,8 @@ share/templates/netgroups/show.html.ep
 share/templates/oidc/add.html.ep
 share/templates/oidc/index.html.ep
 share/templates/oidc/show.html.ep
+share/templates/partials/login_card.html.ep
+share/templates/partials/totp_challenge_card.html.ep
 share/templates/selfservice/dashboard.html.ep
 share/templates/selfservice/forgot.html.ep
 share/templates/selfservice/login.html.ep

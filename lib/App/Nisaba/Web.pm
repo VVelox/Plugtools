@@ -1,10 +1,6 @@
 package App::Nisaba::Web;
 
 use Mojo::Base 'Mojolicious';
-use File::ShareDir qw(dist_dir);
-use App::Nisaba;
-use App::Nisaba::WebSecret;
-use App::Nisaba::WebCSRF;
 use App::Nisaba::WebUtil ();
 
 our $VERSION = '0.0.1';
@@ -12,68 +8,10 @@ our $VERSION = '0.0.1';
 sub startup {
 	my $self = shift;
 
-	my $share = dist_dir('App-Nisaba');
-	push @{ $self->renderer->paths }, "$share/templates";
-	push @{ $self->static->paths },   "$share/public";
-
-	# Shared App::Nisaba instance. Config path via $ENV{NISABA_CONFIG} or default.
-	my %pt_args;
-	$pt_args{config} = $ENV{NISABA_CONFIG} if $ENV{NISABA_CONFIG};
-	my $pt = App::Nisaba->new( \%pt_args );
-
-	# Session secret — from config or NISABA_SECRET. Refuses to start rather
-	# than sign sessions with a predictable default (see App::Nisaba::WebSecret).
-	$self->secrets(
-		[
-			App::Nisaba::WebSecret::resolve(
-				configured => $pt->{ini}->{''}->{websecret},
-				env        => $ENV{NISABA_SECRET},
-				app        => 'App::Nisaba::Web (admin portal)',
-			)
-		]
-	);
-
-	# Harden the session cookie: SameSite=Lax (explicit) and Secure (HTTPS-only).
-	# Secure is on by default; disable it for plain-HTTP development or testing
-	# with cookieSecure=0 in the config or NISABA_COOKIE_SECURE=0 in the env.
-	$self->sessions->samesite('Lax');
-	my $cookie_secure = $pt->{ini}->{''}->{cookieSecure} // $ENV{NISABA_COOKIE_SECURE} // 1;
-	$self->sessions->secure( $cookie_secure ? 1 : 0 );
-
-	# Helper to access the App::Nisaba instance
-	$self->helper( pt => sub { $pt } );
-
-	# Helper to call a pt method and return an error string (empty = success)
-	$self->helper(
-		pt_call => sub {
-			my ( $c, $code ) = @_;
-			eval { $code->() };
-			return $@ if $@;
-			if ( $c->pt->error ) {
-				return $c->pt->errorString || ( 'Error code ' . $c->pt->error );
-			}
-			return '';
-		}
-	);
-
-	# Helper: passkey login is available when the passkey schema is loaded
-	$self->helper(
-		passkey_login_available => sub {
-			my ($c) = @_;
-			return eval { $c->pt->passkeySchemaAvailable } ? 1 : 0;
-		}
-	);
-
-	# CSRF: reject state-changing requests whose origin isn't our own, and
-	# require the per-session synchronizer token on every such request.
-	App::Nisaba::WebCSRF::install_origin_check($self);
-	App::Nisaba::WebCSRF::install_token_check($self);
-
-	# Brute-force rate limiting for the auth endpoints.
-	App::Nisaba::WebUtil::install_rate_limiter($self);
-
-	# Production Hypnotoad tuning from nisabarc / NISABA_HYPNOTOAD_* (see rc/).
-	App::Nisaba::WebUtil::install_hypnotoad_config($self);
+	# Templates, App::Nisaba instance, session secret and cookie hardening,
+	# pt/pt_call helpers, CSRF, rate limiting, and Hypnotoad tuning — shared
+	# with the other Nisaba web apps.
+	App::Nisaba::WebUtil::install_common_startup( $self, app_description => 'App::Nisaba::Web (admin portal)' );
 
 	my $r = $self->routes;
 

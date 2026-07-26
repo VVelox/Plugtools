@@ -1,0 +1,22 @@
+%# Shared TOTP challenge card used by the admin, self-service, and SSO portals.
+%# Parameters (passed as include locals):
+%#   totp_post_url - form action for the TOTP code POST
+%#   card_class    - optional extra classes for the card div
+<div class="card border-secondary<%= stash('card_class') ? ' ' . stash('card_class') : '' %>">
+  <div class="card-header text-danger fw-bold">Two-Factor Authentication</div>
+  <div class="card-body">
+    <p class="text-secondary small mb-3">
+      Enter the 6-digit code from your authenticator app to continue.
+    </p>
+    <form method="post" action="<%= $totp_post_url %>">
+      <%= csrf_field %>
+      <div class="mb-3">
+        <label class="form-label" for="code">Authenticator Code</label>
+        <input type="text" class="form-control" id="code" name="code"
+               pattern="\d{6,8}" maxlength="8" required autofocus
+               autocomplete="one-time-code" inputmode="numeric" placeholder="6-digit code">
+      </div>
+      <button type="submit" class="btn btn-danger w-100">Verify</button>
+    </form>
+  </div>
+</div>

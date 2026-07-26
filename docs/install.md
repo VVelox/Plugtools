@@ -4,8 +4,7 @@
 
 Declared in Makefile.PL. The notable ones...
 
-- `Net::LDAP` (perl-ldap) with `Net::LDAP::posixAccount`,
-  `Net::LDAP::posixGroup`, and the SetPassword extension
+- `Net::LDAP` (perl-ldap) with the SetPassword extension
 - `Config::IniHash` and `File::BaseDir` for the config
 - `Mojolicious` >= 9.0 and `File::ShareDir` for the web apps
 - `DBI` + `DBD::SQLite` for the rate limiter and the SSO grant store

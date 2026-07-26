@@ -2,19 +2,6 @@ package App::Nisaba::Web::Controller::Users;
 
 use Mojo::Base 'Mojolicious::Controller';
 
-# Invoke a coderef that calls a pt method.  Returns an error string if the
-# call died OR if the pt helper recorded an Error::Helper error, empty string
-# on success.  This covers both die-based and return-undef-based failures.
-sub _pt_call {
-	my ( $self, $code ) = @_;
-	eval { $code->() };
-	return $@ if $@;
-	if ( $self->pt->error ) {
-		return $self->pt->errorString || ( 'Error code ' . $self->pt->error );
-	}
-	return '';
-}
-
 sub index {
 	my $self = shift;
 
@@ -42,7 +29,7 @@ sub create {
 	# Remove empty strings so App::Nisaba uses its defaults
 	delete $params{$_} for grep { !defined $params{$_} || $params{$_} eq '' } keys %params;
 
-	my $error = $self->_pt_call( sub { $self->pt->addUser( \%params ) } );
+	my $error = $self->pt_call( sub { $self->pt->addUser( \%params ) } );
 	if ($error) {
 		$self->flash( error => "Failed to add user: $error" );
 		return $self->redirect_to('users_add');
@@ -153,100 +140,100 @@ sub update {
 
 	my $error;
 	if ( $action eq 'gecos' ) {
-		$error = $self->_pt_call(
-			sub { $self->pt->userGECOSchange( { user => $user, gecos => $self->param('gecos') } ) } );
+		$error
+			= $self->pt_call( sub { $self->pt->userGECOSchange( { user => $user, gecos => $self->param('gecos') } ) } );
 	} elsif ( $action eq 'shell' ) {
-		$error = $self->_pt_call(
-			sub { $self->pt->userShellChange( { user => $user, shell => $self->param('shell') } ) } );
+		$error
+			= $self->pt_call( sub { $self->pt->userShellChange( { user => $user, shell => $self->param('shell') } ) } );
 	} elsif ( $action eq 'uid' ) {
-		$error = $self->_pt_call( sub { $self->pt->userUIDchange( { user => $user, uid => $self->param('uid') } ) } );
+		$error = $self->pt_call( sub { $self->pt->userUIDchange( { user => $user, uid => $self->param('uid') } ) } );
 	} elsif ( $action eq 'gid' ) {
-		$error = $self->_pt_call( sub { $self->pt->userGIDchange( { user => $user, gid => $self->param('gid') } ) } );
+		$error = $self->pt_call( sub { $self->pt->userGIDchange( { user => $user, gid => $self->param('gid') } ) } );
 	} elsif ( $action eq 'home' ) {
 		$error
-			= $self->_pt_call( sub { $self->pt->userHomeChange( { user => $user, home => $self->param('home') } ) } );
+			= $self->pt_call( sub { $self->pt->userHomeChange( { user => $user, home => $self->param('home') } ) } );
 	} elsif ( $action eq 'title' ) {
-		$error = $self->_pt_call(
-			sub { $self->pt->userTitleChange( { user => $user, title => $self->param('title') } ) } );
+		$error
+			= $self->pt_call( sub { $self->pt->userTitleChange( { user => $user, title => $self->param('title') } ) } );
 	} elsif ( $action eq 'roomNumber' ) {
 		$error
-			= $self->_pt_call(
+			= $self->pt_call(
 				sub { $self->pt->userRoomNumberChange( { user => $user, roomNumber => $self->param('roomNumber') } ) }
 			);
 	} elsif ( $action eq 'employeeNumber' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->userEmployeeNumberChange(
 					{ user => $user, employeeNumber => $self->param('employeeNumber') } );
 			}
 		);
 	} elsif ( $action eq 'employeeType' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->userEmployeeTypeChange(
 					{ user => $user, employeeType => $self->param('employeeType') } );
 			}
 		);
 	} elsif ( $action eq 'mail_add' ) {
-		$error = $self->_pt_call( sub { $self->pt->userMailAdd( { user => $user, mail => $self->param('mail') } ) } );
+		$error = $self->pt_call( sub { $self->pt->userMailAdd( { user => $user, mail => $self->param('mail') } ) } );
 	} elsif ( $action eq 'mail_remove' ) {
 		$error
-			= $self->_pt_call( sub { $self->pt->userMailRemove( { user => $user, mail => $self->param('mail') } ) } );
+			= $self->pt_call( sub { $self->pt->userMailRemove( { user => $user, mail => $self->param('mail') } ) } );
 	} elsif ( $action eq 'telephoneNumber_add' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->userTelephoneNumberAdd(
 					{ user => $user, telephoneNumber => $self->param('telephoneNumber') } );
 			}
 		);
 	} elsif ( $action eq 'telephoneNumber_remove' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->userTelephoneNumberRemove(
 					{ user => $user, telephoneNumber => $self->param('telephoneNumber') } );
 			}
 		);
 	} elsif ( $action eq 'mobile_add' ) {
-		$error = $self->_pt_call(
-			sub { $self->pt->userMobileAdd( { user => $user, mobile => $self->param('mobile') } ) } );
+		$error
+			= $self->pt_call( sub { $self->pt->userMobileAdd( { user => $user, mobile => $self->param('mobile') } ) } );
 	} elsif ( $action eq 'mobile_remove' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub { $self->pt->userMobileRemove( { user => $user, mobile => $self->param('mobile') } ) } );
 	} elsif ( $action eq 'preferredLanguage_add' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->userPreferredLanguageAdd(
 					{ user => $user, preferredLanguage => $self->param('preferredLanguage') } );
 			}
 		);
 	} elsif ( $action eq 'preferredLanguage_remove' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->userPreferredLanguageRemove(
 					{ user => $user, preferredLanguage => $self->param('preferredLanguage') } );
 			}
 		);
 	} elsif ( $action eq 'labeledURI_add' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub { $self->pt->userLabeledURIAdd( { user => $user, labeledURI => $self->param('labeledURI') } ) } );
 	} elsif ( $action eq 'labeledURI_remove' ) {
 		$error
-			= $self->_pt_call(
+			= $self->pt_call(
 				sub { $self->pt->userLabeledURIRemove( { user => $user, labeledURI => $self->param('labeledURI') } ) }
 			);
 	} elsif ( $action eq 'sn' ) {
-		$error = $self->_pt_call( sub { $self->pt->userSNchange( { user => $user, sn => $self->param('sn') } ) } );
+		$error = $self->pt_call( sub { $self->pt->userSNchange( { user => $user, sn => $self->param('sn') } ) } );
 	} elsif ( $action eq 'givenName' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub { $self->pt->userGivenNameChange( { user => $user, givenName => $self->param('givenName') } ) } );
 	} elsif ( $action eq 'displayName' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->userDisplayNameChange( { user => $user, displayName => $self->param('displayName') } );
 			}
 		);
 	} elsif ( $action eq 'homePostalAddress' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->userHomePostalAddressChange(
 					{ user => $user, homePostalAddress => $self->param('homePostalAddress') } );
@@ -254,65 +241,65 @@ sub update {
 		);
 	} elsif ( $action eq 'description_add' ) {
 		$error
-			= $self->_pt_call(
+			= $self->pt_call(
 				sub { $self->pt->userDescriptionAdd( { user => $user, description => $self->param('description') } ) }
 			);
 	} elsif ( $action eq 'description_remove' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->userDescriptionRemove( { user => $user, description => $self->param('description') } );
 			}
 		);
 	} elsif ( $action eq 'postalAddress_add' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->userPostalAddressAdd(
 					{ user => $user, postalAddress => $self->param('postalAddress') } );
 			}
 		);
 	} elsif ( $action eq 'postalAddress_remove' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->userPostalAddressRemove(
 					{ user => $user, postalAddress => $self->param('postalAddress') } );
 			}
 		);
 	} elsif ( $action eq 'cn_add' ) {
-		$error = $self->_pt_call( sub { $self->pt->userCNadd( { user => $user, cn => $self->param('cn') } ) } );
+		$error = $self->pt_call( sub { $self->pt->userCNadd( { user => $user, cn => $self->param('cn') } ) } );
 	} elsif ( $action eq 'cn_remove' ) {
-		$error = $self->_pt_call( sub { $self->pt->userCNremove( { user => $user, cn => $self->param('cn') } ) } );
+		$error = $self->pt_call( sub { $self->pt->userCNremove( { user => $user, cn => $self->param('cn') } ) } );
 	} elsif ( $action eq 'sshkey_add' ) {
 		my $key = $self->param('key') // '';
 		$key =~ s/[\r\n]+//g;    # an SSH public key is one line; drop any newlines
-		$error = $self->_pt_call( sub { $self->pt->userSSHPublicKeyAdd( { user => $user, key => $key } ) } );
+		$error = $self->pt_call( sub { $self->pt->userSSHPublicKeyAdd( { user => $user, key => $key } ) } );
 	} elsif ( $action eq 'sshkey_remove' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub { $self->pt->userSSHPublicKeyRemove( { user => $user, key => $self->param('key') } ) } );
 	} elsif ( $action eq 'totp_secret_remove' ) {
-		$error = $self->_pt_call( sub { $self->pt->userTotpSecretRemove( { user => $user } ) } );
+		$error = $self->pt_call( sub { $self->pt->userTotpSecretRemove( { user => $user } ) } );
 	} elsif ( $action eq 'totp_status' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub { $self->pt->userTotpStatusSet( { user => $user, status => $self->param('status') } ) } );
 	} elsif ( $action eq 'totp_algorithm' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub { $self->pt->userTotpAlgorithmSet( { user => $user, algorithm => $self->param('algorithm') } ) } );
 	} elsif ( $action eq 'totp_period' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub { $self->pt->userTotpPeriodSet( { user => $user, period => $self->param('period') } ) } );
 	} elsif ( $action eq 'totp_digits' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub { $self->pt->userTotpDigitsSet( { user => $user, digits => $self->param('digits') } ) } );
 	} elsif ( $action eq 'totp_secret' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub { $self->pt->userTotpSecretSet( { user => $user, secret => $self->param('secret') } ) } );
 	} elsif ( $action eq 'totp_enrolled_now' ) {
-		$error = $self->_pt_call( sub { $self->pt->userTotpEnrolledDateSet( { user => $user } ) } );
+		$error = $self->pt_call( sub { $self->pt->userTotpEnrolledDateSet( { user => $user } ) } );
 	} elsif ( $action eq 'totp_scratch_add' ) {
 		unless ( $self->pt->{ini}->{''}->{totpAdminAddScratchCodes} ) {
 			$self->flash( error => 'Adding scratch codes via the admin portal is disabled.' );
 			return $self->redirect_to( 'users_show', user => $user );
 		}
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub { $self->pt->userTotpScratchCodeAdd( { user => $user, code => $self->param('code') } ) } );
 	} else {
 		$self->flash( error => "Unknown action: $action" );
@@ -335,7 +322,7 @@ sub delete {
 	my $removeGroup = $self->param('removeGroup') // 1;
 
 	my $error
-		= $self->_pt_call(
+		= $self->pt_call(
 			sub { $self->pt->deleteUser( { user => $user, removeHome => $removeHome, removeGroup => $removeGroup } ) }
 		);
 	if ($error) {
@@ -351,7 +338,7 @@ sub inetorgperson {
 	my $self = shift;
 	my $user = $self->param('user');
 
-	my $error = $self->_pt_call( sub { $self->pt->userConvertToInetOrgPerson( { user => $user } ) } );
+	my $error = $self->pt_call( sub { $self->pt->userConvertToInetOrgPerson( { user => $user } ) } );
 	if ($error) {
 		$self->flash( error => "Failed to convert '$user' to inetOrgPerson: $error" );
 		return $self->redirect_to( 'users_show', user => $user );
@@ -365,7 +352,7 @@ sub totp {
 	my $self = shift;
 	my $user = $self->param('user');
 
-	my $error = $self->_pt_call( sub { $self->pt->userConvertToTotp( { user => $user } ) } );
+	my $error = $self->pt_call( sub { $self->pt->userConvertToTotp( { user => $user } ) } );
 	if ($error) {
 		$self->flash( error => "Failed to enable TOTP for '$user': $error" );
 		return $self->redirect_to( 'users_show', user => $user );
@@ -380,7 +367,7 @@ sub totp_generate {
 	my $user = $self->param('user');
 
 	my $secret;
-	my $error = $self->_pt_call( sub { $secret = $self->pt->userTotpGenerateSecret( { user => $user } ) } );
+	my $error = $self->pt_call( sub { $secret = $self->pt->userTotpGenerateSecret( { user => $user } ) } );
 	if ($error) {
 		$self->flash( error => "Failed to generate TOTP secret for '$user': $error" );
 		return $self->redirect_to( 'users_show', user => $user );
@@ -396,14 +383,14 @@ sub totp_verify {
 	my $code = $self->param('code') // '';
 
 	my $ok;
-	my $error = $self->_pt_call( sub { $ok = $self->pt->userTotpVerify( { user => $user, code => $code } ) } );
+	my $error = $self->pt_call( sub { $ok = $self->pt->userTotpVerify( { user => $user, code => $code } ) } );
 	if ( $error || !$ok ) {
 		$self->flash( error => "TOTP verification failed for '$user'. Please try again." );
 		return $self->redirect_to( 'users_show', user => $user );
 	}
 
-	$self->_pt_call( sub { $self->pt->userTotpStatusSet( { user => $user, status => 'active' } ) } );
-	$self->_pt_call( sub { $self->pt->userTotpEnrolledDateSet( { user => $user } ) } );
+	$self->pt_call( sub { $self->pt->userTotpStatusSet( { user => $user, status => 'active' } ) } );
+	$self->pt_call( sub { $self->pt->userTotpEnrolledDateSet( { user => $user } ) } );
 
 	$self->flash( success => "TOTP verified and activated for '$user'." );
 	$self->redirect_to( 'users_show', user => $user );
@@ -413,7 +400,7 @@ sub lpk {
 	my $self = shift;
 	my $user = $self->param('user');
 
-	my $error = $self->_pt_call( sub { $self->pt->userConvertToLdapPublicKey( { user => $user } ) } );
+	my $error = $self->pt_call( sub { $self->pt->userConvertToLdapPublicKey( { user => $user } ) } );
 	if ($error) {
 		$self->flash( error => "Failed to add ldapPublicKey objectClass to '$user': $error" );
 		return $self->redirect_to( 'users_show', user => $user );
@@ -427,7 +414,7 @@ sub password {
 	my $self = shift;
 	my $user = $self->param('user');
 
-	my $error = $self->_pt_call( sub { $self->pt->userSetPass( { user => $user, pass => $self->param('pass') } ) } );
+	my $error = $self->pt_call( sub { $self->pt->userSetPass( { user => $user, pass => $self->param('pass') } ) } );
 	if ($error) {
 		$self->flash( error => "Failed to set password for '$user': $error" );
 		return $self->redirect_to( 'users_show', user => $user );
@@ -441,7 +428,7 @@ sub remove_password {
 	my $self = shift;
 	my $user = $self->param('user');
 
-	my $error = $self->_pt_call( sub { $self->pt->userRemovePassword( { user => $user } ) } );
+	my $error = $self->pt_call( sub { $self->pt->userRemovePassword( { user => $user } ) } );
 	if ($error) {
 		$self->flash( error => "Failed to remove password for '$user': $error" );
 		return $self->redirect_to( 'users_show', user => $user );
@@ -455,7 +442,7 @@ sub passkey_enable {
 	my $self = shift;
 	my $user = $self->param('user');
 
-	my $error = $self->_pt_call( sub { $self->pt->userConvertToPasskeyUser( { user => $user } ) } );
+	my $error = $self->pt_call( sub { $self->pt->userConvertToPasskeyUser( { user => $user } ) } );
 	if ($error) {
 		$self->flash( error => "Failed to enable passkey storage for '$user': $error" );
 		return $self->redirect_to( 'users_show', user => $user );
@@ -470,7 +457,7 @@ sub passkey_remove {
 	my $user          = $self->param('user');
 	my $credential_id = $self->param('credentialId');
 
-	my $error = $self->_pt_call(
+	my $error = $self->pt_call(
 		sub { $self->pt->userPasskeyCredentialRemove( { user => $user, credentialId => $credential_id } ) } );
 	if ($error) {
 		$self->flash( error => "Failed to remove passkey for '$user': $error" );
@@ -488,7 +475,7 @@ sub add_to_group {
 
 	my ( @added, @failed );
 	for my $group (@groups) {
-		my $err = $self->_pt_call( sub { $self->pt->groupAddUser( { user => $user, group => $group } ) } );
+		my $err = $self->pt_call( sub { $self->pt->groupAddUser( { user => $user, group => $group } ) } );
 		if ($err) {
 			push @failed, $group;
 		} else {
@@ -510,7 +497,7 @@ sub remove_from_group {
 	my $user  = $self->param('user');
 	my $group = $self->param('group');
 
-	my $error = $self->_pt_call( sub { $self->pt->groupRemoveUser( { user => $user, group => $group } ) } );
+	my $error = $self->pt_call( sub { $self->pt->groupRemoveUser( { user => $user, group => $group } ) } );
 	if ($error) {
 		$self->flash( error => "Failed to remove '$user' from group '$group': $error" );
 		return $self->redirect_to( 'users_show', user => $user );

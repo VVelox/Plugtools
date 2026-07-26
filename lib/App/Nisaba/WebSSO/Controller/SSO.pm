@@ -7,47 +7,12 @@ use Mojo::JSON   qw(decode_json);
 use MIME::Base64 ();
 use Digest::SHA  qw(sha256);
 use Crypt::PK::RSA;
-use Crypt::PRNG          qw(random_bytes);
-use App::Nisaba::WebUtil qw(secure_compare);
+use App::Nisaba::WebUtil qw(secure_compare random_b64url b64url_encode b64url_decode);
+use App::Nisaba::WebCSRF ();
 
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
-
-sub _pt_call {
-	my ( $self, $code ) = @_;
-	eval { $code->() };
-	return $@ if $@;
-	if ( $self->pt->error ) {
-		return $self->pt->errorString || ( 'Error code ' . $self->pt->error );
-	}
-	return '';
-}
-
-# Generate a random base64url string. Crypt::PRNG croaks rather than
-# returning weak/short output if the underlying entropy source fails.
-sub _random_b64url {
-	my ($len) = @_;
-	$len //= 32;
-	return _b64url_encode( random_bytes($len) );
-}
-
-# Base64url encode without padding
-sub _b64url_encode {
-	my ($data) = @_;
-	my $b64 = MIME::Base64::encode_base64( $data, '' );
-	$b64 =~ tr|+/|-_|;
-	$b64 =~ s/=+$//;
-	return $b64;
-}
-
-# Base64url decode
-sub _b64url_decode {
-	my ($b64u) = @_;
-	$b64u =~ tr|-_|+/|;
-	while ( length($b64u) % 4 ) { $b64u .= '=' }
-	return MIME::Base64::decode_base64($b64u);
-}
 
 # --------------------------------------------------------------------------- #
 # OIDC Discovery
@@ -141,7 +106,7 @@ sub authorize {
 
 	# Look up the client
 	my $client_entry;
-	my $err = $self->_pt_call( sub { $client_entry = $self->pt->getOIDCClientEntry( { clientId => $client_id } ) } );
+	my $err = $self->pt_call( sub { $client_entry = $self->pt->getOIDCClientEntry( { clientId => $client_id } ) } );
 	if ( $err || !$client_entry ) {
 		return $self->render(
 			template          => 'sso/error',
@@ -321,7 +286,7 @@ sub authorize {
 	$self->session( sso_authz_seq => $seq );
 	$authz{seq} = $seq;
 
-	my $rid     = _random_b64url(16);
+	my $rid     = random_b64url(16);
 	my $pending = $self->session('sso_authz');
 	$pending = {} unless ref $pending eq 'HASH';
 	$pending->{$rid} = \%authz;
@@ -362,36 +327,45 @@ sub login_form {
 	$self->render( template => 'sso/login', layout => 'sso' );
 } ## end sub login_form
 
+# Where the shared login flows (App::Nisaba::WebUtil) keep this app's session
+# state and where each step navigates next.
+sub _login_flow_callbacks {
+	my ( $self, $rid ) = @_;
+	return (
+		set_totp_pending => sub { my ( $c, $user ) = @_; $c->session( sso_totp_pending_user => $user ) },
+		set_logged_in    => sub {
+			my ( $c, $user ) = @_;
+			delete $c->session->{sso_totp_pending_user};
+			$c->session( sso_user      => $user );
+			$c->session( sso_auth_time => time() );
+		},
+		goto_totp_challenge => sub {
+			my ($c) = @_;
+			$c->redirect_to( $c->url_for('sso_totp_challenge')->query( rid => $rid // '' ) );
+		},
+		goto_logged_in => sub {
+			my ($c) = @_;
+			my ( undef, $authz ) = $c->_pending_authz;
+			return $c->_advance_authz( $rid, $authz ) if defined $rid && $authz;
+			$c->redirect_to( $c->url_for('sso_consent')->query( rid => $rid // '' ) );
+		},
+	);
+} ## end sub _login_flow_callbacks
+
 sub login {
-	my $self  = shift;
-	my $user  = $self->param('user') // '';
-	my $pass  = $self->param('pass') // '';
+	my $self = shift;
 	my ($rid) = $self->_pending_authz;
 	$self->stash( sso_rid => $rid // '' );
 
-	return unless $self->rate_guard( 'login', user => $user, render => { template => 'sso/login', layout => 'sso' } );
-
-	my $err = $self->_pt_call( sub { $self->pt->userVerifyPassword( { user => $user, password => $pass } ) } );
-	if ($err) {
-		$self->rate_fail( 'login', user => $user );
-		$self->flash( error => 'Invalid username or password.' );
-		return $self->redirect_to( $self->url_for('sso_login')->query( rid => $rid // '' ) );
-	}
-	$self->rate_reset( 'login', user => $user );
-
-	# Check whether TOTP is active for this user
-	my $info;
-	$self->_pt_call( sub { $info = $self->pt->userSelfInfo( { user => $user } ) } );
-	if ( $info && ( $info->{totpStatus} // '' ) eq 'active' ) {
-		$self->session( sso_totp_pending_user => $user );
-		return $self->redirect_to( $self->url_for('sso_totp_challenge')->query( rid => $rid // '' ) );
-	}
-
-	$self->session( sso_user      => $user );
-	$self->session( sso_auth_time => time() );
-	my ( undef, $authz ) = $self->_pending_authz;
-	return $self->_advance_authz( $rid, $authz ) if defined $rid && $authz;
-	$self->redirect_to( $self->url_for('sso_consent')->query( rid => $rid // '' ) );
+	App::Nisaba::WebUtil::handle_password_login(
+		$self,
+		$self->_login_flow_callbacks($rid),
+		render_block   => { template => 'sso/login', layout => 'sso' },
+		redirect_login => sub {
+			my ($c) = @_;
+			$c->redirect_to( $c->url_for('sso_login')->query( rid => $rid // '' ) );
+		},
+	);
 } ## end sub login
 
 # --------------------------------------------------------------------------- #
@@ -400,118 +374,17 @@ sub login {
 
 sub passkey_login_start {
 	my $self = shift;
-
-	my $challenge_b64 = _random_b64url(32);
-	$self->session( sso_passkey_login_challenge => $challenge_b64 );
-
-	my $rp_id = $self->pt->{ini}->{''}->{passkeyRpId}             || $self->req->url->to_abs->host;
-	my $uv    = $self->pt->{ini}->{''}->{passkeyUserVerification} || 'preferred';
-
-	$self->render(
-		json => {
-			challenge        => $challenge_b64,
-			rpId             => $rp_id,
-			userVerification => $uv,
-			allowCredentials => [],
-			timeout          => 60000,
-		}
-	);
-} ## end sub passkey_login_start
+	App::Nisaba::WebUtil::handle_passkey_login_start( $self, challenge_session_key => 'sso_passkey_login_challenge' );
+}
 
 sub passkey_login_finish {
 	my $self = shift;
-
-	return unless $self->rate_guard( 'passkey', render => { json => 1 } );
-
-	my $challenge_b64 = $self->session('sso_passkey_login_challenge');
-	unless ($challenge_b64) {
-		return $self->render( json => { error => 'No login in progress' }, status => 400 );
-	}
-	delete $self->session->{sso_passkey_login_challenge};
-
-	my $body = $self->req->json;
-	unless ( $body && ref $body->{response} eq 'HASH' ) {
-		return $self->render( json => { error => 'Invalid request body' }, status => 400 );
-	}
-
-	my $credential_id = $body->{id} // '';
-	unless ($credential_id) {
-		return $self->render( json => { error => 'Missing credential ID' }, status => 400 );
-	}
-
-	my $found;
-	my $find_err = $self->_pt_call(
-		sub { $found = $self->pt->userPasskeyFindByCredentialId( { credentialId => $credential_id } ) } );
-	if ( $find_err || !$found ) {
-		return $self->render( json => { error => 'Unknown passkey' }, status => 401 );
-	}
-
-	my $user = $found->{user};
-	my $cred = $found->{credential};
-
-	my $url    = $self->req->url->to_abs;
-	my $rp_id  = $self->pt->{ini}->{''}->{passkeyRpId}             || $url->host;
-	my $uv     = $self->pt->{ini}->{''}->{passkeyUserVerification} || 'preferred';
-	my $origin = $url->scheme . '://' . $url->host;
-	my $port   = $url->port;
-	$origin .= ":$port"
-		if $port
-		&& !( ( $url->scheme eq 'https' && $port == 443 ) || ( $url->scheme eq 'http' && $port == 80 ) );
-
-	my $wa = eval { require Authen::WebAuthn; Authen::WebAuthn->new( rp_id => $rp_id, origin => $origin ) };
-	unless ($wa) {
-		return $self->render(
-			json   => { error => 'WebAuthn not available on this server' },
-			status => 501,
-		);
-	}
-
-	my $result = eval {
-		$wa->validate_assertion(
-			challenge_b64          => $challenge_b64,
-			credential_pubkey_b64  => $cred->{cosePublicKey},
-			stored_sign_count      => $cred->{signCount},
-			requested_uv           => $uv,
-			client_data_json_b64   => $body->{response}{clientDataJSON},
-			authenticator_data_b64 => $body->{response}{authenticatorData},
-			signature_b64          => $body->{response}{signature},
-			user_handle_b64        => $body->{response}{userHandle},
-			token_binding_id_b64   => undef,
-		);
-	};
-	if ($@) {
-		( my $msg = $@ ) =~ s/ at \S+ line \d+\.?\s*$//;
-		$self->rate_fail('passkey');
-		return $self->render( json => { error => "Verification failed: $msg" }, status => 401 );
-	}
-	$self->rate_reset('passkey');
-
-	# Update sign count (best-effort)
-	$self->_pt_call(
-		sub {
-			$self->pt->userPasskeyCredentialUpdate(
-				{
-					user         => $user,
-					credentialId => $credential_id,
-					signCount    => $result->{sign_count} // $cred->{signCount},
-					backupState  => ( $result->{bs} // 0 ) ? 'TRUE' : 'FALSE',
-				}
-			);
-		}
+	App::Nisaba::WebUtil::handle_passkey_login_finish(
+		$self,
+		$self->_login_flow_callbacks(undef),
+		challenge_session_key => 'sso_passkey_login_challenge'
 	);
-
-	# Check whether TOTP is also required
-	my $info;
-	$self->_pt_call( sub { $info = $self->pt->userSelfInfo( { user => $user } ) } );
-	if ( $info && ( $info->{totpStatus} // '' ) eq 'active' ) {
-		$self->session( sso_totp_pending_user => $user );
-		return $self->render( json => { ok => 1, totp_required => 1 } );
-	}
-
-	$self->session( sso_user      => $user );
-	$self->session( sso_auth_time => time() );
-	$self->render( json => { ok => 1 } );
-} ## end sub passkey_login_finish
+}
 
 # --------------------------------------------------------------------------- #
 # TOTP challenge
@@ -536,30 +409,16 @@ sub totp_challenge {
 		return $self->redirect_to( $self->url_for('sso_login')->query( rid => $rid // '' ) );
 	}
 
-	return
-		unless $self->rate_guard(
-			'totp',
-			user   => $user,
-			render => { template => 'sso/totp_challenge', layout => 'sso' }
-		);
-
-	my $code = $self->param('code') // '';
-
-	my $ok;
-	my $err = $self->_pt_call( sub { $ok = $self->pt->userTotpVerify( { user => $user, code => $code } ) } );
-	if ( $err || !$ok ) {
-		$self->rate_fail( 'totp', user => $user );
-		$self->flash( error => 'Invalid TOTP code. Please try again.' );
-		return $self->redirect_to( $self->url_for('sso_totp_challenge')->query( rid => $rid // '' ) );
-	}
-	$self->rate_reset( 'totp', user => $user );
-
-	delete $self->session->{sso_totp_pending_user};
-	$self->session( sso_user      => $user );
-	$self->session( sso_auth_time => time() );
-	my ( undef, $authz ) = $self->_pending_authz;
-	return $self->_advance_authz( $rid, $authz ) if defined $rid && $authz;
-	$self->redirect_to( $self->url_for('sso_consent')->query( rid => $rid // '' ) );
+	App::Nisaba::WebUtil::handle_totp_challenge(
+		$self,
+		$self->_login_flow_callbacks($rid),
+		pending_user            => $user,
+		render_block            => { template => 'sso/totp_challenge', layout => 'sso' },
+		redirect_totp_challenge => sub {
+			my ($c) = @_;
+			$c->redirect_to( $c->url_for('sso_totp_challenge')->query( rid => $rid // '' ) );
+		},
+	);
 } ## end sub totp_challenge
 
 # --------------------------------------------------------------------------- #
@@ -589,7 +448,7 @@ sub consent_form {
 
 	# Look up client for display info
 	my $client_entry;
-	$self->_pt_call( sub { $client_entry = $self->pt->getOIDCClientEntry( { clientId => $authz->{client_id} } ) } );
+	$self->pt_call( sub { $client_entry = $self->pt->getOIDCClientEntry( { clientId => $authz->{client_id} } ) } );
 
 	my $client_name = '';
 	my $client_uri  = '';
@@ -718,10 +577,7 @@ sub logout_post {
 	# A cross-site POST without either gets the confirmation page, not a
 	# logout.
 	unless ( $info && $info->{verified} ) {
-		my $expected = $self->session('csrf_token');
-		my $got      = $self->req->headers->header('X-CSRF-Token');
-		$got = $self->param('csrf_token') unless defined $got && $got ne '';
-		unless ( defined $expected && $expected ne '' && defined $got && secure_compare( $got, $expected ) ) {
+		unless ( App::Nisaba::WebCSRF::token_valid($self) ) {
 			return $self->render(
 				template                 => 'sso/logout_confirm',
 				layout                   => 'sso',
@@ -818,7 +674,7 @@ sub _authenticate_client {
 	# never fall through with authentication unchecked.
 	my $client_entry;
 	my $lookup_err
-		= $self->_pt_call( sub { $client_entry = $self->pt->getOIDCClientEntry( { clientId => $client_id } ) } );
+		= $self->pt_call( sub { $client_entry = $self->pt->getOIDCClientEntry( { clientId => $client_id } ) } );
 	if ($lookup_err) {
 		$self->render(
 			json   => { error => 'server_error', error_description => 'Unable to resolve client.' },
@@ -939,7 +795,7 @@ sub _token_authorization_code {
 		my $method = $code_data->{code_challenge_method} || 'plain';
 		my $expected;
 		if ( $method eq 'S256' ) {
-			$expected = _b64url_encode( sha256($code_verifier) );
+			$expected = b64url_encode( sha256($code_verifier) );
 		} else {
 			$expected = $code_verifier;
 		}
@@ -1114,7 +970,7 @@ sub _token_refresh {
 # introspection enforce the protocol expiry from issued_at.
 sub _issue_access_token {
 	my ( $self, $user, $scope, $client_id ) = @_;
-	my $access_token   = _random_b64url(32);
+	my $access_token   = random_b64url(32);
 	my $token_lifetime = $self->pt->{ini}->{''}->{ssoTokenLifetime} // 3600;
 	$self->sso_storage->put(
 		'token',
@@ -1133,7 +989,7 @@ sub _issue_access_token {
 # Mint and store a refresh token carrying the original grant.
 sub _issue_refresh_token {
 	my ( $self, $grant ) = @_;
-	my $refresh_token = _random_b64url(32);
+	my $refresh_token = random_b64url(32);
 	my $rt_lifetime   = $self->pt->{ini}->{''}->{ssoRefreshTokenLifetime} // 2592000;
 	$self->sso_storage->put( 'refresh', $refresh_token, { %$grant, issued_at => time() }, $rt_lifetime );
 	return $refresh_token;
@@ -1355,7 +1211,7 @@ sub _advance_authz {
 sub _issue_code {
 	my ( $self, $authz ) = @_;
 
-	my $code = _random_b64url(32);
+	my $code = random_b64url(32);
 
 	# Store code details in the shared server-side store so the token endpoint
 	# (called server-to-server by the relying party, with no browser cookie)
@@ -1414,8 +1270,8 @@ sub _verify_id_token_hint {
 	my @parts = split /\./, $hint;
 	return undef unless @parts >= 2;
 
-	my $header  = eval { decode_json( _b64url_decode( $parts[0] ) ) };
-	my $payload = eval { decode_json( _b64url_decode( $parts[1] ) ) };
+	my $header  = eval { decode_json( b64url_decode( $parts[0] ) ) };
+	my $payload = eval { decode_json( b64url_decode( $parts[1] ) ) };
 	return undef unless $payload && ref $payload eq 'HASH';
 
 	# Must be one of our own ID tokens.
@@ -1433,7 +1289,7 @@ sub _verify_id_token_hint {
 	# (alg=none) hint can identify the client but is never treated as verified.
 	my $alg           = $header->{alg} // 'none';
 	my $signing_input = $parts[0] . '.' . $parts[1];
-	my $sig           = @parts >= 3 ? _b64url_decode( $parts[2] ) : '';
+	my $sig           = @parts >= 3 ? b64url_decode( $parts[2] ) : '';
 	my $verified      = 0;
 
 	if ( $alg eq 'RS256' ) {
@@ -1533,22 +1389,15 @@ sub _build_id_token {
 	my %scopes = map { $_ => 1 } split /\s+/, ( $scope // '' );
 	if ( $scopes{profile} || $scopes{email} ) {
 		my $entry;
-		$self->_pt_call( sub { $entry = $self->pt->getUserEntry( { user => $user } ) } );
+		$self->pt_call( sub { $entry = $self->pt->getUserEntry( { user => $user } ) } );
 		if ($entry) {
-			if ( $scopes{profile} ) {
-				my $name = $entry->get_value('displayName') // $entry->get_value('cn');
-				$payload{name}        = $name                          if defined $name;
-				$payload{given_name}  = $entry->get_value('givenName') if $entry->get_value('givenName');
-				$payload{family_name} = $entry->get_value('sn')        if $entry->get_value('sn');
-			}
-			if ( $scopes{email} ) {
-				$payload{email} = $entry->get_value('mail') if $entry->get_value('mail');
-			}
-		} ## end if ($entry)
-	} ## end if ( $scopes{profile} || $scopes{email} )
+			my %claims = $self->_claims_for_scopes( $entry, $user, \%scopes );
+			@payload{ keys %claims } = values %claims;
+		}
+	}
 
 	my $json_payload = Mojo::JSON::encode_json( \%payload );
-	my $body         = _b64url_encode($json_payload);
+	my $body         = b64url_encode($json_payload);
 
 	# Determine the signing algorithm from the client entry (resolved and
 	# validated by the caller). OIDC Core 2: when the client did not register
@@ -1567,14 +1416,14 @@ sub _build_id_token {
 			if ($jwk) {
 				my $kid = $jwk->{kid} // '';
 				my $header
-					= _b64url_encode( Mojo::JSON::encode_json( { alg => 'RS256', typ => 'JWT', kid => $kid } ) );
+					= b64url_encode( Mojo::JSON::encode_json( { alg => 'RS256', typ => 'JWT', kid => $kid } ) );
 				my $signing_input = "$header.$body";
 
 				my $rsa = Crypt::PK::RSA->new;
 				eval { $rsa->import_key($jwk) };
 				if ( !$@ ) {
 					my $sig     = $rsa->sign_message( $signing_input, 'SHA256', 'v1.5' );
-					my $sig_b64 = _b64url_encode($sig);
+					my $sig_b64 = b64url_encode($sig);
 					return "$signing_input.$sig_b64";
 				}
 			} ## end if ($jwk)
@@ -1586,11 +1435,11 @@ sub _build_id_token {
 		# Sign with the client secret using HMAC-SHA256
 		my $secret = $client_entry->get_value('oidcClientSecret') // '';
 		if ( $secret ne '' ) {
-			my $header        = _b64url_encode('{"alg":"HS256","typ":"JWT"}');
+			my $header        = b64url_encode('{"alg":"HS256","typ":"JWT"}');
 			my $signing_input = "$header.$body";
 			require Digest::SHA;
 			my $sig     = Digest::SHA::hmac_sha256( $signing_input, $secret );
-			my $sig_b64 = _b64url_encode($sig);
+			my $sig_b64 = b64url_encode($sig);
 			return "$signing_input.$sig_b64";
 		}
 
@@ -1610,55 +1459,72 @@ sub _build_userinfo_claims {
 	my %claims = ( sub => $user );
 
 	my $entry;
-	$self->_pt_call( sub { $entry = $self->pt->getUserEntry( { user => $user } ) } );
+	$self->pt_call( sub { $entry = $self->pt->getUserEntry( { user => $user } ) } );
 	return \%claims unless $entry;
+
+	%claims = ( %claims, $self->_claims_for_scopes( $entry, $user, $scopes, extended => 1 ) );
+
+	return \%claims;
+} ## end sub _build_userinfo_claims
+
+# Map a user's LDAP attributes to OIDC claims for the requested scopes. The
+# basic profile/email claims are shared by the ID token and the UserInfo
+# response so the two can never disagree; extended => 1 adds the
+# UserInfo-only claims (preferred_username, the oidcSubject attributes,
+# locale, the verified flags, phone, and address).
+sub _claims_for_scopes {
+	my ( $self, $entry, $user, $scopes, %opts ) = @_;
+	my $extended = $opts{extended};
+
+	my %claims;
+	my %oc = map { lc($_) => 1 } $entry->get_value('objectClass');
 
 	if ( $scopes->{profile} ) {
 		my $name = $entry->get_value('displayName') // $entry->get_value('cn');
-		$claims{name}               = $name                          if defined $name;
-		$claims{given_name}         = $entry->get_value('givenName') if $entry->get_value('givenName');
-		$claims{family_name}        = $entry->get_value('sn')        if $entry->get_value('sn');
-		$claims{preferred_username} = $user;
+		$claims{name}        = $name                          if defined $name;
+		$claims{given_name}  = $entry->get_value('givenName') if $entry->get_value('givenName');
+		$claims{family_name} = $entry->get_value('sn')        if $entry->get_value('sn');
 
-		# OIDC-specific claims from oidcSubject
-		my %oc = map { lc($_) => 1 } $entry->get_value('objectClass');
-		if ( $oc{oidcsubject} ) {
-			$claims{nickname}    = $entry->get_value('oidcNickname')   if $entry->get_value('oidcNickname');
-			$claims{middle_name} = $entry->get_value('oidcMiddleName') if $entry->get_value('oidcMiddleName');
-			$claims{picture}     = $entry->get_value('oidcPicture')    if $entry->get_value('oidcPicture');
-			$claims{profile}     = $entry->get_value('oidcProfile')    if $entry->get_value('oidcProfile');
-			$claims{website}     = $entry->get_value('oidcWebsite')    if $entry->get_value('oidcWebsite');
-			$claims{gender}      = $entry->get_value('oidcGender')     if $entry->get_value('oidcGender');
-			$claims{birthdate}   = $entry->get_value('oidcBirthdate')  if $entry->get_value('oidcBirthdate');
-			$claims{zoneinfo}    = $entry->get_value('oidcZoneinfo')   if $entry->get_value('oidcZoneinfo');
-		} ## end if ( $oc{oidcsubject} )
+		if ($extended) {
+			$claims{preferred_username} = $user;
 
-		$claims{locale} = $entry->get_value('preferredLanguage') if $entry->get_value('preferredLanguage');
+			# OIDC-specific claims from oidcSubject
+			if ( $oc{oidcsubject} ) {
+				$claims{nickname}    = $entry->get_value('oidcNickname')   if $entry->get_value('oidcNickname');
+				$claims{middle_name} = $entry->get_value('oidcMiddleName') if $entry->get_value('oidcMiddleName');
+				$claims{picture}     = $entry->get_value('oidcPicture')    if $entry->get_value('oidcPicture');
+				$claims{profile}     = $entry->get_value('oidcProfile')    if $entry->get_value('oidcProfile');
+				$claims{website}     = $entry->get_value('oidcWebsite')    if $entry->get_value('oidcWebsite');
+				$claims{gender}      = $entry->get_value('oidcGender')     if $entry->get_value('oidcGender');
+				$claims{birthdate}   = $entry->get_value('oidcBirthdate')  if $entry->get_value('oidcBirthdate');
+				$claims{zoneinfo}    = $entry->get_value('oidcZoneinfo')   if $entry->get_value('oidcZoneinfo');
+			} ## end if ( $oc{oidcsubject} )
+
+			$claims{locale} = $entry->get_value('preferredLanguage') if $entry->get_value('preferredLanguage');
+		} ## end if ($extended)
 	} ## end if ( $scopes->{profile} )
 
 	if ( $scopes->{email} ) {
 		$claims{email} = $entry->get_value('mail') if $entry->get_value('mail');
 
-		my %oc = map { lc($_) => 1 } $entry->get_value('objectClass');
-		if ( $oc{oidcsubject} ) {
+		if ( $extended && $oc{oidcsubject} ) {
 			my $ev = $entry->get_value('oidcEmailVerified');
 			$claims{email_verified} = ( defined $ev && $ev eq 'TRUE' ) ? Mojo::JSON->true : Mojo::JSON->false
 				if defined $ev;
 		}
-	} ## end if ( $scopes->{email} )
+	}
 
-	if ( $scopes->{phone} ) {
+	if ( $extended && $scopes->{phone} ) {
 		$claims{phone_number} = $entry->get_value('telephoneNumber') if $entry->get_value('telephoneNumber');
 
-		my %oc = map { lc($_) => 1 } $entry->get_value('objectClass');
 		if ( $oc{oidcsubject} ) {
 			my $pv = $entry->get_value('oidcPhoneNumberVerified');
 			$claims{phone_number_verified} = ( defined $pv && $pv eq 'TRUE' ) ? Mojo::JSON->true : Mojo::JSON->false
 				if defined $pv;
 		}
-	} ## end if ( $scopes->{phone} )
+	}
 
-	if ( $scopes->{address} ) {
+	if ( $extended && $scopes->{address} ) {
 		my %addr;
 		$addr{street_address} = $entry->get_value('street')     if $entry->get_value('street');
 		$addr{locality}       = $entry->get_value('l')          if $entry->get_value('l');
@@ -1668,7 +1534,7 @@ sub _build_userinfo_claims {
 		$claims{address}      = \%addr                          if %addr;
 	}
 
-	return \%claims;
-} ## end sub _build_userinfo_claims
+	return %claims;
+} ## end sub _claims_for_scopes
 
 1;

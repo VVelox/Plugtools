@@ -2,16 +2,6 @@ package App::Nisaba::Web::Controller::Groups;
 
 use Mojo::Base 'Mojolicious::Controller';
 
-sub _pt_call {
-	my ( $self, $code ) = @_;
-	eval { $code->() };
-	return $@ if $@;
-	if ( $self->pt->error ) {
-		return $self->pt->errorString || ( 'Error code ' . $self->pt->error );
-	}
-	return '';
-}
-
 sub index {
 	my $self = shift;
 
@@ -36,7 +26,7 @@ sub create {
 	my %params = map { $_ => $self->param($_) } qw(group gid);
 	delete $params{$_} for grep { !defined $params{$_} || $params{$_} eq '' } keys %params;
 
-	my $error = $self->_pt_call( sub { $self->pt->addGroup( \%params ) } );
+	my $error = $self->pt_call( sub { $self->pt->addGroup( \%params ) } );
 	if ($error) {
 		$self->flash( error => "Failed to add group: $error" );
 		return $self->redirect_to('groups_add');
@@ -49,7 +39,7 @@ sub create {
 sub clean {
 	my $self = shift;
 
-	my $error = $self->_pt_call( sub { $self->pt->groupClean } );
+	my $error = $self->pt_call( sub { $self->pt->groupClean } );
 	if ($error) {
 		$self->flash( error => "Group clean failed: $error" );
 		return $self->redirect_to('groups_index');
@@ -102,9 +92,9 @@ sub update {
 	my $error;
 	if ( $action eq 'gid' ) {
 		$error
-			= $self->_pt_call( sub { $self->pt->groupGIDchange( { group => $group, gid => $self->param('gid') } ) } );
+			= $self->pt_call( sub { $self->pt->groupGIDchange( { group => $group, gid => $self->param('gid') } ) } );
 	} elsif ( $action eq 'description' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->groupDescriptionChange(
 					{ group => $group, description => $self->param('description') } );
@@ -128,7 +118,7 @@ sub delete {
 	my $self  = shift;
 	my $group = $self->param('group');
 
-	my $error = $self->_pt_call( sub { $self->pt->deleteGroup($group) } );
+	my $error = $self->pt_call( sub { $self->pt->deleteGroup($group) } );
 	if ($error) {
 		$self->flash( error => "Failed to delete group '$group': $error" );
 		return $self->redirect_to( 'groups_show', group => $group );
@@ -143,7 +133,7 @@ sub add_member {
 	my $group = $self->param('group');
 	my $user  = $self->param('user');
 
-	my $error = $self->_pt_call( sub { $self->pt->groupAddUser( { group => $group, user => $user } ) } );
+	my $error = $self->pt_call( sub { $self->pt->groupAddUser( { group => $group, user => $user } ) } );
 	if ($error) {
 		$self->flash( error => "Failed to add '$user' to '$group': $error" );
 		return $self->redirect_to( 'groups_show', group => $group );
@@ -158,7 +148,7 @@ sub remove_member {
 	my $group = $self->param('group');
 	my $user  = $self->param('user');
 
-	my $error = $self->_pt_call( sub { $self->pt->groupRemoveUser( { group => $group, user => $user } ) } );
+	my $error = $self->pt_call( sub { $self->pt->groupRemoveUser( { group => $group, user => $user } ) } );
 	if ($error) {
 		$self->flash( error => "Failed to remove '$user' from '$group': $error" );
 		return $self->redirect_to( 'groups_show', group => $group );

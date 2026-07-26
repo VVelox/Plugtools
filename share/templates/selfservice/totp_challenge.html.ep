@@ -2,23 +2,6 @@
 % title 'Two-Factor Authentication';
 <div class="row justify-content-center mt-5">
   <div class="col-sm-10 col-md-6">
-    <div class="card border-secondary">
-      <div class="card-header text-danger fw-bold">Two-Factor Authentication</div>
-      <div class="card-body">
-        <p class="text-secondary small mb-3">
-          Enter the 6-digit code from your authenticator app to continue.
-        </p>
-        <form method="post" action="<%= url_for('totp_challenge_post') %>">
-          <%= csrf_field %>
-          <div class="mb-3">
-            <label class="form-label" for="code">Authenticator Code</label>
-            <input type="text" class="form-control" id="code" name="code"
-                   pattern="\d{6,8}" maxlength="8" required autofocus
-                   autocomplete="one-time-code" placeholder="6-digit code">
-          </div>
-          <button type="submit" class="btn btn-danger w-100">Verify</button>
-        </form>
-      </div>
-    </div>
+    %= include 'partials/totp_challenge_card', totp_post_url => url_for('totp_challenge_post')
   </div>
 </div>

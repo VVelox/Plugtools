@@ -7,9 +7,6 @@ use File::BaseDir qw/xdg_config_home/;
 use Net::LDAP;
 use Net::LDAP::Util qw(escape_filter_value escape_dn_value);
 use Net::LDAP::Entry;
-use Net::LDAP::posixAccount;
-use Net::LDAP::posixGroup;
-use Net::LDAP::nisNetgroup;
 use String::ShellQuote;
 use Net::LDAP::Extension::SetPassword;
 use Net::SMTP;
@@ -415,37 +412,27 @@ sub addGroup {
 		return undef;
 	}
 
-	#initiates the Net::LDAP::posixGroup
-	my $entrycreator = Net::LDAP::posixGroup->new( baseDN => $self->{ini}->{''}->{groupbase} );
-	if ( ( !defined($entrycreator) ) || ( defined( $entrycreator->{error} ) ) ) {
-		$self->{error} = 12;
-		if ( !defined($entrycreator) ) {
-			$self->{errorString} = 'Net::LDAP::posixGroup->create returned a undefined object';
-		} else {
-			$self->{errorString}
-				= 'Net::LDAP::posixGroup->create errored. error="'
-				. $entrycreator->{error}
-				. '" errorString="'
-				. $entrycreator->{errorString} . '"';
-		}
+	# builds the posixGroup entry; primary selects the RDN attribute (cn or gid)
+	my $groupPrimary = $self->{ini}->{''}->{groupPrimary};
+	$groupPrimary = 'cn' if ( !defined($groupPrimary) );
+	my $group_rdn;
+	if ( $groupPrimary eq 'cn' ) {
+		$group_rdn = 'cn=' . $args{group};
+	} elsif ( $groupPrimary eq 'gid' ) {
+		$group_rdn = 'gid=' . $args{gid};
+	} else {
+		$self->{error}       = 12;
+		$self->{errorString} = 'groupPrimary, "' . $groupPrimary . '", is not a valid value (cn or gid)';
 		$self->warn;
 		return undef;
-	} ## end if ( ( !defined($entrycreator) ) || ( defined...))
-	my $entry = $entrycreator->create(
-		name    => $args{group},
-		gid     => $args{gid},
-		primary => $self->{ini}->{''}->{groupPrimary},
+	}
+	my $entry = Net::LDAP::Entry->new;
+	$entry->dn( $group_rdn . ',' . $self->{ini}->{''}->{groupbase} );
+	$entry->add(
+		objectClass => [ 'posixGroup', 'top' ],
+		gidNumber   => [ $args{gid} ],
+		cn          => [ $args{group} ],
 	);
-	if ( defined( $entrycreator->{error} ) ) {
-		$self->{error} = 12;
-		$self->{errorString}
-			= 'Net::LDAP::posixGroup->create errored. error="'
-			. $entrycreator->{error}
-			. '" errorString="'
-			. $entrycreator->{errorString} . '"';
-		$self->warn;
-		return undef;
-	} ## end if ( defined( $entrycreator->{error} ) )
 
 	#dump it if asked
 	if ( $args{dump} ) {
@@ -657,16 +644,39 @@ sub addUser {
 	$args{home} = $self->{ini}->{''}->{HOMEproto};
 	$args{home} =~ s/\%\%USERNAME\%\%/$args{user}/g;
 
-	#initiates the Net::LDAP::posixAccount
-	my $entrycreator = Net::LDAP::posixAccount->new( baseDN => $self->{ini}->{''}->{userbase} );
-	my $entry        = $entrycreator->create(
-		name       => $args{user},
-		uid        => $args{uid},
-		gid        => $args{gid},
-		gecos      => $args{gecos},
-		home       => $args{home},
-		loginShell => $args{shell},
-		primary    => $self->{ini}->{''}->{userPrimary},
+	# builds the posixAccount entry
+	my $cn    = $args{user};
+	my $gecos = defined( $args{gecos} ) ? $args{gecos} : $args{user};
+	my $shell = defined( $args{shell} ) ? $args{shell} : '/sbin/nologin';
+
+	# primary selects the RDN attribute (uid, cn, or uidNumber)
+	my $userPrimary = $self->{ini}->{''}->{userPrimary};
+	$userPrimary = 'uid' if ( !defined($userPrimary) );
+	my $user_rdn;
+	if ( $userPrimary eq 'uid' ) {
+		$user_rdn = 'uid=' . $args{user};
+	} elsif ( $userPrimary eq 'uidNumber' ) {
+		$user_rdn = 'uidNumber=' . $args{uid};
+	} elsif ( $userPrimary eq 'cn' ) {
+		$user_rdn = 'cn=' . $cn;
+	} else {
+		$self->{error}       = 12;
+		$self->{errorString} = 'userPrimary, "' . $userPrimary . '", is not a valid value (uid, cn, or uidNumber)';
+		$self->warn;
+		return undef;
+	}
+	my $entry = Net::LDAP::Entry->new;
+	$entry->dn( $user_rdn . ',' . $self->{ini}->{''}->{userbase} );
+	$entry->add(
+		objectClass   => [ 'top', 'account', 'posixAccount' ],
+		uidNumber     => [ $args{uid} ],
+		gidNumber     => [ $args{gid} ],
+		uid           => [ $args{user} ],
+		homeDirectory => [ $args{home} ],
+		gecos         => [$gecos],
+		loginShell    => [$shell],
+		cn            => [$cn],
+		description   => [$gecos],
 	);
 
 	#call a plugin if needed
@@ -755,17 +765,50 @@ sub addUser {
 
 =head2 connect
 
-This forms a LDAP connection using the information in
-config file.
+This returns a bound LDAP connection using the information in the config
+file. The connection is created on first use and then cached on the object,
+so one TCP connect, optional StartTLS, and bind serve every subsequent call
+rather than being repeated per method call. Before reuse the cached
+connection is revalidated — cheaply on every call, and with a RootDSE search
+once it has sat idle — and transparently re-established when it has gone
+away or the object has been carried across a fork.
 
     my $ldap=$pt->connect;
 
 =cut
 
+# How long (seconds) a cached connection may sit idle before it must prove
+# itself with a RootDSE search instead of just a socket check. A server-side
+# close is not visible to getpeername until the EOF is read, so an idle
+# connection cannot be trusted on the socket check alone.
+my $ldap_connection_idle_revalidate_seconds = 10;
+
 sub connect {
 	my $self = $_[0];
 
 	$self->errorblank;
+
+	# Reuse the cached bound connection when possible. The PID check keeps a
+	# socket from being shared across forked workers.
+	my $cached = $self->{ldapConnection};
+	if ( $cached && ( $self->{ldapConnectionPid} // 0 ) == $$ ) {
+		my $socket = $cached->socket;
+		my $alive  = ( $socket && $socket->connected ) ? 1 : 0;
+
+		if ( $alive
+			&& ( time() - ( $self->{ldapConnectionLastUsed} // 0 ) ) > $ldap_connection_idle_revalidate_seconds )
+		{
+			my $mesg
+				= eval { $cached->search( base => '', scope => 'base', filter => '(objectClass=*)', attrs => ['1.1'] ) };
+			$alive = ( $mesg && !$mesg->code ) ? 1 : 0;
+		}
+
+		if ($alive) {
+			$self->{ldapConnectionLastUsed} = time();
+			return $cached;
+		}
+	} ## end if ( $cached && ( $self->{ldapConnectionPid...}))
+	delete $self->{ldapConnection};
 
 	#try to connect
 	my $ldap = Net::LDAP->new( $self->{ini}->{''}->{server}, port => $self->{ini}->{''}->{port} );
@@ -804,6 +847,10 @@ sub connect {
 		$self->warn;
 		return undef;
 	}
+
+	$self->{ldapConnection}         = $ldap;
+	$self->{ldapConnectionPid}      = $$;
+	$self->{ldapConnectionLastUsed} = time();
 
 	return $ldap;
 } ## end sub connect
@@ -1156,7 +1203,7 @@ sub getUserEntry {
 		}
 		$self->warn;
 		return undef;
-	}
+	} ## end if ( !defined($entry) )
 
 	return $entry;
 } ## end sub getUserEntry
@@ -2263,29 +2310,35 @@ sub addNetgroup {
 		return undef;
 	}
 
-	my $creator = Net::LDAP::nisNetgroup->new( baseDN => $self->{ini}->{''}->{netgroupbase} );
-	if ( !defined($creator) ) {
-		$self->{error}       = 12;
-		$self->{errorString} = 'Net::LDAP::nisNetgroup->new returned undef: ' . ( Net::LDAP::nisNetgroup->error // '' );
-		$self->warn;
-		return undef;
+	my @triples = defined( $args{triples} ) ? @{ $args{triples} } : ();
+	my @members = defined( $args{members} ) ? @{ $args{members} } : ();
+
+	# validate each triple before building the entry
+	for my $triple (@triples) {
+		if ( $triple !~ /^\([^,]*,[^,]*,[^,]*\)$/ ) {
+			$self->{error} = 12;
+			$self->{errorString}
+				= 'triple "' . $triple . '" is not a valid nisNetgroupTriple; expected (hostname,username,domainname)';
+			$self->warn;
+			return undef;
+		}
 	}
 
-	my %create_args = (
-		name    => $args{group},
-		triples => $args{triples} // [],
-		members => $args{members} // [],
+	# builds the nisNetgroup entry
+	my $entry = Net::LDAP::Entry->new;
+	$entry->dn( 'cn=' . $args{group} . ',' . $self->{ini}->{''}->{netgroupbase} );
+	$entry->add(
+		objectClass => [ 'nisNetgroup', 'top' ],
+		cn          => [ $args{group} ],
 	);
-	if ( defined( $args{description} ) && $args{description} ne '' ) {
-		$create_args{description} = $args{description};
+	for my $triple (@triples) {
+		$entry->add( nisNetgroupTriple => [$triple] );
 	}
-
-	my $entry = $creator->create(%create_args);
-	if ( !defined($entry) ) {
-		$self->{error}       = 12;
-		$self->{errorString} = 'Net::LDAP::nisNetgroup->create returned undef: ' . ( $creator->errorString // '' );
-		$self->warn;
-		return undef;
+	for my $member (@members) {
+		$entry->add( memberNisNetgroup => [$member] );
+	}
+	if ( defined( $args{description} ) && $args{description} ne '' ) {
+		$entry->add( description => [ $args{description} ] );
 	}
 
 	my $ldap     = $self->connect();
@@ -9558,8 +9611,9 @@ Connecting to the LDAP server failed.
 
 =head2 12, posixGroupFailed
 
-Net::LDAP::posixGroup or Net::LDAP::nisNetgroup failed (e.g. constructor
-returned undef or create failed).
+Building a posixGroup, posixAccount, or nisNetgroup entry failed (e.g.
+C<groupPrimary>/C<userPrimary> is set to an invalid value, or a supplied
+nisNetgroupTriple is malformed).
 
 =head2 13, ldapBindFailed
 

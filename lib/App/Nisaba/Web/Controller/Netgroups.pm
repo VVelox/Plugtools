@@ -2,16 +2,6 @@ package App::Nisaba::Web::Controller::Netgroups;
 
 use Mojo::Base 'Mojolicious::Controller';
 
-sub _pt_call {
-	my ( $self, $code ) = @_;
-	eval { $code->() };
-	return $@ if $@;
-	if ( $self->pt->error ) {
-		return $self->pt->errorString || ( 'Error code ' . $self->pt->error );
-	}
-	return '';
-}
-
 # Returns 1 if netgroupbase is configured; otherwise flashes an error,
 # redirects to the groups index, and returns 0.
 sub _check_configured {
@@ -67,7 +57,7 @@ sub create {
 	$args{members}     = \@members    if @members;
 	$args{description} = $description if defined($description) && $description ne '';
 
-	my $error = $self->_pt_call( sub { $self->pt->addNetgroup( \%args ) } );
+	my $error = $self->pt_call( sub { $self->pt->addNetgroup( \%args ) } );
 	if ($error) {
 		$self->flash( error => "Failed to add netgroup: $error" );
 		return $self->redirect_to('netgroups_add');
@@ -119,23 +109,23 @@ sub update {
 
 	my $error;
 	if ( $action eq 'description' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub {
 				$self->pt->netgroupDescriptionChange(
 					{ group => $group, description => $self->param('description') } );
 			}
 		);
 	} elsif ( $action eq 'triple_add' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub { $self->pt->netgroupTripleAdd( { group => $group, triple => $self->param('triple') } ) } );
 	} elsif ( $action eq 'triple_remove' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub { $self->pt->netgroupTripleRemove( { group => $group, triple => $self->param('triple') } ) } );
 	} elsif ( $action eq 'member_add' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub { $self->pt->netgroupMemberAdd( { group => $group, member => $self->param('member') } ) } );
 	} elsif ( $action eq 'member_remove' ) {
-		$error = $self->_pt_call(
+		$error = $self->pt_call(
 			sub { $self->pt->netgroupMemberRemove( { group => $group, member => $self->param('member') } ) } );
 	} else {
 		$self->flash( error => "Unknown action: $action" );
@@ -157,7 +147,7 @@ sub delete {
 
 	return unless $self->_check_configured;
 
-	my $error = $self->_pt_call( sub { $self->pt->deleteNetgroup( { group => $group } ) } );
+	my $error = $self->pt_call( sub { $self->pt->deleteNetgroup( { group => $group } ) } );
 	if ($error) {
 		$self->flash( error => "Failed to delete netgroup '$group': $error" );
 		return $self->redirect_to( 'netgroups_show', group => $group );

@@ -1,0 +1,130 @@
+%# Shared login card used by the admin, self-service, and SSO portals, so the
+%# markup and the embedded passkey JavaScript cannot drift between them.
+%# Parameters (passed as include locals):
+%#   heading              - card header text
+%#   submit_label         - text for the submit button
+%#   login_post_url       - form action for the password login POST
+%#   passkey_start_url    - GET endpoint returning WebAuthn assertion options
+%#   passkey_finish_url   - POST endpoint verifying the WebAuthn assertion
+%#   totp_redirect_url    - where to go when a passkey login still needs TOTP
+%#   success_redirect_url - where to go after a completed passkey login
+%#   card_class           - optional extra classes for the card div
+%#   forgot_url           - optional; renders a "Forgot your password?" link
+<div class="card border-secondary<%= stash('card_class') ? ' ' . stash('card_class') : '' %>">
+  <div class="card-header text-danger fw-bold"><%= $heading %></div>
+  <div class="card-body">
+    <form method="post" action="<%= $login_post_url %>">
+      <%= csrf_field %>
+      <div class="mb-3">
+        <label class="form-label" for="user">Username</label>
+        <input type="text" class="form-control" id="user" name="user"
+               autocomplete="username" autofocus required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label" for="pass">Password</label>
+        <input type="password" class="form-control" id="pass" name="pass"
+               autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="btn btn-danger w-100"><%= $submit_label %></button>
+    </form>
+    % if (passkey_login_available) {
+    <div class="text-center my-3 text-secondary small">or</div>
+    <button type="button" class="btn btn-outline-secondary w-100" id="pk-login-btn">
+      Sign in with a Passkey
+    </button>
+    <div id="pk-login-status" class="mt-2 small text-danger d-none"></div>
+    % }
+    % if (stash('forgot_url')) {
+    <hr class="border-secondary">
+    <div class="text-center">
+      <a href="<%= stash('forgot_url') %>" class="text-secondary small">Forgot your password?</a>
+    </div>
+    % }
+  </div>
+</div>
+
+% if (passkey_login_available) {
+<script>
+(function () {
+  'use strict';
+
+  function b64uToBuf(b64u) {
+    var b64 = b64u.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    var raw = atob(b64), buf = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i);
+    return buf.buffer;
+  }
+  function bufToB64u(buf) {
+    var bytes = new Uint8Array(buf), raw = '';
+    for (var i = 0; i < bytes.length; i++) raw += String.fromCharCode(bytes[i]);
+    return btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  var btn    = document.getElementById('pk-login-btn');
+  var status = document.getElementById('pk-login-status');
+
+  if (!window.PublicKeyCredential) {
+    btn.disabled = true;
+    btn.title    = 'This browser does not support passkeys.';
+  }
+
+  btn.addEventListener('click', async function () {
+    status.classList.add('d-none');
+    btn.disabled = true;
+    btn.textContent = 'Waiting for passkey\u2026';
+    try {
+      var optResp = await fetch('<%= $passkey_start_url %>');
+      if (!optResp.ok) throw new Error('Server error fetching options');
+      var opts = await optResp.json();
+      if (opts.error) throw new Error(opts.error);
+
+      var pubKeyOpts = {
+        challenge:        b64uToBuf(opts.challenge),
+        rpId:             opts.rpId,
+        userVerification: opts.userVerification,
+        allowCredentials: [],
+        timeout:          opts.timeout || 60000,
+      };
+
+      var assertion = await navigator.credentials.get({ publicKey: pubKeyOpts });
+
+      var body = {
+        id:   assertion.id,
+        type: assertion.type,
+        response: {
+          clientDataJSON:    bufToB64u(assertion.response.clientDataJSON),
+          authenticatorData: bufToB64u(assertion.response.authenticatorData),
+          signature:         bufToB64u(assertion.response.signature),
+          userHandle: assertion.response.userHandle
+            ? bufToB64u(assertion.response.userHandle)
+            : null,
+        },
+      };
+
+      var finResp = await fetch('<%= $passkey_finish_url %>', {
+        method:  'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': (document.querySelector('meta[name="csrf-token"]') || {}).content || '',
+        },
+        body:    JSON.stringify(body),
+      });
+      var result = await finResp.json();
+      if (!finResp.ok) throw new Error(result.error || 'Login failed');
+
+      if (result.totp_required) {
+        window.location.href = '<%= $totp_redirect_url %>';
+      } else {
+        window.location.href = '<%= $success_redirect_url %>';
+      }
+    } catch (err) {
+      status.textContent = err.message;
+      status.classList.remove('d-none');
+      btn.disabled    = false;
+      btn.textContent = 'Sign in with a Passkey';
+    }
+  });
+})();
+</script>
+% }

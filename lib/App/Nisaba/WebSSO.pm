@@ -2,12 +2,8 @@ package App::Nisaba::WebSSO;
 
 use Mojo::Base 'Mojolicious';
 use Mojo::URL;
-use App::Nisaba;
-use App::Nisaba::WebSecret;
-use App::Nisaba::WebCSRF;
 use App::Nisaba::WebUtil ();
 use App::Nisaba::WebSSO::Storage;
-use File::ShareDir 'dist_dir';
 
 =encoding UTF-8
 
@@ -145,43 +141,28 @@ routes.
 sub startup {
 	my $self = shift;
 
-	my $share = dist_dir('App-Nisaba');
-	push @{ $self->renderer->paths }, "$share/templates";
-	push @{ $self->static->paths },   "$share/public";
-
-	# Instantiate App::Nisaba
-	my %pt_args;
-	$pt_args{config} = $ENV{NISABA_CONFIG} if $ENV{NISABA_CONFIG};
-	my $pt = App::Nisaba->new( \%pt_args );
+	# Templates, App::Nisaba instance, session secret and cookie hardening,
+	# pt/pt_call helpers, CSRF, rate limiting, and Hypnotoad tuning — shared
+	# with the other Nisaba web apps. The OIDC token and UserInfo endpoints are
+	# exempt from CSRF: relying parties call them server-to-server with client
+	# credentials / a Bearer token and no browser cookie, so the CSRF threat
+	# and its headers don't apply there. The end-session endpoint is also
+	# exempt because OIDC RP-Initiated Logout allows relying parties to POST to
+	# it cross-site; the logout handler does its own protection (a verifiable
+	# id_token_hint authenticates the request, and anything else must carry the
+	# session's CSRF token or is answered with the confirmation page instead of
+	# a logout).
+	my $pt = App::Nisaba::WebUtil::install_common_startup(
+		$self,
+		app_description   => 'App::Nisaba::WebSSO (OIDC provider)',
+		csrf_exempt_paths => [ '/token', '/userinfo', '/revoke', '/introspect', '/sso/logout' ],
+	);
 
 	# Flag issuer misconfiguration loudly: relying parties validate iss
 	# strictly and the failure mode (a silently Host-header-derived issuer, or
 	# advertised endpoints that don't exist) is confusing to debug from the RP
 	# side.
 	$self->log->warn($_) for issuer_config_warnings( $pt->{ini}->{''}->{ssoIssuer}, $self->mode );
-
-	# Session secret — from config or NISABA_SECRET. Refuses to start rather
-	# than sign sessions with a predictable default (see App::Nisaba::WebSecret).
-	$self->secrets(
-		[
-			App::Nisaba::WebSecret::resolve(
-				configured => $pt->{ini}->{''}->{websecret},
-				env        => $ENV{NISABA_SECRET},
-				app        => 'App::Nisaba::WebSSO (OIDC provider)',
-			)
-		]
-	);
-
-	# Harden the session cookie: SameSite=Lax (explicit) and Secure (HTTPS-only).
-	# Lax still allows the top-level cross-site GET navigation an RP uses to reach
-	# /authorize. Secure is on by default; disable it for plain-HTTP development
-	# or testing with cookieSecure=0 in the config or NISABA_COOKIE_SECURE=0.
-	$self->sessions->samesite('Lax');
-	my $cookie_secure = $pt->{ini}->{''}->{cookieSecure} // $ENV{NISABA_COOKIE_SECURE} // 1;
-	$self->sessions->secure( $cookie_secure ? 1 : 0 );
-
-	# Helper to access the App::Nisaba instance
-	$self->helper( pt => sub { $pt } );
 
 	# Shared server-side store for OIDC authorization codes and access tokens.
 	# These are redeemed by relying-party back ends (server-to-server, no
@@ -204,27 +185,6 @@ sub startup {
 		}
 	);
 
-	# Helper to call a pt method and return an error string (empty = success)
-	$self->helper(
-		pt_call => sub {
-			my ( $c, $code ) = @_;
-			eval { $code->() };
-			return $@ if $@;
-			if ( $c->pt->error ) {
-				return $c->pt->errorString || ( 'Error code ' . $c->pt->error );
-			}
-			return '';
-		}
-	);
-
-	# Helper: passkey login is available when the passkey schema is loaded
-	$self->helper(
-		passkey_login_available => sub {
-			my ($c) = @_;
-			return eval { $c->pt->passkeySchemaAvailable } ? 1 : 0;
-		}
-	);
-
 	# Helper: resolve the OIDC issuer URL
 	$self->helper(
 		sso_issuer => sub {
@@ -237,25 +197,6 @@ sub startup {
 			return $url->scheme . '://' . $url->host_port;
 		}
 	);
-
-	# CSRF: reject state-changing requests whose origin isn't our own. The OIDC
-	# token and UserInfo endpoints are exempt: relying parties call them
-	# server-to-server with client credentials / a Bearer token and no browser
-	# cookie, so the CSRF threat and its headers don't apply there. The
-	# end-session endpoint is also exempt because OIDC RP-Initiated Logout
-	# allows relying parties to POST to it cross-site; the logout handler does
-	# its own protection (a verifiable id_token_hint authenticates the request,
-	# and anything else must carry the session's CSRF token or is answered
-	# with the confirmation page instead of a logout).
-	my @csrf_exempt = ( '/token', '/userinfo', '/revoke', '/introspect', '/sso/logout' );
-	App::Nisaba::WebCSRF::install_origin_check( $self, exempt_paths => \@csrf_exempt );
-	App::Nisaba::WebCSRF::install_token_check( $self, exempt_paths => \@csrf_exempt );
-
-	# Brute-force rate limiting for the auth endpoints.
-	App::Nisaba::WebUtil::install_rate_limiter($self);
-
-	# Production Hypnotoad tuning from nisabarc / NISABA_HYPNOTOAD_* (see rc/).
-	App::Nisaba::WebUtil::install_hypnotoad_config($self);
 
 	my $r = $self->routes;
 
