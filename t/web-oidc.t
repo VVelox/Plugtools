@@ -12,15 +12,21 @@ use Test::Mojo;
 eval { require App::Nisaba::Web };
 plan skip_all => "App::Nisaba::Web failed to load: $@" if $@;
 
-# A client that has both a secret and a signing key, so RS256/HS256 updates are
-# not vetoed for lack of key material.
+# A client with a secret, so HS256 updates are not vetoed for lack of one.
+# Signing keys are the provider's, not the client's.
 my $client = FakeEntry->new(
-	oidcClientId     => 'testclient',
-	oidcClientSecret => 'sekret',
-	oidcJwks         =>
-		'{"keys":[{"kty":"RSA","n":"oldmodulus","e":"AQAB","kid":"k1","use":"sig","alg":"RS256","d":"oldpriv"}]}',
+	oidcClientId                 => 'testclient',
+	oidcClientSecret             => 'sekret',
 	oidcTokenEndpointAuthMethod  => 'client_secret_basic',
 	oidcIdTokenSignedResponseAlg => 'RS256',
+);
+
+# The provider's own signing key set, which every client's RS256 ID tokens are
+# signed with.
+my $provider = FakeEntry->new(
+	cn               => 'provider',
+	oidcProviderJwks =>
+		'{"keys":[{"kty":"RSA","n":"oldmodulus","e":"AQAB","kid":"k1","use":"sig","alg":"RS256","d":"oldpriv"}]}',
 );
 
 my @added;            # addOIDCClient calls
@@ -28,9 +34,10 @@ my @updated;          # oidcClientUpdate calls
 my @multi_added;      # oidcClientAddMultiValue calls
 my @multi_removed;    # oidcClientRemoveMultiValue calls
 my @deleted;          # deleteOIDCClient calls
+my @provider_jwks;    # setOIDCProviderJwks calls
 
 sub _install_stubs {
-	my ($app) = @_;
+	my ( $app, %overrides ) = @_;
 	my %methods = (
 		error                      => sub { 0 },
 		errorString                => sub { '' },
@@ -39,10 +46,13 @@ sub _install_stubs {
 		netgroupbaseConfigured     => sub { 0 },
 		addOIDCClient              => sub { my ( $s, $a ) = @_; push @added, $a; return 1 },
 		getOIDCClientEntry         => sub { return $client },
+		getOIDCProviderEntry       => sub { return $provider },
+		setOIDCProviderJwks        => sub { my ( $s, $a ) = @_; push @provider_jwks, $a; return 1 },
 		oidcClientUpdate           => sub { my ( $s, $a ) = @_; push @updated, $a; return 1 },
 		oidcClientAddMultiValue    => sub { my ( $s, $a ) = @_; push @multi_added, $a; return 1 },
 		oidcClientRemoveMultiValue => sub { my ( $s, $a ) = @_; push @multi_removed, $a; return 1 },
 		deleteOIDCClient           => sub { push @deleted, $_[1]; return 1 },
+		%overrides,
 	);
 	my $fake = bless { ini => { '' => {} } }, 'FakePT';
 	Mojo::Util::monkey_patch( 'FakePT', %methods );
@@ -106,15 +116,18 @@ for my $method (qw(private_key_jwt client_secret_jwt bogus_method)) {
 	is( scalar(@updated), 0, "no update written for unimplemented auth method '$method'" );
 }
 
-# ── update: regenerateKeys rotates instead of replacing ───────────────────────
-# The new private key goes first; the previous key is retained as a
-# public-only entry so already-issued ID tokens keep verifying.
+# ── provider keys: rotation replaces nothing, it prepends ────────────────────
+# There is one signing key set for the whole provider — every relying party
+# validates against the single published set, so a key per client would
+# isolate nothing. The new private key goes first; the previous key is
+# retained as a public-only entry so already-issued ID tokens keep verifying.
 
-@updated = ();
-$t->post_ok( '/oidc/testclient', form => { action => 'regenerateKeys' } )->status_is(302);
-my ($jwks_update) = grep { $_->{attribute} eq 'oidcJwks' } @updated;
-ok( $jwks_update, 'regenerateKeys wrote a new oidcJwks' );
-my $rotated = Mojo::JSON::decode_json( $jwks_update->{value} );
+@provider_jwks = ();
+$t->post_ok( '/oidc/provider-keys', form => {} )
+	->status_is(302)
+	->header_like( Location => qr{/oidc$}, 'provider key rotation returns to the client list' );
+is( scalar(@provider_jwks), 1, 'rotation wrote a new provider key set' );
+my $rotated = Mojo::JSON::decode_json( $provider_jwks[0]{jwks} );
 is( scalar @{ $rotated->{keys} }, 2, 'rotated JWKS keeps the previous key' );
 ok( defined $rotated->{keys}[0]{d}, 'new first key holds private material' );
 isnt( $rotated->{keys}[0]{kid}, 'k1', 'new key has a fresh kid' );
@@ -122,9 +135,15 @@ is( $rotated->{keys}[1]{kid}, 'k1',         'previous key is retained' );
 is( $rotated->{keys}[1]{n},   'oldmodulus', 'previous public modulus is retained' );
 ok( !defined $rotated->{keys}[1]{d}, 'previous key is stripped to public components' );
 
-# ── update: rotation retains at most two previous keys ────────────────────────
+# The private half never reaches the page: only public components are shown.
+$t->get_ok('/oidc')
+	->status_is(200)
+	->content_like( qr/oldmodulus/, 'the provider public key is displayed' )
+	->content_unlike( qr/oldpriv/, 'the provider private exponent is never rendered' );
 
-$client->{attrs}{oidcJwks} = Mojo::JSON::encode_json(
+# ── provider keys: rotation retains at most two previous keys ────────────────
+
+$provider->{attrs}{oidcProviderJwks} = Mojo::JSON::encode_json(
 	{
 		keys => [
 			{ kty => 'RSA', n => 'n1', e => 'AQAB', kid => 'r1', d => 'priv1' },
@@ -133,10 +152,9 @@ $client->{attrs}{oidcJwks} = Mojo::JSON::encode_json(
 		]
 	}
 );
-@updated = ();
-$t->post_ok( '/oidc/testclient', form => { action => 'regenerateKeys' } )->status_is(302);
-my ($cap_update) = grep { $_->{attribute} eq 'oidcJwks' } @updated;
-my $capped = Mojo::JSON::decode_json( $cap_update->{value} );
+@provider_jwks = ();
+$t->post_ok( '/oidc/provider-keys', form => {} )->status_is(302);
+my $capped = Mojo::JSON::decode_json( $provider_jwks[0]{jwks} );
 is( scalar @{ $capped->{keys} }, 3, 'rotation caps the set at the new key plus two previous' );
 is_deeply(
 	[ map { $_->{kid} } @{ $capped->{keys} }[ 1, 2 ] ],
@@ -144,10 +162,24 @@ is_deeply(
 	'the two newest previous keys are retained; the oldest is dropped'
 );
 
+# ── provider keys: generated on demand when the provider has none ────────────
+
+@provider_jwks = ();
+_install_stubs( $t->app, getOIDCProviderEntry => sub { return undef } );
+$t->get_ok('/oidc')->status_is(200)->content_like( qr/No provider signing key/, 'a missing key is flagged' );
+$t->post_ok( '/oidc/provider-keys', form => {} )->status_is(302);
+is( scalar(@provider_jwks), 1, 'a provider with no key gets one generated' );
+ok( defined Mojo::JSON::decode_json( $provider_jwks[0]{jwks} )->{keys}[0]{d},
+	'the generated set holds private material' );
+is( scalar @{ Mojo::JSON::decode_json( $provider_jwks[0]{jwks} )->{keys} }, 1, 'and nothing else' );
+
+_install_stubs( $t->app );
+
 # ── create: confidential client success ───────────────────────────────────────
 
-@added   = ();
-@updated = ();
+@added         = ();
+@updated       = ();
+@provider_jwks = ();
 $t->post_ok(
 	'/oidc',
 	form => {
@@ -173,10 +205,27 @@ is_deeply(
 is_deeply( $added[0]{scopes},     [qw(openid profile email)],             'scopes stored as the allow-list' );
 is_deeply( $added[0]{grantTypes}, [qw(authorization_code refresh_token)], 'grant types stored' );
 
-my ($create_jwks) = grep { $_->{attribute} eq 'oidcJwks' } @updated;
-ok( $create_jwks,                                                           'create generates a signing key pair' );
-ok( defined Mojo::JSON::decode_json( $create_jwks->{value} )->{keys}[0]{d}, 'generated JWKS holds private material' );
 like( $t->tx->res->body, qr/\Q$added[0]{clientSecret}\E/, 'the one-time client secret is shown in the response' );
+
+# Registering a client does not mint a key for it — the provider already has
+# one, and it is what signs.
+ok( !grep( { $_->{attribute} eq 'oidcJwks' } @updated ), 'create writes no per-client signing key' );
+is( scalar(@provider_jwks), 0, 'and leaves the existing provider key alone' );
+
+# On a fresh install with no provider key at all, the first registration
+# provisions one: otherwise the token endpoint would answer server_error.
+@added         = ();
+@provider_jwks = ();
+_install_stubs( $t->app, getOIDCProviderEntry => sub { return undef } );
+$t->post_ok( '/oidc',
+	form => { clientType => 'confidential', signingAlg => 'RS256', redirectURIs => 'https://first.example.com/cb' }
+)->status_is(200);
+is( scalar(@provider_jwks), 1, 'the first registration provisions the provider signing key' );
+ok( defined Mojo::JSON::decode_json( $provider_jwks[0]{jwks} )->{keys}[0]{d},
+	'the provisioned set holds private material' );
+
+_install_stubs( $t->app );
+@provider_jwks = ();
 
 # ── create: public client gets no secret ─────────────────────────────────────
 

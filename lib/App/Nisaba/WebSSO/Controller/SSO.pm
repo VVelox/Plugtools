@@ -14,18 +14,17 @@ use App::Nisaba::WebCSRF ();
 # Helpers
 # --------------------------------------------------------------------------- #
 
-# Per-worker-process cache of each client's parsed JWKS and imported RSA key
-# objects, so token issuance does not pay a JSON parse plus an RSA key import
-# on top of every signature. An entry is validated against the raw oidcJwks
-# string from the client's freshly fetched LDAP entry on every use, so key
-# rotation or re-registration takes effect on the very next request; LDAP
-# stays the source of truth.
-my %jwks_material_cache;
+# Per-worker-process cache of the provider's parsed JWK Set and imported RSA
+# key objects, so token issuance does not pay a JSON parse plus an RSA key
+# import on top of every signature. It is validated against the raw
+# oidcProviderJwks string from a freshly fetched LDAP entry on every use, so a
+# key rotation takes effect on the very next request; LDAP stays the source of
+# truth.
+my $provider_material_cache;
 
-# Returns the cached key material for a client entry, rebuilding it when the
-# raw JWKS string has changed:
+# Parse a JWK Set JSON string into usable key material:
 #
-#   raw         - the oidcJwks string this material was built from
+#   raw         - the JSON this material was built from
 #   signing_key - imported Crypt::PK::RSA for the first key with private
 #                 material, or undef when there is no usable one (matching
 #                 _build_id_token's refusal to sign, with no fallback to a
@@ -34,16 +33,17 @@ my %jwks_material_cache;
 #   verify_keys - ordered list of { kid, key } for every importable key
 #   public_keys - the public components served by the /jwks endpoint
 #
-# Returns undef when the entry has no oidcJwks value.
-sub _client_jwks_material {
-	my ( $self, $client_entry ) = @_;
-
-	my $jwks_json = $client_entry->get_value('oidcJwks');
-	return undef unless defined $jwks_json && $jwks_json ne '';
-
-	my $client_id = $client_entry->get_value('oidcClientId') // '';
-	my $cached    = $jwks_material_cache{$client_id};
-	return $cached if $cached && $cached->{raw} eq $jwks_json;
+# Args:
+#   $jwks_json - a JWK Set as a JSON string, e.g. '{"keys":[{"kty":"RSA",...}]}'.
+#                Malformed JSON, a missing keys array, and individual entries
+#                that will not import are all tolerated: they contribute
+#                nothing rather than aborting the parse, so one bad key cannot
+#                take the whole set down.
+#
+# Returns the hashref described above; every list is empty and signing_key is
+# undef when nothing usable was found.
+sub _parse_jwks {
+	my ( $self, $jwks_json ) = @_;
 
 	my %material = (
 		raw         => $jwks_json,
@@ -81,9 +81,46 @@ sub _client_jwks_material {
 		}
 	}
 
-	$jwks_material_cache{$client_id} = \%material;
 	return \%material;
-} ## end sub _client_jwks_material
+} ## end sub _parse_jwks
+
+# The provider's own signing key material, as described by _parse_jwks.
+#
+# There is one key set for the whole provider, not one per client. Every
+# relying party validates against the single jwks_uri named in the discovery
+# document, so it will accept a token signed by any key published there:
+# per-client keys would give no isolation at all, while multiplying the number
+# of private keys able to forge a token for every other client.
+#
+# Args:
+#   $entry - an already-resolved oidcProvider entry, for callers that had to
+#            fetch it anyway (the /jwks endpoint, which needs to tell a lookup
+#            failure apart from an unprovisioned provider). Omit it and the
+#            entry is fetched here.
+#
+# Returns the material hashref, or undef when the provider has no signing key
+# yet or the lookup failed — callers must treat that as "cannot sign" rather
+# than falling back to anything.
+#
+#   my $material = $self->_provider_jwks_material;
+#   my $key      = $material && $material->{signing_key};
+sub _provider_jwks_material {
+	my ( $self, $entry ) = @_;
+
+	unless ( defined $entry ) {
+		my $err = $self->pt_call( sub { $entry = $self->pt->getOIDCProviderEntry } );
+		return undef if $err || !$entry;
+	}
+
+	my $jwks_json = $entry->get_value('oidcProviderJwks');
+	return undef unless defined $jwks_json && $jwks_json ne '';
+
+	return $provider_material_cache
+		if $provider_material_cache && $provider_material_cache->{raw} eq $jwks_json;
+
+	$provider_material_cache = $self->_parse_jwks($jwks_json);
+	return $provider_material_cache;
+} ## end sub _provider_jwks_material
 
 # --------------------------------------------------------------------------- #
 # OIDC Discovery
@@ -120,12 +157,22 @@ sub discovery {
 				'phone_number', 'phone_number_verified', 'address',            'updated_at',
 			],
 			code_challenge_methods_supported => ['S256'],
+
+			# Request objects (OIDC Core 6) and the claims request parameter
+			# (OIDC Core 5.5) are not implemented, and the authorization
+			# endpoint rejects them rather than ignoring them. These must be
+			# stated explicitly: request_uri_parameter_supported defaults to
+			# *true* when omitted (OIDC Discovery 3), so leaving it out tells
+			# relying parties the opposite of the truth.
+			request_parameter_supported     => Mojo::JSON->false,
+			request_uri_parameter_supported => Mojo::JSON->false,
+			claims_parameter_supported      => Mojo::JSON->false,
 		}
 	);
 } ## end sub discovery
 
 # --------------------------------------------------------------------------- #
-# JWKS endpoint — serves public keys for all clients that have oidcJwks set
+# JWKS endpoint — serves the provider's public signing keys
 # --------------------------------------------------------------------------- #
 
 sub jwks {
@@ -135,23 +182,20 @@ sub jwks {
 	# refetch the JWKS periodically, and a 200 with no keys during a transient
 	# LDAP failure would have them cache 'no keys' and reject valid ID tokens
 	# until their next refresh.
-	my @all_keys;
-	my $clients;
-	my $err = $self->pt_call( sub { $clients = $self->pt->getOIDCClients } );
+	my $entry;
+	my $err = $self->pt_call( sub { $entry = $self->pt->getOIDCProviderEntry } );
 	if ($err) {
 		return $self->render(
 			json   => { error => 'server_error', error_description => 'Unable to resolve signing keys.' },
 			status => 500,
 		);
 	}
-	$clients //= [];
 
-	for my $entry (@$clients) {
-		my $material = $self->_client_jwks_material($entry);
-		push @all_keys, @{ $material->{public_keys} } if $material;
-	}
+	# An unprovisioned provider publishes an empty set — that is the truth, and
+	# distinct from the failure above.
+	my $material = $entry ? $self->_provider_jwks_material($entry) : undef;
 
-	$self->render( json => { keys => \@all_keys } );
+	$self->render( json => { keys => ( $material ? $material->{public_keys} : [] ) } );
 } ## end sub jwks
 
 # --------------------------------------------------------------------------- #
@@ -202,6 +246,28 @@ sub authorize {
 			error_title       => 'Invalid Redirect URI',
 			error_description => 'The redirect_uri does not match any registered URI for this client.',
 		);
+	}
+
+	# Request objects (OIDC Core 6) are not implemented, and must be refused
+	# rather than ignored. A relying party that signs its parameters into a
+	# request object expects those to be the authoritative ones; silently
+	# dropping the object and honouring the query string instead would act on
+	# whatever an interceptor put there. Discovery advertises both parameters
+	# as unsupported.
+	if ( ( $self->param('request') // '' ) ne '' ) {
+		return $self->_authz_error( $redirect_uri, $state, 'request_not_supported',
+			'Request objects are not supported.' );
+	}
+	if ( ( $self->param('request_uri') // '' ) ne '' ) {
+		return $self->_authz_error( $redirect_uri, $state, 'request_uri_not_supported',
+			'The request_uri parameter is not supported.' );
+	}
+
+	# The claims request parameter (OIDC Core 5.5) is likewise unimplemented;
+	# an RP asking for an essential claim must not be told it succeeded.
+	if ( ( $self->param('claims') // '' ) ne '' ) {
+		return $self->_authz_error( $redirect_uri, $state, 'invalid_request',
+			'The claims request parameter is not supported.' );
 	}
 
 	# response_type is required (RFC 6749 Section 4.1.2.1: missing required
@@ -351,7 +417,10 @@ sub authorize {
 	$authz{max_age} = $max_age + 0 if defined $max_age;
 	# prompt=login — and max_age=0, which OIDC defines as equivalent — demand
 	# an authentication fresher than this request, even if a session exists.
-	$authz{min_auth_time} = time() if $prompts{login} || ( defined $max_age && $max_age == 0 );
+	# Taken from created rather than a second call to time() so the two cannot
+	# straddle a second boundary: _authz_auth_ok treats "authenticated at or
+	# after the request arrived" as satisfying both.
+	$authz{min_auth_time} = $authz{created} if $prompts{login} || ( defined $max_age && $max_age == 0 );
 	# prompt=consent demands the consent screen even when a matching grant is
 	# already remembered.
 	$authz{force_consent} = 1 if $prompts{consent};
@@ -445,6 +514,20 @@ sub _login_flow_callbacks {
 		set_logged_in    => sub {
 			my ( $c, $user ) = @_;
 			delete $c->session->{sso_totp_pending_user};
+
+			# A different account signing in on this browser session must not
+			# inherit anything the previous one authorized. Session consents
+			# are keyed by user as well as client (see _consent_key), so this
+			# is not what makes the switch safe — it keeps the session cookie
+			# from accumulating an entry per user who has ever signed in here,
+			# which matters against the ~4 KB browser cap. The in-flight
+			# authorization requests are deliberately kept: they belong to the
+			# browser, not to a user, and the one being answered right now is
+			# usually the reason this login happened.
+			my $previous_user = $c->session('sso_user');
+			delete $c->session->{sso_consents}
+				if defined $previous_user && $previous_user ne '' && $previous_user ne $user;
+
 			$c->session( sso_user      => $user );
 			$c->session( sso_auth_time => time() );
 		},
@@ -613,21 +696,20 @@ sub consent {
 
 	# Remember the granted client/scope combination for this session so a
 	# later prompt=none (silent) request can succeed without UI.
+	my $key      = $self->_consent_key( $user, $authz->{client_id} );
 	my $consents = $self->session('sso_consents');
 	$consents = {} unless ref $consents eq 'HASH';
-	my %granted = map { $_ => 1 } split( /\s+/, $consents->{ $authz->{client_id} } // '' ),
-		split( /\s+/, $authz->{scope} // '' );
-	$consents->{ $authz->{client_id} } = join ' ', sort keys %granted;
+	my %granted = map { $_ => 1 } split( ' ', $consents->{$key} // '' ), split( ' ', $authz->{scope} // '' );
+	$consents->{$key} = join ' ', sort keys %granted;
 	$self->session( sso_consents => $consents );
 
 	# When asked to, also persist the grant in the shared store so it survives
 	# this browser session: later visits skip the consent screen and silent
 	# (prompt=none) requests succeed after any fresh login.
 	if ( $self->param('remember') ) {
-		my $key      = $user . "\0" . $authz->{client_id};
 		my $existing = $self->sso_storage->get( 'consent', $key );
-		my %all      = map { $_ => 1 } split( /\s+/, ( ( $existing && $existing->{scopes} ) // '' ) ),
-			split( /\s+/, $authz->{scope} // '' );
+		my %all      = map { $_ => 1 } split( ' ', ( ( $existing && $existing->{scopes} ) // '' ) ),
+			split( ' ', $authz->{scope} // '' );
 		my $ttl = $self->pt->{ini}->{''}->{ssoConsentLifetime} // 0;
 		$self->sso_storage->put(
 			'consent', $key,
@@ -862,11 +944,17 @@ sub _token_authorization_code {
 	my $code_data = $self->sso_storage->consume( 'code', $code );
 	unless ($code_data) {
 		$self->rate_fail( 'token', user => $client_id );
+
+		# A code presented twice has leaked (RFC 6749 Section 4.1.2): revoke
+		# the tokens the first redemption produced rather than leaving them
+		# live in whoever's hands got there first.
+		$self->_detect_replay( 'code', $code );
+
 		return $self->render(
 			json   => { error => 'invalid_grant', error_description => 'Authorization code not found or expired.' },
 			status => 400,
 		);
-	}
+	} ## end unless ($code_data)
 
 	# Validate code hasn't expired
 	my $code_lifetime = $self->pt->{ini}->{''}->{ssoCodeLifetime} // 600;
@@ -947,10 +1035,15 @@ sub _token_authorization_code {
 
 	# A grant_id ties every token minted from this authorization grant
 	# together, so revoking the refresh token can also invalidate the access
-	# tokens issued alongside it (RFC 7009 Section 2.1). Only minted when a
-	# refresh token will exist — without one there is nothing to cascade from.
+	# tokens issued alongside it (RFC 7009 Section 2.1). Minted for every
+	# grant, not just those that get a refresh token: replay of the
+	# authorization code has to be able to cascade to the access token too.
 	my %grant_types = map { $_ => 1 } $client_entry->get_value('oidcGrantType');
-	my $grant_id    = $grant_types{refresh_token} ? random_b64url(16) : undef;
+	my $grant_id    = random_b64url(16);
+
+	# Record the redemption before handing anything out, so a replay that
+	# arrives while this response is still in flight finds the tombstone.
+	$self->_mark_redeemed( 'code', $code, $grant_id );
 
 	my $access_token = $self->_issue_access_token( $code_data->{user}, $code_data->{scope}, $client_id, $grant_id );
 
@@ -1014,8 +1107,31 @@ sub _token_refresh {
 	my $rt_data = $self->sso_storage->consume( 'refresh', $presented );
 	unless ($rt_data) {
 		$self->rate_fail( 'token', user => $client_id );
+
+		# Rotation exists so that a stolen refresh token shows up as a replay:
+		# the thief and the legitimate client both present the same value, and
+		# whichever arrives second finds it already retired. That is the signal
+		# the token leaked, so tear the grant down (RFC 9700 Section 4.14.2)
+		# instead of only refusing this request and leaving the winner of the
+		# race holding a working chain.
+		$self->_detect_replay( 'refresh', $presented );
+
 		return $self->render(
 			json   => { error => 'invalid_grant', error_description => 'Refresh token not found or expired.' },
+			status => 400,
+		);
+	} ## end unless ($rt_data)
+
+	# Retire the presented token by name as well: consume() already removed it,
+	# but the tombstone is what makes a later replay recognisable.
+	$self->_mark_redeemed( 'refresh', $presented, $rt_data->{grant_id} );
+
+	# The grant may have been torn down while this token was still live —
+	# by a revocation (RFC 7009 Section 2.1) or by replay detected on a
+	# sibling credential from the same chain.
+	if ( $self->_grant_revoked( $rt_data->{grant_id} ) ) {
+		return $self->render(
+			json   => { error => 'invalid_grant', error_description => 'The grant has been revoked.' },
 			status => 400,
 		);
 	}
@@ -1135,6 +1251,98 @@ sub _issue_refresh_token {
 }
 
 # --------------------------------------------------------------------------- #
+# Grant teardown and single-use replay detection
+# --------------------------------------------------------------------------- #
+
+# Kill an entire authorization grant: every access token minted from it, and
+# any refresh token still holding it. Tokens are stored hashed and carry no
+# back-reference, so revocation is a tombstone on the grant_id that UserInfo,
+# introspection and the refresh grant all consult before honouring a token.
+#
+# Args:
+#   $grant_id - the grant chain to tear down. A no-op when undef or empty, so
+#               callers do not have to guard.
+#
+# Returns nothing. The tombstone's TTL is the refresh-token lifetime: it need
+# only outlive the longest-lived thing that could still present the grant, and
+# no token from the grant can outlive that.
+#
+#   $self->_revoke_grant( $rt_data->{grant_id} );
+sub _revoke_grant {
+	my ( $self, $grant_id ) = @_;
+	return unless defined $grant_id && $grant_id ne '';
+	my $rt_lifetime = $self->pt->{ini}->{''}->{ssoRefreshTokenLifetime} // 2592000;
+	$self->sso_storage->put( 'revoked_grant', $grant_id, { revoked_at => time() }, $rt_lifetime );
+	return;
+}
+
+# Has this grant been torn down by _revoke_grant?
+#
+# Args:
+#   $grant_id - the grant chain to test; undef is never revoked.
+#
+# Returns 1 when a tombstone exists, 0 otherwise.
+sub _grant_revoked {
+	my ( $self, $grant_id ) = @_;
+	return 0 unless defined $grant_id && $grant_id ne '';
+	return $self->sso_storage->get( 'revoked_grant', $grant_id ) ? 1 : 0;
+}
+
+# Remember that a single-use credential has been redeemed. consume() removes
+# the credential itself, which is what enforces single use; this records only
+# that it *was* used and which grant it produced, so a later replay can be told
+# apart from an ordinary expiry.
+#
+# Args:
+#   $kind     - the store namespace the credential was consumed from, either
+#               'code' (authorization code) or 'refresh' (refresh token)
+#   $key      - the raw code or token string that was presented. It is hashed
+#               before storage by App::Nisaba::WebSSO::Storage, as everywhere
+#               else, so redeemed credentials are not recoverable from the
+#               store either.
+#   $grant_id - the grant the redemption produced or belonged to.
+#
+# Returns nothing.
+#
+#   $self->_mark_redeemed( 'refresh', $presented, $rt_data->{grant_id} );
+sub _mark_redeemed {
+	my ( $self, $kind, $key, $grant_id ) = @_;
+	my $rt_lifetime = $self->pt->{ini}->{''}->{ssoRefreshTokenLifetime} // 2592000;
+	$self->sso_storage->put(
+		'redeemed',
+		$kind . ':' . $key,
+		{ redeemed_at => time(), ( defined $grant_id ? ( grant_id => $grant_id ) : () ) }, $rt_lifetime,
+	);
+	return;
+} ## end sub _mark_redeemed
+
+# Called when a single-use credential was not found. If it was not found
+# because it had already been redeemed, then two parties are presenting the
+# same credential and it has leaked — refusing just this request would leave
+# whichever of them redeemed first in possession of a working grant. RFC 9700
+# Section 4.14.2 (rotated refresh tokens) and RFC 6749 Section 4.1.2
+# (authorization codes) both call for tearing down the whole grant instead.
+#
+# Args:
+#   $kind - the store namespace, 'code' or 'refresh', as passed to
+#           _mark_redeemed
+#   $key  - the raw code or token string that was presented
+#
+# Returns 1 when this was a replay (and the grant has been revoked), 0 when the
+# credential was simply unknown or expired. The caller answers invalid_grant
+# either way: telling the two cases apart would confirm to an attacker that a
+# stolen token had been valid.
+#
+#   $self->_detect_replay( 'refresh', $presented );
+sub _detect_replay {
+	my ( $self, $kind, $key ) = @_;
+	my $redeemed = $self->sso_storage->get( 'redeemed', $kind . ':' . $key );
+	return 0 unless $redeemed;
+	$self->_revoke_grant( $redeemed->{grant_id} );
+	return 1;
+}
+
+# --------------------------------------------------------------------------- #
 # Token revocation (RFC 7009)
 # --------------------------------------------------------------------------- #
 
@@ -1158,15 +1366,8 @@ sub revoke {
 			$self->sso_storage->delete( $kind, $token );
 
 			# RFC 7009 Section 2.1: revoking a refresh token SHOULD also
-			# invalidate the access tokens based on the same grant. Tokens are
-			# stored hashed and unlinked, so the cascade is a tombstone on the
-			# grant_id that UserInfo and introspection check; it only needs to
-			# outlive the longest possible remaining access-token life.
-			if ( $kind eq 'refresh' && defined $data->{grant_id} ) {
-				my $token_lifetime = $self->pt->{ini}->{''}->{ssoTokenLifetime} // 3600;
-				$self->sso_storage->put( 'revoked_grant', $data->{grant_id}, { revoked_at => time() },
-					$token_lifetime );
-			}
+			# invalidate the access tokens based on the same grant.
+			$self->_revoke_grant( $data->{grant_id} ) if $kind eq 'refresh';
 		} ## end for my $kind (qw(token refresh))
 	} ## end if ( $token ne '' )
 
@@ -1209,22 +1410,34 @@ sub introspect {
 		}
 	}
 
-	# Unknown, expired, or foreign tokens are simply "not active" (RFC 7662
-	# Section 2.2) — never leak another client's token metadata.
-	my $lifetime
-		= ( $kind // '' ) eq 'refresh'
-		? ( $self->pt->{ini}->{''}->{ssoRefreshTokenLifetime} // 2592000 )
-		: ( $self->pt->{ini}->{''}->{ssoTokenLifetime} // 3600 );
-	unless ( $data
-		&& ( $data->{client_id} // '' ) eq $client_id
-		&& ( time() - ( $data->{issued_at} // 0 ) ) <= $lifetime )
-	{
+	# Unknown or foreign tokens are simply "not active" (RFC 7662 Section 2.2)
+	# — never leak another client's token metadata.
+	unless ( $data && ( $data->{client_id} // '' ) eq $client_id ) {
 		return $self->render( json => { active => Mojo::JSON->false } );
 	}
 
-	# A token whose grant was revoked (refresh-token revocation cascades per
-	# RFC 7009 Section 2.1) is no longer active either.
-	if ( defined $data->{grant_id} && $self->sso_storage->get( 'revoked_grant', $data->{grant_id} ) ) {
+	my $lifetime
+		= $kind eq 'refresh'
+		? ( $self->pt->{ini}->{''}->{ssoRefreshTokenLifetime} // 2592000 )
+		: ( $self->pt->{ini}->{''}->{ssoTokenLifetime} // 3600 );
+
+	# A refresh token's life is absolute, measured from the original
+	# authorization grant: rotation hands out successors but does not extend
+	# the chain, which is exactly how _token_refresh decides. Measuring from
+	# the successor's own issued_at instead would report a chain that /token
+	# already rejects as active, and hand the caller an exp in the future for a
+	# token that is dead. iat stays this token's own issue time.
+	my $issued_at = $data->{issued_at} // 0;
+	my $expires_at
+		= ( $kind eq 'refresh' ? ( $data->{grant_issued_at} // $issued_at ) : $issued_at ) + $lifetime;
+
+	if ( time() > $expires_at ) {
+		return $self->render( json => { active => Mojo::JSON->false } );
+	}
+
+	# A token whose grant was torn down — revoked (RFC 7009 Section 2.1) or
+	# replayed — is no longer active either.
+	if ( $self->_grant_revoked( $data->{grant_id} ) ) {
 		return $self->render( json => { active => Mojo::JSON->false } );
 	}
 
@@ -1236,8 +1449,8 @@ sub introspect {
 			username   => $data->{user},
 			sub        => $data->{user},
 			token_type => ( $kind eq 'refresh' ? 'refresh_token' : 'Bearer' ),
-			iat        => ( $data->{issued_at} + 0 ),
-			exp        => ( $data->{issued_at} + $lifetime + 0 ),
+			iat        => ( $issued_at + 0 ),
+			exp        => ( $expires_at + 0 ),
 			iss        => $self->sso_issuer,
 		}
 	);
@@ -1278,20 +1491,59 @@ sub userinfo {
 		return $self->render( json => { error => 'invalid_token' }, status => 401 );
 	}
 
-	# An access token from a revoked grant (refresh-token revocation cascades
-	# per RFC 7009 Section 2.1) is no longer valid.
-	if ( defined $token_data->{grant_id} && $self->sso_storage->get( 'revoked_grant', $token_data->{grant_id} ) ) {
+	# An access token whose grant was torn down — revoked (RFC 7009 Section
+	# 2.1) or replayed — is no longer valid.
+	if ( $self->_grant_revoked( $token_data->{grant_id} ) ) {
+		$self->sso_storage->delete( 'token', $token );
+		$self->res->headers->www_authenticate('Bearer error="invalid_token"');
+		return $self->render( json => { error => 'invalid_token' }, status => 401 );
+	}
+
+	# The relying party the token was issued to must still be registered.
+	# Deleting a client has to take its outstanding access tokens with it, and
+	# nothing else here would notice: the grant store keeps no back-reference
+	# from a token to a client entry, so without this check a deleted client
+	# keeps reading user claims until the token's own lifetime runs out. A
+	# lookup that errors out is a 500, not a 401 — a directory that is briefly
+	# unreachable must not destroy live tokens.
+	my $client_entry;
+	my $client_err
+		= $self->pt_call(
+			sub { $client_entry = $self->pt->getOIDCClientEntry( { clientId => ( $token_data->{client_id} // '' ) } ) }
+		);
+	if ($client_err) {
+		return $self->render(
+			json   => { error => 'server_error', error_description => 'Unable to resolve client.' },
+			status => 500,
+		);
+	}
+	unless ($client_entry) {
 		$self->sso_storage->delete( 'token', $token );
 		$self->res->headers->www_authenticate('Bearer error="invalid_token"');
 		return $self->render( json => { error => 'invalid_token' }, status => 401 );
 	}
 
 	my $user   = $token_data->{user};
-	my @scopes = split /\s+/, ( $token_data->{scope} // '' );
-	my %scopes = map { $_ => 1 } @scopes;
+	my %scopes = map { $_ => 1 } split ' ', ( $token_data->{scope} // '' );
 
 	# Build claims
-	my $claims = $self->_build_userinfo_claims( $user, \%scopes );
+	my ( $claims, $claims_error ) = $self->_build_userinfo_claims( $user, \%scopes );
+
+	# A subject that no longer resolves in the directory ends the token: an
+	# answer of 200 with a bare sub would have relying parties treat a deleted
+	# account as a live one. A lookup that merely failed leaves the token
+	# alone and reports a server error.
+	if ( ( $claims_error // '' ) eq 'not_found' ) {
+		$self->sso_storage->delete( 'token', $token );
+		$self->res->headers->www_authenticate('Bearer error="invalid_token"');
+		return $self->render( json => { error => 'invalid_token' }, status => 401 );
+	}
+	if ( !$claims ) {
+		return $self->render(
+			json   => { error => 'server_error', error_description => 'Unable to resolve user claims.' },
+			status => 500,
+		);
+	}
 
 	$self->render( json => $claims );
 } ## end sub userinfo
@@ -1328,25 +1580,65 @@ sub _authz_auth_ok {
 	return 0 unless $self->session('sso_user');
 	my $auth_time = $self->session('sso_auth_time');
 	return 0 if !defined $auth_time;
-	return 0 if defined $authz->{max_age}       && ( time() - $auth_time ) > $authz->{max_age};
+
+	# An authentication at or after the moment this request arrived was
+	# performed *for* this request, which settles both constraints by
+	# construction. Without this escape hatch, max_age is measured against a
+	# wall clock that keeps running while the user reads the consent screen, so
+	# any value shorter than a human takes to click "Allow" bounces them back
+	# to login — where a successful login lands on consent again, forever.
+	# max_age=0, which OIDC Core defines as equivalent to prompt=login, could
+	# never complete at all. The RP can still enforce a stricter reading: the
+	# ID token always carries auth_time.
+	my $requested_at = $authz->{created};
+	return 1 if defined $requested_at && $auth_time >= $requested_at;
+
 	return 0 if defined $authz->{min_auth_time} && $auth_time < $authz->{min_auth_time};
+	return 0 if defined $authz->{max_age}       && ( time() - $auth_time ) > $authz->{max_age};
 	return 1;
+} ## end sub _authz_auth_ok
+
+# The key a consent record is filed under, for both the session map and the
+# durable store. Consent is granted by a specific End-User to a specific
+# client, so it must be keyed by both: an SSO session outlives the account that
+# started it (signing in at /sso/login replaces the session's user without
+# tearing the session down), and a map keyed by client alone would let a
+# consent Alice granted silently authorize Bob's account to the same client.
+#
+# Args:
+#   $user      - the End-User the consent belongs to; the LDAP username, as
+#                stored in the session's sso_user
+#   $client_id - the oidcClientId the consent was granted to
+#
+# Returns the two joined by a NUL, which cannot occur in either. Both are
+# treated as the empty string when undef, so a caller that has not resolved a
+# user cannot collide with one that has.
+#
+#   my $key = $self->_consent_key( 'alice', 'testapp' );   # "alice\0testapp"
+sub _consent_key {
+	my ( $self, $user, $client_id ) = @_;
+	return ( defined $user ? $user : '' ) . "\0" . ( defined $client_id ? $client_id : '' );
 }
 
 # The scopes this user has granted the client, as a hash: the union of the
 # consents recorded in this browser session and the durable per-user consents
-# in the shared store ("remember this decision").
+# in the shared store ("remember this decision"). Both are keyed by
+# _consent_key, so neither can be read across a user switch.
 sub _consented_scopes {
 	my ( $self, $user, $client_id ) = @_;
 	my %granted;
+	return %granted unless defined $user && $user ne '' && defined $client_id && $client_id ne '';
+
+	my $key = $self->_consent_key( $user, $client_id );
+
 	my $consents = $self->session('sso_consents');
 	if ( ref $consents eq 'HASH' ) {
-		$granted{$_} = 1 for split /\s+/, ( $consents->{$client_id} // '' );
+		$granted{$_} = 1 for split ' ', ( $consents->{$key} // '' );
 	}
-	if ( defined $user && $user ne '' && defined $client_id && $client_id ne '' ) {
-		my $durable = $self->sso_storage->get( 'consent', $user . "\0" . $client_id );
-		$granted{$_} = 1 for split /\s+/, ( ( $durable && $durable->{scopes} ) // '' );
-	}
+
+	my $durable = $self->sso_storage->get( 'consent', $key );
+	$granted{$_} = 1 for split ' ', ( ( $durable && $durable->{scopes} ) // '' );
+
 	return %granted;
 } ## end sub _consented_scopes
 
@@ -1355,7 +1647,7 @@ sub _consented_scopes {
 sub _consent_covers {
 	my ( $self, $authz ) = @_;
 	my %granted = $self->_consented_scopes( $self->session('sso_user'), $authz->{client_id} );
-	return !grep { !$granted{$_} } split /\s+/, ( $authz->{scope} // '' );
+	return !grep { !$granted{$_} } split ' ', ( $authz->{scope} // '' );
 }
 
 # Move an authenticated pending request forward: issue the code immediately
@@ -1458,7 +1750,7 @@ sub _verify_id_token_hint {
 	my $verified      = 0;
 
 	if ( $alg eq 'RS256' ) {
-		my $material = $self->_client_jwks_material($client_entry);
+		my $material = $self->_provider_jwks_material;
 		if ($material) {
 			# Select the verification key by the token's kid so hints signed
 			# with a rotated-out-but-retained key still verify; with no kid (or
@@ -1589,9 +1881,9 @@ sub _build_id_token {
 	$alg = 'RS256' if !defined $alg || $alg eq '';
 
 	if ( $alg eq 'RS256' ) {
-		# Sign with the newest private key in the client's JWKS (the cached,
-		# already-imported key object; see _client_jwks_material).
-		my $material = $self->_client_jwks_material($client_entry);
+		# Sign with the newest private key in the provider's JWK Set (the
+		# cached, already-imported key object; see _provider_jwks_material).
+		my $material = $self->_provider_jwks_material;
 		if ( $material && $material->{signing_key} ) {
 			my $header = b64url_encode(
 				Mojo::JSON::encode_json( { alg => 'RS256', typ => 'JWT', kid => $material->{signing_kid} } ) );
@@ -1601,7 +1893,9 @@ sub _build_id_token {
 			return "$signing_input.$sig_b64";
 		}
 
-		# Client requires RS256 but no usable key: do NOT downgrade to none.
+		# RS256 was asked for but the provider has no usable signing key: do
+		# NOT downgrade to none. The token endpoint turns this into a
+		# server_error, which is the honest answer to an unprovisioned OP.
 		return undef;
 	} elsif ( $alg eq 'HS256' ) {
 		# Sign with the client secret using HMAC-SHA256
@@ -1625,18 +1919,41 @@ sub _build_id_token {
 	return undef;
 } ## end sub _build_id_token
 
+# Resolve a user's UserInfo claims from the directory.
+#
+# Args:
+#   $user   - the subject to look up; the LDAP username carried in the access
+#             token's grant record
+#   $scopes - hashref of the scopes the token was issued for, as
+#             { openid => 1, profile => 1, ... }; selects which claims are
+#             included, see _claims_for_scopes
+#
+# Returns the two-element list ( $claims, $error ):
+#
+#   - $claims :: hashref of OIDC claims including sub, or undef when nothing
+#     could be resolved
+#   - $error :: '' when the claims are good, 'not_found' when the directory
+#     has no such user, or 'unavailable' when the lookup itself failed
+#
+# The distinction matters to the caller: a deleted account has to invalidate
+# the access token, while a directory that is momentarily unreachable must
+# leave it alone. App::Nisaba reports a clean miss as error 17 and a search
+# that genuinely failed as 32 (or a die, which pt_call turns into a string).
+#
+#   my ( $claims, $error ) = $self->_build_userinfo_claims( 'alice', { openid => 1, email => 1 } );
+#   # ( { sub => 'alice', email => 'alice@example.org' }, '' )
 sub _build_userinfo_claims {
 	my ( $self, $user, $scopes ) = @_;
 
-	my %claims = ( sub => $user );
-
 	my $entry;
 	$self->pt_call( sub { $entry = $self->pt->getUserEntry( { user => $user } ) } );
-	return \%claims unless $entry;
+	unless ($entry) {
+		return ( undef, ( ( $self->pt->error // 0 ) == 17 ) ? 'not_found' : 'unavailable' );
+	}
 
-	%claims = ( %claims, $self->_claims_for_scopes( $entry, $user, $scopes, extended => 1 ) );
+	my %claims = ( sub => $user, $self->_claims_for_scopes( $entry, $user, $scopes, extended => 1 ) );
 
-	return \%claims;
+	return ( \%claims, '' );
 } ## end sub _build_userinfo_claims
 
 # Map a user's LDAP attributes to OIDC claims for the requested scopes. The

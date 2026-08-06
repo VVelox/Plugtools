@@ -268,15 +268,39 @@ rotated on every use — the relying party must store the replacement
 returned by each exchange; the presented token is retired atomically, so
 a replayed (or stolen and already-used) token fails.
 
+Rotation is also how theft is detected. If a refresh token is presented
+twice, two parties hold it, and refusing only the second request would
+leave whichever of them rotated first with a working chain. The provider
+therefore revokes the entire grant on a replay (RFC 9700 section 4.14.2):
+the current refresh token, and every access token issued from the same
+authorization. An authorization code presented twice is treated the same
+way (RFC 6749 section 4.1.2).
+
+Operationally this means a relying party that loses a token response in
+transit and retries with the old refresh token will have its grant torn
+down and must send the user through authorization again. That is the
+intended trade: the alternative is being unable to tell a lost response
+from a stolen token.
+
 =head2 Signing algorithm and keys
 
-Each client has its own signing configuration: C<RS256> (the default when
-unset) signs ID tokens with the client's own RSA key pair, generated at
-registration; C<HS256> signs with the client secret. The public keys of
-all clients are published at C</jwks>, selected by C<kid>. The admin UI's
-"Regenerate Keys" action B<rotates> rather than replaces: the new key
-signs from then on, while up to two previous public keys stay published
-so ID tokens issued before the rotation keep verifying.
+Each client chooses how its ID tokens are signed: C<RS256> (the default
+when unset) signs with the provider's RSA key; C<HS256> signs with that
+client's own secret.
+
+There is one RS256 signing key for the whole provider, stored as the
+C<oidcProvider> entry under C<oidcbase> and published at C</jwks>. That
+is deliberate. Every relying party validates against the single key set
+named in the discovery document, so it will accept a token signed by any
+key published there — a key per client would isolate nothing, while
+multiplying the number of private keys able to forge a token for every
+other client. Restrict read access to C<oidcProviderJwks> to the
+provider's own bind DN.
+
+The key is generated with the first client registration. The "Rotate
+Key" action on the OIDC client list B<rotates> rather than replaces: the
+new key signs from then on, while up to two previous public keys stay
+published so ID tokens issued before the rotation keep verifying.
 
 =head2 Default max age
 
@@ -284,6 +308,14 @@ A registered C<oidcDefaultMaxAge> is enforced: users whose authentication
 is older than this many seconds are sent back through login before the
 request proceeds (a C<max_age> request parameter overrides it per
 request).
+
+The age is measured against the session as the request arrives. Once the
+user has authenticated for that request the constraint is met, however
+long they then spend on the consent screen — otherwise a short
+C<max_age> could never be satisfied, and C<max_age=0> (which OIDC Core
+defines as equivalent to C<prompt=login>) would loop between login and
+consent forever. Relying parties needing a stricter reading have
+C<auth_time>, which every ID token carries.
 
 =head2 Post-logout redirect URIs
 
@@ -299,6 +331,11 @@ user ticks "remember this decision" — durably (see C<ssoConsentLifetime>),
 in which case returning users skip the consent screen entirely and
 C<prompt=none> silent requests succeed after any fresh login. A request
 with C<prompt=consent> always shows the screen.
+
+Both records are filed against the user as well as the client. An SSO
+session outlives the account that started it — signing in again at
+C</sso/login> replaces the session's user without ending the session — so
+a consent one user granted is never read on behalf of another.
 
 =head1 SCOPES AND CLAIMS
 

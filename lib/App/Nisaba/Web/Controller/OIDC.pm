@@ -19,8 +19,98 @@ sub index {
 
 	my @sorted
 		= sort { ( $a->get_value('oidcClientId') // '' ) cmp( $b->get_value('oidcClientId') // '' ) } @{$clients};
-	$self->render( template => 'oidc/index', clients => \@sorted );
+
+	$self->render(
+		template      => 'oidc/index',
+		clients       => \@sorted,
+		provider_jwks => _provider_public_jwks($self),
+	);
 } ## end sub index
+
+# The public half of the provider's signing key set, ready to display.
+#
+# Returns the JWK Set as a JSON string with all private components stripped,
+# or '' when the provider has no key yet or it could not be read/parsed. The
+# private material never reaches a template: only the fields a relying party
+# needs to verify a signature are copied out.
+#
+#   my $json = _provider_public_jwks($self);   # '{"keys":[{"kty":"RSA",...}]}'
+sub _provider_public_jwks {
+	my ($self) = @_;
+
+	my $entry;
+	eval { $entry = $self->pt->getOIDCProviderEntry };
+	return '' unless $entry;
+
+	my $jwks_json = $entry->get_value('oidcProviderJwks') // '';
+	return '' if $jwks_json eq '';
+
+	my @public;
+	eval {
+		my $jwks = Mojo::JSON::decode_json($jwks_json);
+		return unless ref $jwks->{keys} eq 'ARRAY';
+		for my $key ( @{ $jwks->{keys} } ) {
+			next unless ref $key eq 'HASH';
+			my %pub = map { $_ => $key->{$_} } grep { defined $key->{$_} } qw(kty n e kid use alg key_ops);
+			$pub{use} //= 'sig';
+			push @public, \%pub;
+		}
+	};
+
+	return @public ? encode_json( { keys => \@public } ) : '';
+} ## end sub _provider_public_jwks
+
+# Provision the provider's signing key set if it does not have one yet.
+#
+# The OP signs every ID token with this key and publishes its public half at
+# /jwks, so an unprovisioned provider cannot issue RS256 tokens at all. Called
+# when a client is registered so the first registration on a fresh install
+# leaves a working provider rather than one that 500s at the token endpoint.
+#
+# Returns an error string, or '' when the provider now has a key (including
+# the case where it already had one).
+#
+#   my $error = _ensure_provider_keys($self);
+sub _ensure_provider_keys {
+	my ($self) = @_;
+
+	my $entry;
+	my $lookup_error = $self->pt_call( sub { $entry = $self->pt->getOIDCProviderEntry } );
+	return $lookup_error if $lookup_error;
+
+	return '' if $entry && ( $entry->get_value('oidcProviderJwks') // '' ) ne '';
+
+	return $self->pt_call( sub { $self->pt->setOIDCProviderJwks( { jwks => _generate_jwks() } ) } );
+} ## end sub _ensure_provider_keys
+
+# Rotate the provider's signing key set: a fresh private key goes first (the
+# SSO provider signs with the first key holding private material) and previous
+# keys are retained as public-only entries so ID tokens signed before the
+# rotation keep verifying. POSTed from the OIDC client index.
+sub provider_keys {
+	my $self = shift;
+
+	my $entry;
+	my $lookup_error = $self->pt_call( sub { $entry = $self->pt->getOIDCProviderEntry } );
+	if ($lookup_error) {
+		$self->flash( error => "Failed to read the provider signing keys: $lookup_error" );
+		return $self->redirect_to('oidc_index');
+	}
+
+	my $existing = $entry ? $entry->get_value('oidcProviderJwks') : undef;
+	my $error    = $self->pt_call( sub { $self->pt->setOIDCProviderJwks( { jwks => _rotate_jwks($existing) } ) } );
+	if ($error) {
+		$self->flash( error => "Failed to rotate the provider signing keys: $error" );
+		return $self->redirect_to('oidc_index');
+	}
+
+	$self->flash(
+		success => ( defined $existing && $existing ne '' )
+		? 'Provider signing key rotated; previous public keys retained for verification.'
+		: 'Provider signing key generated.'
+	);
+	return $self->redirect_to('oidc_index');
+} ## end sub provider_keys
 
 sub add {
 	my $self = shift;
@@ -63,10 +153,10 @@ sub _generate_jwks {
 	return encode_json( { keys => [ _generate_jwk() ] } );
 }
 
-# Rotate a client's JWK Set: a fresh private key goes first (the SSO provider
-# signs with the first key holding private material), and previous keys are
-# retained as public-only entries so ID tokens signed before the rotation keep
-# verifying against the published JWKS. At most two old keys are kept.
+# Rotate a JWK Set: a fresh private key goes first (the SSO provider signs
+# with the first key holding private material), and previous keys are retained
+# as public-only entries so ID tokens signed before the rotation keep verifying
+# against the published JWKS. At most two old keys are kept.
 sub _rotate_jwks {
 	my ($old_json) = @_;
 
@@ -175,23 +265,16 @@ sub create {
 		return $self->redirect_to('oidc_add');
 	}
 
-	# Generate and store RSA key pair for token signing
-	my $priv_jwks  = _generate_jwks();
-	my $jwks_error = $self->pt_call(
-		sub {
-			$self->pt->oidcClientUpdate(
-				{
-					clientId  => $clientId,
-					attribute => 'oidcJwks',
-					value     => $priv_jwks,
-				}
-			);
-		}
-	);
+	# ID tokens are signed with the provider's key, not a per-client one: every
+	# relying party validates against the single published JWK Set, so a key
+	# per client would give no isolation while multiplying the private keys
+	# able to forge a token for everyone. Provision it here so the first
+	# registration on a fresh install leaves a provider that can actually sign.
+	my $jwks_error = _ensure_provider_keys($self);
 	if ($jwks_error) {
 		return $self->_render_show(
 			$clientId,
-			flash_error   => "Client created but key generation failed: $jwks_error",
+			flash_error   => "Client created but provider key generation failed: $jwks_error",
 			new_client_id => $clientId,
 			( defined $clientSecret ? ( new_client_secret => $clientSecret ) : () ),
 		);
@@ -278,14 +361,15 @@ sub update {
 		}
 		if ($entry) {
 			my $has_secret = ( $entry->get_value('oidcClientSecret') // '' ) ne '';
-			my $has_jwks   = ( $entry->get_value('oidcJwks')         // '' ) ne '';
 			if ( $action eq 'authMethod' && $secret_auth{$value} && !$has_secret ) {
 				$veto = "Auth method '$value' requires a client secret — generate one first.";
 			} elsif ( $action eq 'idTokenSignedResponseAlg' ) {
 				if ( $value eq 'HS256' && !$has_secret ) {
 					$veto = 'HS256 signs with the client secret, but this client has none — generate a secret first.';
-				} elsif ( $value eq 'RS256' && !$has_jwks ) {
-					$veto = 'RS256 requires a signing key pair — generate keys first.';
+				} elsif ( $value eq 'RS256' && _provider_public_jwks($self) eq '' ) {
+					# RS256 signs with the provider's key, which is shared by
+					# every client and generated with the first registration.
+					$veto = 'RS256 requires the provider signing key — generate it from the OIDC client list first.';
 				}
 			} elsif ( $action eq 'clientSecret' && $value eq '' ) {
 				my $am  = $entry->get_value('oidcTokenEndpointAuthMethod')  // '';
@@ -353,27 +437,6 @@ sub update {
 				flash_success     => "Client secret regenerated.",
 				new_client_secret => $new_secret,
 			);
-		}
-	} elsif ( $action eq 'regenerateKeys' ) {
-		# Rotate rather than replace: old public keys stay in the set so
-		# already-issued ID tokens keep verifying during the overlap window.
-		my $entry;
-		eval { $entry = $self->pt->getOIDCClientEntry( { clientId => $clientId } ) };
-		my $new_jwks = _rotate_jwks( $entry ? $entry->get_value('oidcJwks') : undef );
-		$error = $self->pt_call(
-			sub {
-				$self->pt->oidcClientUpdate(
-					{
-						clientId  => $clientId,
-						attribute => 'oidcJwks',
-						value     => $new_jwks,
-					}
-				);
-			}
-		);
-		if ( !$error ) {
-			$self->flash( success => 'Signing key pair rotated; previous public keys retained for verification.' );
-			return $self->redirect_to( 'oidc_show', clientId => $clientId );
 		}
 	} elsif ( exists $single_attrs{$action} ) {
 		$error = $self->pt_call(

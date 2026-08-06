@@ -57,10 +57,15 @@ registration metadata.
   under `oidcbase`: `oidcClientId` (the RDN), `oidcClientSecret`,
   `oidcRedirectURI`, `oidcScope`, `oidcGrantType`, `oidcResponseType`,
   `oidcTokenEndpointAuthMethod`, `oidcIdTokenSignedResponseAlg`,
-  `oidcJwks` (the signing keys), display metadata (`oidcClientName`,
+  display metadata (`oidcClientName`,
   `oidcLogoURI`, `oidcPolicyURI`, `oidcTosURI`, `oidcContact`),
   behavior (`oidcDefaultMaxAge`, `oidcPostLogoutRedirectURI`), and the
   rest of the RFC 7591 vocabulary for completeness
+- `oidcProvider` (structural) — one entry per provider, holding
+  `oidcProviderJwks`: the signing key set every relying party verifies
+  against. It is the provider's, not any client's, because they all
+  validate against the one published set — restrict read access to the
+  provider's bind DN
 - `oidcSubject` (auxiliary) — on user entries, the OIDC claims that
   have no inetOrgPerson home: `oidcNickname`, `oidcMiddleName`,
   `oidcPicture`, `oidcProfile`, `oidcWebsite`, `oidcGender`,

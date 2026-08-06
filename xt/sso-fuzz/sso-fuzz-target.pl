@@ -238,7 +238,13 @@ sub install_mock_stubs {
 		oidcApplicationType          => 'web',
 		oidcTokenEndpointAuthMethod  => 'none',
 		oidcIdTokenSignedResponseAlg => 'RS256',
-		oidcJwks                     => $jwks_json,
+	);
+
+	# One signing key set for the whole provider; RS256 ID tokens use it.
+	my $provider = FuzzEntry->new(
+		_dn              => 'cn=provider,ou=oidc,dc=example,dc=com',
+		cn               => 'provider',
+		oidcProviderJwks => $jwks_json,
 	);
 
 	my $client_conf = FuzzEntry->new(
@@ -281,8 +287,8 @@ sub install_mock_stubs {
 			return $client_conf if $id eq $CREDS{conf_client};
 			return undef;
 		},
-		getOIDCClients     => sub { return [ $client_pub, $client_conf ] },
-		userVerifyPassword => sub {
+		getOIDCProviderEntry => sub { return $provider },
+		userVerifyPassword   => sub {
 			my ( $self, $args ) = @_;
 			die "bad password\n"
 				unless ( $args->{user} // '' ) eq $CREDS{user}

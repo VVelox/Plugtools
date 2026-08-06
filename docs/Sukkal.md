@@ -35,7 +35,7 @@ The endpoints...
 | `/authorize`                        | authorization endpoint                      |
 | `/token`                            | token endpoint (POST)                       |
 | `/userinfo`                         | claims for a bearer access token            |
-| `/jwks`                             | public signing keys, all clients            |
+| `/jwks`                             | the provider's public signing keys          |
 | `/revoke`                           | token revocation                            |
 | `/introspect`                       | token introspection                         |
 | `/sso/login`, `/sso/totp`, `/sso/consent` | the human-facing pages                |
@@ -84,11 +84,14 @@ the worker processes agree, makes codes and refresh tokens atomically
 single-use, and keeps grants alive across restarts. Expired grants are
 swept opportunistically every `ssoStorageCleanupInterval` seconds.
 
-Signing is per client: RS256 clients get their own RSA key pair minted
-at registration, HS256 clients are signed with their client secret, and
-`alg=none` is never issued under any circumstance. When keys are
-rotated from the admin UI, up to two old public keys stay published at
-`/jwks` so tokens in flight keep verifying.
+The seal is the provider's own: one RSA key, minted with the first
+registration, signing every RS256 token and published at `/jwks`. Not
+one key per client — every relying party checks against that same
+published set, so a key apiece would divide nothing while handing each
+of them a key that could forge for all the rest. HS256 clients are
+signed with their client secret instead, and `alg=none` is never issued
+under any circumstance. When the key is rotated from the admin UI, up to
+two old public keys stay published so tokens in flight keep verifying.
 
 Lifetimes are config: `ssoCodeLifetime` (600), `ssoTokenLifetime`
 (3600), `ssoIdTokenLifetime` (falls back to the access token lifetime),

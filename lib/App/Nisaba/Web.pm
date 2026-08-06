@@ -66,9 +66,11 @@ sub startup {
 	$auth->post('/netgroups/:group')->to('netgroups#update')->name('netgroups_update');
 	$auth->post('/netgroups/:group/delete')->to('netgroups#delete')->name('netgroups_delete');
 
-	# OIDC clients — /oidc/add before /oidc/:clientId to avoid collision
+	# OIDC clients — /oidc/add and /oidc/provider-keys before /oidc/:clientId
+	# to avoid collision
 	$auth->get('/oidc')->to('o_i_d_c#index')->name('oidc_index');
 	$auth->get('/oidc/add')->to('o_i_d_c#add')->name('oidc_add');
+	$auth->post('/oidc/provider-keys')->to('o_i_d_c#provider_keys')->name('oidc_provider_keys');
 	$auth->post('/oidc')->to('o_i_d_c#create')->name('oidc_create');
 	$auth->get('/oidc/:clientId')->to('o_i_d_c#show')->name('oidc_show');
 	$auth->post('/oidc/:clientId')->to('o_i_d_c#update')->name('oidc_update');

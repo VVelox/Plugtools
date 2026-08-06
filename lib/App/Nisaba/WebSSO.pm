@@ -28,11 +28,24 @@ our $VERSION = '0.0.1';
 
 A Mojolicious web application that implements an OpenID Connect Provider
 (OP) backed by LDAP via App::Nisaba: the Authorization Code flow with
-PKCE, refresh tokens (rotated on every use), token revocation (RFC 7009;
-revoking a refresh token also invalidates the access tokens from the same
-grant) and introspection (RFC 7662), C<prompt>/C<max_age> handling including
-C<prompt=none> silent authentication, per-user remembered consent,
-RP-initiated logout, and per-client ID-token signing with key rotation.
+PKCE, refresh tokens (rotated on every use, with replay of a rotated-out
+token tearing down the whole grant per RFC 9700), token revocation
+(RFC 7009; revoking a refresh token also invalidates the access tokens from
+the same grant) and introspection (RFC 7662), C<prompt>/C<max_age> handling
+including C<prompt=none> silent authentication, per-user remembered consent,
+RP-initiated logout, and ID-token signing with key rotation.
+
+RS256 ID tokens are signed with a single provider key (the C<oidcProvider>
+entry under C<oidcbase>), published at C</jwks>. Relying parties all validate
+against that one key set, so a key per client would give no isolation while
+multiplying the private keys able to forge a token for every other client.
+C<HS256> clients are signed with their own client secret instead.
+
+Request objects (the C<request> and C<request_uri> parameters, OIDC Core 6)
+and the C<claims> request parameter are not implemented. The authorization
+endpoint refuses them rather than ignoring them, and discovery advertises
+them as unsupported — note that C<request_uri_parameter_supported> defaults
+to I<true> when omitted, so stating it is not optional.
 
 OIDC client registrations are stored as C<oidcRelyingParty> entries in
 LDAP under the configured C<oidcbase>. Several registration fields are

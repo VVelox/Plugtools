@@ -23,6 +23,7 @@
 #   29-30   Client subject & sector
 #   31-36   Client behaviour & session
 #   37-42   Client software & management
+#      43   Provider signing
 #   50-61   User/subject OIDC claims & consent
 #
 # LDAP Syntaxes used:
@@ -461,7 +462,31 @@ attributetype ( 1.3.6.1.4.1.26481.2.10.1.42
 
 
 # =========================================================================
-# 7. User/subject OIDC claims  (1.3.6.1.4.1.26481.2.10.1.50 – .1.61)
+# 7. Provider signing  (1.3.6.1.4.1.26481.2.10.1.43)
+# =========================================================================
+
+# oidcProviderJwks — the OpenID Provider's own JWK Set, holding private key
+# material.  This is what the OP signs ID Tokens with, and its public half is
+# what the OP publishes at its jwks_uri.
+#
+# The key belongs to the provider, not to any client.  Every relying party
+# validates against the one key set named by the provider's discovery
+# document, so it can accept a token signed by any key in that set: a
+# per-client key would therefore give no isolation whatsoever, while
+# multiplying the number of private keys able to forge a token for every
+# other client.
+#
+# Read access must be restricted to the provider's own bind DN.
+attributetype ( 1.3.6.1.4.1.26481.2.10.1.43
+  NAME 'oidcProviderJwks'
+  DESC 'OpenID Provider JSON Web Key Set, including private key material'
+  EQUALITY caseExactMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+
+
+# =========================================================================
+# 8. User/subject OIDC claims  (1.3.6.1.4.1.26481.2.10.1.50 – .1.61)
 #
 # These attributes cover standard OIDC claims (Core Section 5.1) that
 # have NO equivalent in inetOrgPerson / organizationalPerson / person.
@@ -669,6 +694,20 @@ objectclass ( 1.3.6.1.4.1.26481.2.10.2.1
         oidcRegistrationClientURI $
         oidcClientIdIssuedAt $
         oidcClientSecretExpiresAt $
+        description ) )
+
+# oidcProvider — the OpenID Provider's own configuration entry.  A single
+# entry per provider, holding the signing key set that every relying party
+# verifies against.
+#
+# Typical DN: cn=provider,ou=oidc,dc=example,dc=com
+objectclass ( 1.3.6.1.4.1.26481.2.10.2.3
+  NAME 'oidcProvider'
+  DESC 'OpenID Provider signing configuration'
+  SUP top
+  STRUCTURAL
+  MUST ( cn )
+  MAY ( oidcProviderJwks $
         description ) )
 
 # oidcSubject — auxiliary class for LDAP users that participate in OIDC.

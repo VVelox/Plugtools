@@ -389,44 +389,20 @@
           </tbody>
         </table>
       </div>
-      <%
-        my $jwks_json = $entry->get_value('oidcJwks') // '';
-        my $pub_jwks_json = '';
-        if ($jwks_json ne '') {
-          eval {
-            my $jwks = Mojo::JSON::decode_json($jwks_json);
-            if ($jwks->{keys} && ref $jwks->{keys} eq 'ARRAY') {
-              my @pub_keys;
-              for my $key (@{$jwks->{keys}}) {
-                my %pub;
-                for my $f (qw(kty n e kid use alg key_ops)) {
-                  $pub{$f} = $key->{$f} if defined $key->{$f};
-                }
-                $pub{use} //= 'sig';
-                push @pub_keys, \%pub;
-              }
-              $pub_jwks_json = Mojo::JSON::encode_json({keys => \@pub_keys});
-            }
-          };
-        }
-      %>
       <div class="card-footer">
-        % if ($pub_jwks_json ne '') {
-        <div class="d-flex justify-content-between align-items-center mb-2">
-          <small class="fw-bold">Public Key (JWK Set)</small>
-          <button class="btn btn-sm btn-outline-secondary py-0 oidc-copy-btn"
-                  data-copy="<%= $pub_jwks_json %>">Copy</button>
-        </div>
-        <pre class="mb-2 small" style="max-height:200px;overflow:auto;font-size:0.75rem"><%= $pub_jwks_json %></pre>
-        % } else {
-        <p class="text-muted mb-2">No signing key configured.</p>
-        % }
-        <form method="post" action="/oidc/<%= $clientId %>"
-              data-confirm="Rotate the signing key pair? New tokens are signed with the new key; the previous public keys stay published so existing tokens keep verifying.">
-          <%= csrf_field %>
-          <input type="hidden" name="action" value="regenerateKeys">
-          <button class="btn btn-sm btn-outline-warning"><%= $pub_jwks_json ne '' ? 'Rotate Keys' : 'Generate Keys' %></button>
-        </form>
+        <small class="fw-bold d-block mb-1">Signing Key</small>
+        <p class="text-muted small mb-0">
+          % my $alg = $entry->get_value('oidcIdTokenSignedResponseAlg') // 'RS256';
+          % if ($alg eq 'HS256') {
+            HS256 — ID tokens for this client are signed with its client secret.
+          % } else {
+            RS256 — ID tokens are signed with the
+            <a href="<%= url_for('oidc_index') %>">provider signing key</a>,
+            published at <code>/jwks</code>. It is shared by every client:
+            relying parties all verify against that one key set, so a key per
+            client would isolate nothing.
+          % }
+        </p>
       </div>
     </div>
   </div>

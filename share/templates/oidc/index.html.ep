@@ -6,6 +6,41 @@
   <a href="/oidc/add" class="btn btn-primary">+ Add Client</a>
 </div>
 
+<!-- The provider signs every client's ID tokens with one key and publishes its
+     public half at /jwks. Relying parties all verify against that single key
+     set, so there is nothing per-client to isolate here. -->
+<div class="card mb-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <strong>Provider Signing Key</strong>
+    % if ($provider_jwks ne '') {
+    <button class="btn btn-sm btn-outline-secondary py-0 oidc-copy-btn"
+            data-copy="<%= $provider_jwks %>">Copy public JWK Set</button>
+    % }
+  </div>
+  <div class="card-body">
+    % if ($provider_jwks ne '') {
+    <p class="small text-muted mb-2">
+      Published at <code>/jwks</code>. Every RS256 ID token is signed with the
+      newest key in this set; rotation keeps the previous public keys so tokens
+      issued before it keep verifying.
+    </p>
+    <pre class="mb-3 small" style="max-height:200px;overflow:auto;font-size:0.75rem"><%= $provider_jwks %></pre>
+    % } else {
+    <div class="alert alert-warning py-2 mb-3">
+      No provider signing key. RS256 ID tokens cannot be issued until one
+      exists — the token endpoint will answer <code>server_error</code>.
+    </div>
+    % }
+    <form method="post" action="<%= url_for('oidc_provider_keys') %>"
+          data-confirm="Rotate the provider signing key? New ID tokens are signed with the new key; the previous public keys stay published so existing tokens keep verifying.">
+      <%= csrf_field %>
+      <button class="btn btn-sm btn-outline-warning">
+        <%= $provider_jwks ne '' ? 'Rotate Key' : 'Generate Key' %>
+      </button>
+    </form>
+  </div>
+</div>
+
 % if (!@{$clients}) {
 <div class="alert alert-info">No OIDC client registrations found.</div>
 % } else {

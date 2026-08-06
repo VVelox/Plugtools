@@ -8993,6 +8993,123 @@ sub oidcbaseConfigured {
 		: 0;
 }
 
+=head2 getOIDCProviderEntry
+
+Returns the L<Net::LDAP::Entry> holding the OpenID Provider's own signing
+key set (the C<oidcProvider> entry under C<oidcbase>), or undef when the
+provider has not been given one yet.
+
+The signing key belongs to the provider rather than to any client: every
+relying party validates against the single key set named by the discovery
+document, so it will accept a token signed by any key in that set. Issuing a
+key per client would give no isolation at all while multiplying the number of
+private keys able to forge a token for every other client.
+
+    my $entry = $pt->getOIDCProviderEntry;
+    my $jwks  = $entry ? $entry->get_value('oidcProviderJwks') : undef;
+
+=cut
+
+sub getOIDCProviderEntry {
+	my $self = $_[0];
+
+	$self->errorblank;
+
+	if ( !$self->oidcbaseConfigured ) {
+		$self->{error}       = 97;
+		$self->{errorString} = 'oidcbase is not configured';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $mesg = $ldap->search(
+		base   => $self->{ini}->{''}->{oidcbase},
+		filter => '(objectClass=oidcProvider)',
+		scope  => 'one',
+	);
+	if ( $mesg->{errorMessage} ne '' ) {
+		$self->{error}       = 32;
+		$self->{errorString} = 'Search for the OIDC provider entry failed: ' . $mesg->{errorMessage};
+		$self->warn;
+		return undef;
+	}
+
+	return $mesg->pop_entry;
+} ## end sub getOIDCProviderEntry
+
+=head2 setOIDCProviderJwks
+
+Stores the OpenID Provider's signing key set, creating the C<oidcProvider>
+entry under C<oidcbase> when it does not exist yet.
+
+=head3 args hash
+
+=head4 jwks
+
+The JWK Set as a JSON string, including private key material. Required.
+
+    $pt->setOIDCProviderJwks({ jwks => $jwks_json });
+
+Returns 1 on success, undef on error.
+
+=cut
+
+sub setOIDCProviderJwks {
+	my $self = $_[0];
+	my %args;
+	if ( defined( $_[1] ) ) { %args = %{ $_[1] } }
+
+	$self->errorblank;
+
+	if ( !defined( $args{jwks} ) || $args{jwks} eq '' ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'No JWK Set specified';
+		$self->warn;
+		return undef;
+	}
+
+	if ( !$self->oidcbaseConfigured ) {
+		$self->{error}       = 97;
+		$self->{errorString} = 'oidcbase is not configured';
+		$self->warn;
+		return undef;
+	}
+
+	my $ldap = $self->connect();
+	return undef if $self->error;
+
+	my $entry = $self->getOIDCProviderEntry;
+	return undef if $self->error;
+	$self->errorblank;
+
+	my $mesg;
+	if ( defined($entry) ) {
+		$mesg = $ldap->modify( $entry->dn, replace => { oidcProviderJwks => $args{jwks} } );
+	} else {
+		my $dn = 'cn=provider,' . $self->{ini}->{''}->{oidcbase};
+		$mesg = $ldap->add(
+			$dn,
+			attrs => [
+				objectClass      => 'oidcProvider',
+				cn               => 'provider',
+				oidcProviderJwks => $args{jwks},
+			]
+		);
+	} ## end else [ if ( defined($entry) ) ]
+
+	if ( $mesg->is_error ) {
+		$self->{error}       = 34;
+		$self->{errorString} = 'Failed to store the OIDC provider signing keys: ' . $mesg->error_text;
+		$self->warn;
+		return undef;
+	}
+
+	return 1;
+} ## end sub setOIDCProviderJwks
+
 =head2 getOIDCClients
 
 Returns an arrayref of L<Net::LDAP::Entry> objects for all

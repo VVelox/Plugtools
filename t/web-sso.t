@@ -34,17 +34,25 @@ eval {
 	plan skip_all => "App::Nisaba::WebSSO::Storage unavailable (DBD::SQLite?): $@";
 };
 
-# RSA signing key for the public test client. A public client has no shared
-# secret, so it signs ID tokens with RS256 using a stored key pair — the shape a
-# real registration produces. The provider now refuses to issue unsigned tokens,
-# so every client that completes a token exchange must have a working alg.
+# The provider's RSA signing key. There is one key set for the whole provider,
+# not one per client: every relying party validates against the single set
+# named by the discovery document, so it will accept a token signed by any key
+# published there. This is what every RS256 ID token below is signed with. The
+# provider refuses to issue unsigned tokens, so a client with no working alg
+# cannot complete a token exchange at all.
 my $testapp_rsa = Crypt::PK::RSA->new;
 $testapp_rsa->generate_key( 256, 65537 );    # 2048-bit
 my $testapp_jwk = decode_json( $testapp_rsa->export_key_jwk('private') );
 $testapp_jwk->{kid} = 'testapp-kid';
 $testapp_jwk->{use} = 'sig';
 $testapp_jwk->{alg} = 'RS256';
-my $testapp_jwks_json = Mojo::JSON::encode_json( { keys => [$testapp_jwk] } );
+my $provider_jwks_json = Mojo::JSON::encode_json( { keys => [$testapp_jwk] } );
+
+my $provider_entry = FakeEntry->new(
+	_dn              => 'cn=provider,ou=oidc,dc=example,dc=com',
+	cn               => 'provider',
+	oidcProviderJwks => $provider_jwks_json,
+);
 
 # ── Fake OIDC client entry ────────────────────────────────────────────────────
 
@@ -59,7 +67,6 @@ my $client_public = FakeEntry->new(
 	oidcApplicationType          => 'web',
 	oidcTokenEndpointAuthMethod  => 'none',
 	oidcIdTokenSignedResponseAlg => 'RS256',
-	oidcJwks                     => $testapp_jwks_json,
 	oidcClientURI                => 'https://testapp.example.com',
 	oidcPolicyURI                => 'https://testapp.example.com/privacy',
 	oidcTosURI                   => 'https://testapp.example.com/tos',
@@ -134,6 +141,7 @@ sub _install_stubs {
 		errorblank             => sub { },
 		oidcbaseConfigured     => sub { 1 },
 		passkeySchemaAvailable => sub { 0 },
+		getOIDCProviderEntry   => sub { return $provider_entry },
 		getOIDCClientEntry     => sub {
 			my ( $self, $args ) = @_;
 			return $client_public       if ( $args->{clientId} // '' ) eq 'testapp';
@@ -251,6 +259,15 @@ ok(
 	!grep( { $_ eq 'none' } @{ $disco->{id_token_signing_alg_values_supported} } ),
 	'discovery does not advertise alg:none for id tokens',
 );
+
+# Unimplemented request parameters must be stated, not omitted:
+# request_uri_parameter_supported defaults to *true* when absent (OIDC
+# Discovery 3), which would tell relying parties the opposite of the truth.
+ok( exists $disco->{request_uri_parameter_supported}, 'discovery states request_uri support explicitly' );
+ok( !$disco->{request_uri_parameter_supported},       'discovery advertises request_uri as unsupported' );
+ok( exists $disco->{request_parameter_supported},     'discovery states request-object support explicitly' );
+ok( !$disco->{request_parameter_supported},           'discovery advertises request objects as unsupported' );
+ok( !$disco->{claims_parameter_supported},            'discovery advertises the claims parameter as unsupported' );
 
 # ── Authorization: unknown client ────────────────────────────────────────────
 
@@ -934,7 +951,8 @@ ok( !exists $min_info->{address},      'openid-only: no address' );
 
 # ── RS256 ID token signing ──────────────────────────────────────────────────
 
-# Generate a real RSA key pair for the test client
+# A second provider key, to prove the signature really comes from whichever
+# key set the provider entry holds rather than anything client-side.
 use Crypt::PK::RSA;
 my $test_rsa = Crypt::PK::RSA->new;
 $test_rsa->generate_key( 256, 65537 );    # 2048-bit
@@ -944,6 +962,12 @@ $priv_jwk->{kid} = 'test-rs256-kid';
 $priv_jwk->{use} = 'sig';
 $priv_jwk->{alg} = 'RS256';
 my $rs256_jwks_json = Mojo::JSON::encode_json( { keys => [$priv_jwk] } );
+
+my $provider_rs256 = FakeEntry->new(
+	_dn              => 'cn=provider,ou=oidc,dc=example,dc=com',
+	cn               => 'provider',
+	oidcProviderJwks => $rs256_jwks_json,
+);
 
 my $client_rs256 = FakeEntry->new(
 	_dn                          => 'oidcClientId=rs256app,ou=oidc,dc=example,dc=com',
@@ -956,14 +980,14 @@ my $client_rs256 = FakeEntry->new(
 	oidcApplicationType          => 'web',
 	oidcTokenEndpointAuthMethod  => 'none',
 	oidcIdTokenSignedResponseAlg => 'RS256',
-	oidcJwks                     => $rs256_jwks_json,
 	oidcPostLogoutRedirectURI    => ['https://rs256app.example.com/loggedout'],
 );
 
 $t->reset_session;
 _install_stubs(
 	$t->app,
-	getOIDCClientEntry => sub {
+	getOIDCProviderEntry => sub { return $provider_rs256 },
+	getOIDCClientEntry   => sub {
 		my ( $self, $args ) = @_;
 		return $client_rs256        if ( $args->{clientId} // '' ) eq 'rs256app';
 		return $client_public       if ( $args->{clientId} // '' ) eq 'testapp';
@@ -1022,19 +1046,18 @@ $verify_rsa->import_key( \( $test_rsa->export_key_pem('public') ) );
 ok( $verify_rsa->verify_message( $rs256_sig_bytes, $rs256_signing_input, 'SHA256', 'v1.5' ),
 	'RS256 signature verifies with public key' );
 
-# ── RS256 JWKS endpoint serves public key ───────────────────────────────────
+# ── RS256 JWKS endpoint serves the provider public key ──────────────────────
 
-# Override getOIDCClients to return the RS256 client for /jwks
 _install_stubs(
 	$t->app,
-	getOIDCClientEntry => sub {
+	getOIDCProviderEntry => sub { return $provider_rs256 },
+	getOIDCClientEntry   => sub {
 		my ( $self, $args ) = @_;
 		return $client_rs256        if ( $args->{clientId} // '' ) eq 'rs256app';
 		return $client_public       if ( $args->{clientId} // '' ) eq 'testapp';
 		return $client_confidential if ( $args->{clientId} // '' ) eq 'secretapp';
 		return undef;
 	},
-	getOIDCClients => sub { return [$client_rs256] },
 );
 
 $t->get_ok('/jwks')->status_is(200)->json_has('/keys');
@@ -1569,7 +1592,7 @@ $t->get_ok(
 	->header_like( Location => qr/error=invalid_request/, 'unsupported code_challenge_method rejected' )
 	->header_like( Location => qr/state=ccm1/,            'state preserved on ccm error' );
 
-# ── ID token: RS256 client with no key fails closed (no alg=none downgrade) ──
+# ── ID token: RS256 with no provider key fails closed (no alg=none downgrade) ──
 
 my $client_rs256_nokey = FakeEntry->new(
 	_dn                          => 'oidcClientId=rs256nokey,ou=oidc,dc=example,dc=com',
@@ -1582,13 +1605,14 @@ my $client_rs256_nokey = FakeEntry->new(
 	oidcApplicationType          => 'web',
 	oidcTokenEndpointAuthMethod  => 'none',
 	oidcIdTokenSignedResponseAlg => 'RS256',
-	# deliberately no oidcJwks
 );
 
 $t->reset_session;
 _install_stubs(
 	$t->app,
-	getOIDCClientEntry => sub {
+	# An unprovisioned provider: no signing key anywhere.
+	getOIDCProviderEntry => sub { return undef },
+	getOIDCClientEntry   => sub {
 		my ( $self, $args ) = @_;
 		return $client_rs256_nokey if ( $args->{clientId} // '' ) eq 'rs256nokey';
 		return $client_public      if ( $args->{clientId} // '' ) eq 'testapp';
@@ -1611,7 +1635,13 @@ $t->post_ok(
 		client_id    => 'rs256nokey',
 		redirect_uri => 'https://rs256nokey.example.com/callback',
 	}
-)->status_is(500)->json_is( '/error' => 'server_error', 'RS256 without key fails closed, no alg=none downgrade' );
+)->status_is(500)->json_is(
+	'/error' => 'server_error',
+	'RS256 with no provider key fails closed, no alg=none downgrade'
+);
+
+# And /jwks answers with an empty set rather than inventing one.
+$t->get_ok('/jwks')->status_is(200)->json_is( '/keys' => [], 'an unprovisioned provider publishes no keys' );
 
 # ── Shared store enables true server-to-server redemption (no shared cookie) ──
 # This is the whole point of the external store: the relying party's back end
@@ -1969,10 +1999,10 @@ my $client_default_alg = FakeEntry->new(
 	oidcResponseType            => ['code'],
 	oidcTokenEndpointAuthMethod => 'none',
 	# deliberately no oidcIdTokenSignedResponseAlg
-	oidcJwks => $testapp_jwks_json,
 );
 
-# No alg registered and no key material at all.
+# No alg registered either; this one is exercised against an unprovisioned
+# provider below, so the RS256 default has nothing to sign with.
 my $client_default_nokey = FakeEntry->new(
 	_dn                         => 'oidcClientId=defaultnokey,ou=oidc,dc=example,dc=com',
 	oidcClientId                => 'defaultnokey',
@@ -1981,7 +2011,7 @@ my $client_default_nokey = FakeEntry->new(
 	oidcGrantType               => ['authorization_code'],
 	oidcResponseType            => ['code'],
 	oidcTokenEndpointAuthMethod => 'none',
-	# deliberately no oidcIdTokenSignedResponseAlg and no oidcJwks
+	# deliberately no oidcIdTokenSignedResponseAlg
 );
 
 $t->reset_session;
@@ -2020,7 +2050,7 @@ is( $da_header->{alg}, 'RS256',       'unregistered signing alg defaults to RS25
 is( $da_header->{kid}, 'testapp-kid', 'default-alg id_token carries the key id' );
 ok(
 	$testapp_rsa->verify_message( _b64url_decode( $da_parts[2] ), "$da_parts[0].$da_parts[1]", 'SHA256', 'v1.5' ),
-	'default-alg id_token signature verifies with the client key',
+	'default-alg id_token signature verifies with the provider key',
 );
 my $da_payload = decode_json( _b64url_decode( $da_parts[1] ) );
 is( $da_payload->{sub},   'alice',      'default-alg id_token sub correct' );
@@ -2037,6 +2067,19 @@ sub _stored_token_count {
 		= $TEST_STORAGE->{backend}{dbh}->selectrow_array(q{SELECT COUNT(*) FROM oidc_store WHERE skey LIKE 'token:%'});
 	return $count;
 }
+
+# Take the provider's signing key away so the default RS256 has nothing to
+# sign with.
+_install_stubs(
+	$t->app,
+	getOIDCProviderEntry => sub { return undef },
+	getOIDCClientEntry   => sub {
+		my ( $self, $args ) = @_;
+		return $client_default_alg   if ( $args->{clientId} // '' ) eq 'defaultalg';
+		return $client_default_nokey if ( $args->{clientId} // '' ) eq 'defaultnokey';
+		return undef;
+	},
+);
 
 $t->reset_session;
 $t->get_ok(
@@ -2097,7 +2140,6 @@ my $client_noscope = FakeEntry->new(
 	oidcResponseType             => ['code'],
 	oidcTokenEndpointAuthMethod  => 'none',
 	oidcIdTokenSignedResponseAlg => 'RS256',
-	oidcJwks                     => $testapp_jwks_json,
 	# deliberately no oidcScope
 );
 
@@ -2204,7 +2246,6 @@ my $client_none_secret = FakeEntry->new(
 	oidcClientId                 => 'nonesecret',
 	oidcClientSecret             => 'leftover-s3cret',
 	oidcIdTokenSignedResponseAlg => 'RS256',
-	oidcJwks                     => $testapp_jwks_json,
 	oidcRedirectURI              => ['https://nonesecret.example.com/cb'],
 	oidcScope                    => ['openid'],
 	oidcGrantType                => ['authorization_code'],
@@ -2390,7 +2431,6 @@ my $client_maxage = FakeEntry->new(
 	oidcResponseType             => ['code'],
 	oidcTokenEndpointAuthMethod  => 'none',
 	oidcIdTokenSignedResponseAlg => 'RS256',
-	oidcJwks                     => $testapp_jwks_json,
 	oidcDefaultMaxAge            => 0,
 );
 _install_stubs(
@@ -2482,6 +2522,12 @@ $rot_new_priv->{alg} = 'RS256';
 # Public-only key first, to prove signing skips keys without private material.
 my $rot_jwks_json = Mojo::JSON::encode_json( { keys => [ $rot_old_pub, $rot_new_priv ] } );
 
+my $provider_rot = FakeEntry->new(
+	_dn              => 'cn=provider,ou=oidc,dc=example,dc=com',
+	cn               => 'provider',
+	oidcProviderJwks => $rot_jwks_json,
+);
+
 my $client_rot = FakeEntry->new(
 	_dn                          => 'oidcClientId=rotapp,ou=oidc,dc=example,dc=com',
 	oidcClientId                 => 'rotapp',
@@ -2492,13 +2538,13 @@ my $client_rot = FakeEntry->new(
 	oidcResponseType             => ['code'],
 	oidcTokenEndpointAuthMethod  => 'none',
 	oidcIdTokenSignedResponseAlg => 'RS256',
-	oidcJwks                     => $rot_jwks_json,
 );
 
 $t->reset_session;
 _install_stubs(
 	$t->app,
-	getOIDCClientEntry => sub {
+	getOIDCProviderEntry => sub { return $provider_rot },
+	getOIDCClientEntry   => sub {
 		my ( $self, $args ) = @_;
 		return $client_rot if ( $args->{clientId} // '' ) eq 'rotapp';
 		return undef;
@@ -2734,16 +2780,6 @@ $t->get_ok( '/userinfo', { Authorization => "Bearer $refreshed->{access_token}" 
 	->status_is(200)
 	->json_is( '/sub' => 'alice', 'refreshed access token resolves at UserInfo' );
 
-# The rotated-out refresh token is dead.
-$t->post_ok(
-	'/token',
-	{ Authorization => $sec_basic },
-	form => {
-		grant_type    => 'refresh_token',
-		refresh_token => $grant1->{refresh_token},
-	}
-)->status_is(400)->json_is( '/error' => 'invalid_grant', 'replaying a rotated-out refresh token fails' );
-
 # Scope narrowing: a subset is allowed, an expansion is refused.
 $t->post_ok(
 	'/token',
@@ -2765,6 +2801,77 @@ $t->post_ok(
 		scope         => 'openid profile email',
 	}
 )->status_is(400)->json_is( '/error' => 'invalid_scope', 'refresh grant cannot expand beyond the original grant' );
+
+# ── Refresh token replay tears down the grant (RFC 9700 Section 4.14.2) ──────
+# Rotation exists so a stolen refresh token surfaces as a replay: the thief and
+# the legitimate client both present the same value and one of them finds it
+# already retired. Refusing that one request is not enough — whichever of them
+# rotated first is still holding a working chain — so the whole grant goes.
+# This uses its own grant, because it destroys the one it touches.
+
+my $replay_grant = $get_secretapp_grant->('rtreplay');
+$t->post_ok(
+	'/token',
+	{ Authorization => $sec_basic },
+	form => {
+		grant_type    => 'refresh_token',
+		refresh_token => $replay_grant->{refresh_token},
+	}
+)->status_is(200);
+my $replay_rotated = $t->tx->res->json;
+
+# The rotated-out token is dead...
+$t->post_ok(
+	'/token',
+	{ Authorization => $sec_basic },
+	form => {
+		grant_type    => 'refresh_token',
+		refresh_token => $replay_grant->{refresh_token},
+	}
+)->status_is(400)->json_is( '/error' => 'invalid_grant', 'replaying a rotated-out refresh token fails' );
+
+# ...and so is everything else the grant produced: the successor refresh token
+# the attacker would otherwise keep using...
+$t->post_ok(
+	'/token',
+	{ Authorization => $sec_basic },
+	form => {
+		grant_type    => 'refresh_token',
+		refresh_token => $replay_rotated->{refresh_token},
+	}
+	)
+	->status_is(400)
+	->json_is( '/error' => 'invalid_grant', 'the rotated-in refresh token dies with the replayed chain' );
+
+# ...and the access tokens issued alongside it.
+$t->get_ok( '/userinfo', { Authorization => "Bearer $replay_rotated->{access_token}" } )
+	->status_is(401)
+	->json_is( '/error' => 'invalid_token', 'access tokens from a replayed grant stop resolving at UserInfo' );
+
+# ── Authorization code replay tears down the grant (RFC 6749 Section 4.1.2) ──
+
+$t->reset_session;
+$t->get_ok( '/authorize?client_id=secretapp&redirect_uri=https://secretapp.example.com/callback'
+		. '&response_type=code&scope=openid+profile&state=codereplay&nonce=rtnonce-codereplay' )->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+my $replayed_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+
+my %code_exchange = (
+	grant_type   => 'authorization_code',
+	code         => $replayed_code,
+	redirect_uri => 'https://secretapp.example.com/callback',
+);
+$t->post_ok( '/token', { Authorization => $sec_basic }, form => \%code_exchange )->status_is(200);
+my $code_grant = $t->tx->res->json;
+
+$t->post_ok( '/token', { Authorization => $sec_basic }, form => \%code_exchange )
+	->status_is(400)
+	->json_is( '/error' => 'invalid_grant', 'replaying an authorization code fails' );
+
+$t->get_ok( '/userinfo', { Authorization => "Bearer $code_grant->{access_token}" } )
+	->status_is(401)
+	->json_is( '/error' => 'invalid_token', 'a replayed code revokes the tokens it already produced' );
 
 # A client not registered for the grant gets neither a refresh token...
 $t->reset_session;
@@ -2960,7 +3067,6 @@ my $client_remember = FakeEntry->new(
 	oidcResponseType             => ['code'],
 	oidcTokenEndpointAuthMethod  => 'none',
 	oidcIdTokenSignedResponseAlg => 'RS256',
-	oidcJwks                     => $testapp_jwks_json,
 );
 
 $t->reset_session;
@@ -3069,7 +3175,6 @@ my $client_legacy_public = FakeEntry->new(
 	_dn                          => 'oidcClientId=legacypublic,ou=oidc,dc=example,dc=com',
 	oidcClientId                 => 'legacypublic',
 	oidcIdTokenSignedResponseAlg => 'RS256',
-	oidcJwks                     => $testapp_jwks_json,
 	oidcRedirectURI              => ['https://legacypublic.example.com/cb'],
 	oidcScope                    => ['openid'],
 	oidcGrantType                => ['authorization_code'],
@@ -3215,7 +3320,6 @@ my $client_rt2 = FakeEntry->new(
 	_dn                          => 'oidcClientId=rt2app,ou=oidc,dc=example,dc=com',
 	oidcClientId                 => 'rt2app',
 	oidcIdTokenSignedResponseAlg => 'RS256',
-	oidcJwks                     => $testapp_jwks_json,
 	oidcRedirectURI              => ['https://rt2app.example.com/cb'],
 	oidcScope                    => ['openid'],
 	oidcGrantType                => [ 'authorization_code', 'refresh_token' ],
@@ -3411,35 +3515,46 @@ $t->post_ok( '/userinfo', form => { access_token => $uif_token } )
 	->status_is(200)
 	->json_is( '/sub' => 'alice', 'access_token accepted as a form parameter (RFC 6750 2.2)' );
 
-# ── JWKS aggregation across clients ──────────────────────────────────────────
-# All clients' public keys are served, including every key of a rotated set;
-# a client with unparseable key material is skipped, not fatal.
+# ── JWKS serves the provider key set ─────────────────────────────────────────
+# Every key of a rotated set is published so tokens signed before the rotation
+# keep verifying. The set is the provider's, not an aggregate across clients:
+# relying parties all validate against this one set, so a key per client would
+# isolate nothing while multiplying the keys able to forge a token for anyone.
 
-my $client_badjwks = FakeEntry->new(
-	_dn          => 'oidcClientId=badjwks,ou=oidc,dc=example,dc=com',
-	oidcClientId => 'badjwks',
-	oidcJwks     => 'this is not json {',
-);
-
-_install_stubs( $t->app, getOIDCClients => sub { return [ $client_rs256, $client_rot, $client_badjwks ] }, );
+_install_stubs( $t->app, getOIDCProviderEntry => sub { return $provider_rot } );
 
 $t->get_ok('/jwks')->status_is(200);
 my $agg_keys = $t->tx->res->json->{keys};
-is( scalar @$agg_keys, 3, 'JWKS aggregates all keys of all clients; malformed sets are skipped' );
+is( scalar @$agg_keys, 2, 'JWKS serves every key of the rotated provider set' );
 my %agg_kids = map { ( $_->{kid} // '' ) => $_ } @$agg_keys;
-ok( $agg_kids{'test-rs256-kid'},              'single-key client key served' );
 ok( $agg_kids{'rot-new'},                     'rotated set: new key served' );
 ok( $agg_kids{'rot-old'},                     'rotated set: retained old key served' );
-ok( !( grep { defined $_->{d} } @$agg_keys ), 'no private material in the aggregated JWKS' );
+ok( !( grep { defined $_->{d} } @$agg_keys ), 'no private material in the published JWKS' );
 
-# A client lookup failure is a 500, never a 200 with an empty key set — a
-# relying party would cache 'no keys' and reject valid ID tokens.
-_install_stubs( $t->app, getOIDCClients => sub { die "LDAP unavailable\n" } );
+# One client's key is never published alongside another's: only the provider
+# entry decides what /jwks contains.
+_install_stubs( $t->app, getOIDCProviderEntry => sub { return $provider_rs256 } );
+$t->get_ok('/jwks')->status_is(200);
+my @solo_kids = map { $_->{kid} // '' } @{ $t->tx->res->json->{keys} };
+is_deeply( \@solo_kids, ['test-rs256-kid'], 'JWKS holds only the provider key set' );
+
+# Malformed key material is skipped rather than fatal.
+my $provider_badjwks = FakeEntry->new(
+	_dn              => 'cn=provider,ou=oidc,dc=example,dc=com',
+	cn               => 'provider',
+	oidcProviderJwks => 'this is not json {',
+);
+_install_stubs( $t->app, getOIDCProviderEntry => sub { return $provider_badjwks } );
+$t->get_ok('/jwks')->status_is(200)->json_is( '/keys' => [], 'an unparseable key set publishes nothing, not a 500' );
+
+# A lookup failure is a 500, never a 200 with an empty key set — a relying
+# party would cache 'no keys' and reject valid ID tokens.
+_install_stubs( $t->app, getOIDCProviderEntry => sub { die "LDAP unavailable\n" } );
 $t->get_ok('/jwks')
 	->status_is(500)
 	->json_is( '/error' => 'server_error', 'JWKS lookup failure answers 500, not an empty key set' );
 
-_install_stubs( $t->app, getOIDCClients => sub { return [] } );
+_install_stubs( $t->app );
 
 # ── Discovery: response modes ────────────────────────────────────────────────
 
@@ -3496,8 +3611,8 @@ subtest 'Crypt::JWT relying-party verification' => sub {
 			return $client_none   if ( $args->{clientId} // '' ) eq 'nonealg';
 			return undef;
 		},
-		# /jwks aggregates public keys across all clients; expose the RS256 one.
-		getOIDCClients => sub { return [$client_rs256] },
+		# /jwks publishes the provider key set; the RS256 one is in play here.
+		getOIDCProviderEntry => sub { return $provider_rs256 },
 	);
 	_add_referer_hook($tj);
 
@@ -3626,5 +3741,278 @@ subtest 'Crypt::JWT relying-party verification' => sub {
 	eval { Crypt::JWT::decode_jwt( token => $hs_token, key => 'wrong-secret', accepted_alg => 'HS256' ); };
 	ok( $@, 'HS256 id_token rejected with the wrong secret' );
 }; ## end 'Crypt::JWT relying-party verification' => sub
+
+# ── Request objects are refused, not ignored (OIDC Core 6) ──────────────────
+# An RP that signs its parameters into a request object expects those to be
+# the authoritative ones. Dropping the object and honouring the query string
+# would act on whatever an interceptor put there instead.
+
+$t->reset_session;
+_install_stubs( $t->app );
+
+my $ro_base = '/authorize?client_id=testapp&redirect_uri=https://testapp.example.com/callback'
+	. '&response_type=code&scope=openid';
+
+$t->get_ok("$ro_base&state=ro1&request=eyJhbGciOiJub25lIn0.e30.")
+	->status_is(302)
+	->header_like( Location => qr/error=request_not_supported/, 'a request object is refused' )
+	->header_like( Location => qr/state=ro1/,                   'the request-object refusal carries the state back' );
+
+$t->get_ok("$ro_base&state=ro2&request_uri=https://testapp.example.com/req.jwt")
+	->status_is(302)
+	->header_like( Location => qr/error=request_uri_not_supported/, 'a request_uri is refused' );
+
+$t->get_ok("$ro_base&state=ro3&claims=%7B%22id_token%22%3A%7B%7D%7D")
+	->status_is(302)
+	->header_like( Location => qr/error=invalid_request/, 'the claims request parameter is refused' );
+
+# ── max_age is satisfiable (OIDC Core 3.1.2.1) ──────────────────────────────
+# max_age is a constraint on the session that *arrives*; once the user has
+# authenticated for this very request it is met. Measuring elapsed seconds
+# after that re-authentication makes small values unsatisfiable, because the
+# clock keeps running while the user reads the consent screen: they log in,
+# get bounced back to login, and land on consent again, forever. max_age=0,
+# which OIDC Core defines as equivalent to prompt=login, never completes at all.
+
+for my $max_age ( 0, 1 ) {
+	$t->reset_session;
+
+	$t->get_ok("$ro_base+profile&state=ma-$max_age&max_age=$max_age")
+		->status_is(302)
+		->header_like( Location => qr{/sso/login}, "max_age=$max_age with no session goes to login" );
+	my $ma_rid = Mojo::URL->new( $t->tx->res->headers->location )->query->param('rid');
+
+	$t->post_ok( "/sso/login?rid=$ma_rid", form => { user => 'alice', pass => 'correct' } )
+		->status_is(302)
+		->header_like( Location => qr{/sso/consent}, "max_age=$max_age login leads to consent" );
+
+	# The gap a real user spends reading the consent screen.
+	sleep 2;
+
+	$t->get_ok("/sso/consent?rid=$ma_rid")
+		->status_is(200)
+		->content_like( qr/Test Application/, "max_age=$max_age consent screen survives the delay" );
+
+	$t->post_ok( "/sso/consent?rid=$ma_rid", form => { decision => 'allow' } )->status_is(302)->header_like(
+		Location => qr{^https://testapp\.example\.com/callback},
+		"max_age=$max_age flow completes instead of looping back to login"
+	);
+} ## end for my $max_age ( 0, 1 )
+
+# A session that predates the request is still measured against max_age.
+$t->get_ok("$ro_base&state=ma-stale&max_age=1")
+	->status_is(302)
+	->header_like( Location => qr{/sso/login}, 'a session older than max_age is still sent back through login' );
+
+# ── Consent does not carry across a user switch ─────────────────────────────
+# An SSO session outlives the account that started it: signing in at
+# /sso/login replaces the session's user without tearing the session down. A
+# consent Alice granted must never silently authorize Bob's account.
+
+my $usr_bob = FakeEntry->new(
+	_dn         => 'uid=bob,ou=users,dc=example,dc=com',
+	uid         => 'bob',
+	displayName => 'Bob Barker',
+	givenName   => 'Bob',
+	sn          => 'Barker',
+	mail        => 'bob@example.com',
+	objectClass => [ 'posixAccount', 'inetOrgPerson' ],
+);
+
+$t->reset_session;
+_install_stubs(
+	$t->app,
+	userVerifyPassword => sub {
+		my ( $self, $args ) = @_;
+		my %passwords = ( alice => 'correct', bob => 'alsocorrect' );
+		die "bad password\n"
+			unless ( $passwords{ $args->{user} // '' } // '' ) eq ( $args->{password} // '' );
+	},
+	getUserEntry => sub {
+		my ( $self, $args ) = @_;
+		return $usr_alice if ( $args->{user} // '' ) eq 'alice';
+		return $usr_bob   if ( $args->{user} // '' ) eq 'bob';
+		return undef;
+	},
+);
+
+my $switch_authz = "$ro_base+profile&state=sw1";
+
+$t->get_ok($switch_authz)->status_is(302);
+$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+$t->post_ok( '/sso/consent', form => { decision => 'allow' } )
+	->status_is(302)
+	->header_like( Location => qr{^https://testapp\.example\.com/callback}, 'alice consents to the client' );
+
+# Alice's own next request rightly skips the screen she just answered.
+$t->get_ok("$ro_base+profile&state=sw2")
+	->status_is(302)
+	->header_like( Location => qr{^https://testapp\.example\.com/callback}, 'alice is not asked to consent twice' );
+
+# Bob signs in on the same browser session, without a logout in between.
+$t->post_ok( '/sso/login', form => { user => 'bob', pass => 'alsocorrect' } )->status_is(302);
+
+$t->get_ok("$ro_base+profile&state=sw3")
+	->status_is(302)
+	->header_like( Location => qr{/sso/consent}, "bob is asked to consent despite alice's session consent" );
+
+# And the code, once bob does consent, is issued for bob.
+my $sw_rid = Mojo::URL->new( $t->tx->res->headers->location )->query->param('rid');
+$t->post_ok( "/sso/consent?rid=$sw_rid", form => { decision => 'allow' } )->status_is(302);
+my $sw_code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+$t->post_ok(
+	'/token',
+	form => {
+		grant_type   => 'authorization_code',
+		code         => $sw_code,
+		client_id    => 'testapp',
+		redirect_uri => 'https://testapp.example.com/callback',
+	}
+)->status_is(200);
+my $sw_payload = decode_json( _b64url_decode( ( split /\./, $t->tx->res->json->{id_token} )[1] ) );
+is( $sw_payload->{sub}, 'bob', 'the code issued after the switch belongs to bob' );
+
+# ── Introspection agrees with the token endpoint on refresh expiry ──────────
+# A refresh token's life is absolute, measured from the original authorization:
+# rotation hands out successors but does not extend the chain. Measuring from
+# the successor's own issued_at would report a chain that /token already
+# rejects as still active, and hand a resource server an exp in the future.
+
+$t->reset_session;
+_install_stubs( $t->app );
+$t->app->pt->{ini}{''}{ssoRefreshTokenLifetime} = 4;
+
+my $abs_grant = $get_secretapp_grant->('rtabs');
+
+sleep 2;    # the chain is now 2s old; its successor will look brand new
+
+$t->post_ok(
+	'/token',
+	{ Authorization => $sec_basic },
+	form => {
+		grant_type    => 'refresh_token',
+		refresh_token => $abs_grant->{refresh_token},
+	}
+)->status_is(200);
+my $abs_rotated = $t->tx->res->json;
+
+$t->post_ok( '/introspect', { Authorization => $sec_basic }, form => { token => $abs_rotated->{refresh_token} } )
+	->status_is(200)
+	->json_is( '/active' => Mojo::JSON->true, 'a refresh token within the chain lifetime introspects as active' );
+my $abs_active = $t->tx->res->json;
+ok( $abs_active->{exp} <= $abs_active->{iat} + 4 - 2,
+	'exp is measured from the start of the chain, not from the rotation' );
+
+sleep 3;    # chain age 5 > 4, but this token was minted only 3s ago
+
+# Introspect before redeeming: the token endpoint consumes the token whether
+# or not it honours it, so asking afterwards would report "not active" merely
+# because the record had been removed.
+$t->post_ok( '/introspect', { Authorization => $sec_basic }, form => { token => $abs_rotated->{refresh_token} } )
+	->status_is(200)
+	->json_is( '/active' => Mojo::JSON->false, 'introspection reports the expired chain as not active' );
+
+$t->post_ok(
+	'/token',
+	{ Authorization => $sec_basic },
+	form => {
+		grant_type    => 'refresh_token',
+		refresh_token => $abs_rotated->{refresh_token},
+	}
+	)
+	->status_is(400)
+	->json_is( '/error' => 'invalid_grant', 'and the token endpoint agrees, rejecting the same token' );
+
+# ── UserInfo fails closed on a vanished client or subject ───────────────────
+# The grant store keeps no back-reference from a token to a client entry or a
+# directory account, so nothing else here would notice either disappearing.
+
+$t->reset_session;
+_install_stubs( $t->app );
+
+my $stale_token = do {
+	$t->get_ok("$ro_base+profile&state=stale1")->status_is(302);
+	$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+	$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+	my $code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+	$t->post_ok(
+		'/token',
+		form => {
+			grant_type   => 'authorization_code',
+			code         => $code,
+			client_id    => 'testapp',
+			redirect_uri => 'https://testapp.example.com/callback',
+		}
+	)->status_is(200);
+	$t->tx->res->json->{access_token};
+};
+
+$t->get_ok( '/userinfo', { Authorization => "Bearer $stale_token" } )
+	->status_is(200)
+	->json_is( '/sub' => 'alice', 'the token resolves while the client is registered' );
+
+# The client is deleted out from under the token.
+_install_stubs( $t->app, getOIDCClientEntry => sub { return undef } );
+$t->get_ok( '/userinfo', { Authorization => "Bearer $stale_token" } )
+	->status_is(401)
+	->json_is( '/error' => 'invalid_token', 'a deleted client takes its access tokens with it' );
+
+# A directory that is merely unreachable must not destroy a live token.
+my $lookup_state = 'ok';
+my $second_token = do {
+	_install_stubs( $t->app );
+	$t->reset_session;
+	$t->get_ok("$ro_base+profile&state=stale2")->status_is(302);
+	$t->post_ok( '/sso/login',   form => { user     => 'alice', pass => 'correct' } )->status_is(302);
+	$t->post_ok( '/sso/consent', form => { decision => 'allow' } )->status_is(302);
+	my $code = Mojo::URL->new( $t->tx->res->headers->location )->query->param('code');
+	$t->post_ok(
+		'/token',
+		form => {
+			grant_type   => 'authorization_code',
+			code         => $code,
+			client_id    => 'testapp',
+			redirect_uri => 'https://testapp.example.com/callback',
+		}
+	)->status_is(200);
+	$t->tx->res->json->{access_token};
+};
+
+# App::Nisaba reports a clean miss as error 17 and a genuine search failure as
+# 32; the stub only reports one once getUserEntry has actually been reached, so
+# the client lookup that runs first is unaffected.
+my $user_lookup_failed = 0;
+_install_stubs(
+	$t->app,
+	getUserEntry => sub { $user_lookup_failed = 1; return undef },
+	error        => sub { $user_lookup_failed ? ( $lookup_state eq 'gone' ? 17 : 32 ) : 0 },
+);
+
+$lookup_state = 'down';
+$t->get_ok( '/userinfo', { Authorization => "Bearer $second_token" } )
+	->status_is(500)
+	->json_is( '/error' => 'server_error', 'an unreachable directory is a server error, not a dead token' );
+
+# ...and the token is still there once the directory comes back.
+$user_lookup_failed = 0;
+_install_stubs( $t->app );
+$t->get_ok( '/userinfo', { Authorization => "Bearer $second_token" } )
+	->status_is(200)
+	->json_is( '/sub' => 'alice', 'the token survived the transient failure' );
+
+# A subject that is genuinely gone does end the token.
+$user_lookup_failed = 0;
+$lookup_state       = 'gone';
+_install_stubs(
+	$t->app,
+	getUserEntry => sub { $user_lookup_failed = 1; return undef },
+	error        => sub { $user_lookup_failed ? 17 : 0 },
+);
+
+$t->get_ok( '/userinfo', { Authorization => "Bearer $second_token" } )
+	->status_is(401)
+	->json_is( '/error' => 'invalid_token', 'a deleted account ends its access tokens' );
+
+_install_stubs( $t->app );
 
 done_testing;

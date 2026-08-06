@@ -208,7 +208,8 @@ my $redirect_url  = "http://127.0.0.1:$cb_port/callback";
 my $client_id     = 'oauth2capp';
 my $client_secret = 'oauth2c-test-secret';
 
-# RS256 signing key for the client so oauth2c gets a properly signed id_token.
+# The provider RS256 signing key, so oauth2c gets a properly signed id_token.
+# There is one key set for the whole provider, not one per client.
 my $rsa = Crypt::PK::RSA->new;
 $rsa->generate_key( 256, 65537 );    # 2048-bit
 my $priv_jwk = Mojo::JSON::decode_json( $rsa->export_key_jwk('private') );
@@ -229,7 +230,12 @@ my $client_entry = FakeEntry->new(
 	oidcApplicationType          => 'web',
 	oidcTokenEndpointAuthMethod  => 'client_secret_basic',
 	oidcIdTokenSignedResponseAlg => 'RS256',
-	oidcJwks                     => $jwks_json,
+);
+
+my $provider_entry = FakeEntry->new(
+	_dn              => 'cn=provider,ou=oidc,dc=example,dc=com',
+	cn               => 'provider',
+	oidcProviderJwks => $jwks_json,
 );
 
 my $usr_alice = FakeEntry->new(
@@ -256,8 +262,8 @@ sub _install_stubs {
 			return $client_entry if ( $args->{clientId} // '' ) eq $client_id;
 			return undef;
 		},
-		getOIDCClients     => sub { return [$client_entry] },
-		userVerifyPassword => sub {
+		getOIDCProviderEntry => sub { return $provider_entry },
+		userVerifyPassword   => sub {
 			my ( $self, $args ) = @_;
 			die "bad password\n"
 				unless ( $args->{user} // '' ) eq 'alice'
